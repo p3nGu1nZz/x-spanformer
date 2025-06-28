@@ -1,0 +1,112 @@
+\section{Visualization Framework and Interpretability Interfaces}
+\label{sec:visualizations}
+
+Interpretability is central to the X-Spanformer framework, not only for debugging but for validating the emergence of structured behavior from differentiable routing. We introduce a modular visualization suite designed to capture dynamic routing patterns, evaluate alignment with linguistic structure, and probe causal effects of controller activations.
+
+These interfaces build on the interpretability literature in structured attention \cite{vig2019analyzing, hoover2020exbert}, entropy-based pruning \cite{grandvalet2006entropy, pereyra2017regularizing}, and latent syntactic probing \cite{linzen2016assessing, kim2019unsupervised}. Together, they scaffold an interactive environment for qualitative and quantitative analysis of controller behavior throughout training.
+
+
+
+
+
+
+
+
+
+
+\subsection{Span Trajectory Viewer (\texttt{trajectory\_overlay})}
+\label{sec:vis-traj}
+
+The span trajectory viewer highlights how span selection stabilizes or evolves over training epochs. For a given input prompt, we track the top-$K$ spans selected at each layer \( \ell \) and epoch \( t \), plotting their token offsets and confidence weights \( \alpha_k^{(t)} \). This provides a temporal window into routing stability and sparsification behavior.
+
+\subsubsection*{Method}
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item Cache span logits \( w_k^{(t)} \) and compute attention weights \( \alpha_k^{(t)} = \mathrm{softmax}(w_k^{(t)}) \)
+  \item Compute per-epoch entropy:
+  \begin{equation}
+    H(P_t) = - \sum_k \alpha_k^{(t)} \log \alpha_k^{(t)}
+    \label{eq:entropy_viz}
+  \end{equation}
+  \item Compute inter-epoch routing divergence:
+  \begin{equation}
+    D_{\mathrm{JS}}(P_t \| P_{t+1}) = \frac{1}{2} \left[ \mathrm{KL}(P_t \| M) + \mathrm{KL}(P_{t+1} \| M) \right], \quad M = \tfrac{1}{2}(P_t + P_{t+1})
+    \label{eq:jsdiv}
+  \end{equation}
+  \item Render span overlays layerwise with bar intensity mapped to \( \alpha_k^{(t)} \)
+\end{enumerate}
+
+This supports empirical validation of our entropy convergence claim from Proposition~\ref{prop:annealing}, echoing trends found in routing-based sparse architectures \cite{tay2020sparse, shazeer2017outrageously}.
+
+
+
+
+
+
+
+
+
+\subsection{Span Alignment Grid (\texttt{span\_grid\_align})}
+\label{sec:vis-align}
+
+To assess whether X-Spanformer’s induced spans align with latent syntax or semantics, we compute overlap heatmaps comparing model-predicted spans to gold annotations from syntactic and semantic corpora.
+
+\subsubsection*{Method}
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item Extract top-$K$ spans \( \{(i_k, j_k)\} \) from controller at layer \( \ell \)
+  \item Align with:
+  \begin{itemize}
+    \item Constituents: Berkeley parser \cite{kitaev2018constituency}
+    \item Named entities: SpaCy \cite{honnibal2017spacy}
+    \item Discourse units: OntoNotes \cite{weischedel2013ontonotes}
+  \end{itemize}
+  \item Compute Jaccard index \( J(s_k, r_j) = \frac{|s_k \cap r_j|}{|s_k \cup r_j|} \)
+  \item Generate token-layer grid showing alignment scores
+\end{enumerate}
+
+This grid supports span-level interpretability claims from Section~\ref{sec:qualitative-spans}, complementing prior syntactic induction probes \cite{kim2019unsupervised}.
+
+
+
+
+
+
+
+\subsection{Controller Influence Map (\texttt{influence\_heatmap})}
+\label{sec:vis-influence}
+
+This module evaluates the downstream sensitivity of network outputs to variation in the controller signal \( \tilde{s} \). We use this to assess disentanglement and directional salience of span-based routing.
+
+\subsubsection*{Method}
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item Inject perturbed vectors \( \tilde{s}_\text{baseline} \), \( \tilde{s}_\text{perturbed} \) into layer \( \ell \)
+  \item Measure output response via:
+  \begin{equation}
+    \delta_{\text{out}} = \left\| \mathcal{F}(x, \tilde{s}_1) - \mathcal{F}(x, \tilde{s}_2) \right\|_2
+    \label{eq:controller_effect}
+  \end{equation}
+  \item Visualize effect across token positions and logit spaces
+\end{enumerate}
+
+This is inspired by mediation analyses in causal probing \cite{vig2020investigating, belinkov2019analyzing} and offers interpretability of routing pathways without direct supervision.
+
+\subsection{Entropy Field Morphometry (\texttt{entropy\_map})}
+\label{sec:vis-entropy}
+
+To inspect global routing structure, we visualize span entropy across token windows and layers. This “morphometric map” reveals compositional boundaries, entropy basins, and emergence of high-confidence foci.
+
+\subsubsection*{Method}
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item For every candidate span \( (i,j) \) at each layer, compute:
+  \begin{equation}
+    H_{i:j}^{(\ell)} = -\sum_k \alpha_k^{(\ell)} \log \alpha_k^{(\ell)}, \quad \text{where } \alpha_k^{(\ell)} \text{ selects spans overlapping } (i, j)
+    \label{eq:entropy_local}
+  \end{equation}
+  \item Aggregate per-position entropy into a 2D token-layer grid
+  \item Render high-confidence routes as brightness troughs
+\end{enumerate}
+
+This is modeled after flow-field visualizations in neural saliency \cite{olah2018building}, adapted here for differentiable sparse span selectors \cite{pereyra2017regularizing, liu2024structured}.

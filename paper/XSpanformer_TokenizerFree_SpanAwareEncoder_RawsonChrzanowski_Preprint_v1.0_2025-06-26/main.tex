@@ -1,0 +1,86 @@
+\documentclass[11pt]{article}
+
+% Encoding and font handling
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+
+% Math packages
+\usepackage{amsmath, amssymb, amsthm}
+\newtheorem{proposition}{Proposition}
+\newcommand{\softmax}{\mathrm{softmax}}
+\newcommand{\TopK}{\operatorname{TopK}}
+
+% Graphics, floats, and layout
+\usepackage{graphicx}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage{float}
+\usepackage[margin=1in]{geometry}
+\usepackage[protrusion=true, expansion=false]{microtype}
+
+% Algorithms and tables
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{booktabs, enumitem}
+
+% Bibliography
+\usepackage[backend=biber, style=numeric, sorting=none]{biblatex}
+\addbibresource{references.bib}
+
+% Hyperlinks and clever references
+\usepackage[colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue]{hyperref}
+\usepackage{cleveref}
+
+% Header and footer customization
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textsc{X-Spanformer}}
+\fancyhead[R]{\textsc{Span-Aware Encoder}}
+\fancyfoot[C]{\thepage}
+\setlength{\headheight}{14pt}
+
+% Document spacing and typography
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\setlength{\emergencystretch}{3em}
+\addtolength{\topmargin}{-2pt}
+\sloppy
+
+% Metadata
+\title{\textbf{X-Spanformer: A Tokenizer-Free, Span-Aware Encoder Inspired by X-Bar Theory}}
+\author{
+	Kara Marie Rawson\thanks{\href{mailto:rawsonkara@gmail.com}{rawsonkara@gmail.com}} \and
+	Aimee Chrzanowski\thanks{\href{mailto:aimeechrzanowski@gmail.com}{aimeechrzanowski@gmail.com}}
+}
+\date{\today}
+
+\begin{document}
+	
+	% Cover image
+	\begin{figure}[H]
+		\centering
+		\includegraphics[width=0.95\textwidth]{figures/figure_00.png}
+	\end{figure}
+	\vspace{2em}
+	
+	\maketitle
+	
+	\begin{center}
+		\textit{This work is a preprint and has not yet been peer reviewed.}
+	\end{center}
+	
+	% Section includes
+	\input{sections/abstract}
+	\input{sections/introduction}
+	\input{sections/related_work}
+	\input{sections/architecture}
+	\input{sections/training}
+	\input{sections/experiments}
+	\input{sections/visualizations}
+	\input{sections/ablations}
+	\input{sections/conclusion}
+	\input{sections/appendix}
+	
+	\printbibliography
+	
+\end{document}

@@ -1,0 +1,46 @@
+\appendix
+\section*{Appendix}
+\addcontentsline{toc}{section}{Appendix}
+
+\subsection{Training Hyperparameters}
+\label{sec:hyperparams}
+
+\begin{table}[H]
+  \centering
+  \begin{tabular}{@{}lcc@{}}
+    \toprule
+    Parameter & Value & Description \\
+    \midrule
+    Optimizer & AdamW & with decoupled weight decay \\
+    Learning rate schedule & Cosine decay & with 10\% warmup \\
+    Initial LR & 1e-4 & base LR used for all modules \\
+    Dropout & 0.1 & applied to all nonlinearity layers \\
+    Max grad norm & 1.0 & gradient clipping threshold \\
+    Epochs & 50 & full fine-tuning duration \\
+    Batch size & 64 & across all stages \\
+    Span width $w_{\max}$ & 10 & max width considered per token \\
+    Entropy $\lambda_0$ & 1.0 & initial entropy coefficient \\
+    Decay $\gamma$ & 0.1 & exponential decay rate \\
+    Span pooling strategy & Gated self-attention & with key-query masking and layer norm \\
+    \bottomrule
+  \end{tabular}
+  \caption{Hyper-parameters used in all experiments. Span -embeddings are pooled using \texttt{Pool}$(x_{i:j})$, which may implement mean, max, or gated self-attention over the selected token embeddings. Ablation configurations and experimental notes appear below.}
+\end{table}
+
+\subsection{Additional Experimental Details}
+\label{sec:extra-exp}
+\begin{itemize}[leftmargin=1.5em]
+    \item All models trained on a single A100 GPU.
+    \item Training time per epoch ranged from 1.1–2.3 minutes depending on task and sequence length.
+    \item Code will be released with reproducible seeds and configuration files.
+\end{itemize}
+
+\subsection{Extended Ablation Settings}
+\label{sec:ablation-settings}
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Fusion head variants}: Compared \texttt{MLP(w)} vs.\ \texttt{LayerNorm(MLP)} for $\alpha_k$ scoring. Gated units improved stability in low-entropy regimes.
+  \item \textbf{Routing depth}: Explored controller depth $d_c \in \{1, 2, 3\}$; performance plateaued beyond $d_c = 2$.
+  \item \textbf{Gradient gating}: Evaluated freezing $f_\theta$ for first 5 epochs to encourage stable $\mathcal{L}_{\mathrm{ent}}$ decay. Marginal performance trade-off observed.
+  \item \textbf{Span type probing}: Used auxiliary decoders (e.g., NER, chunking) as structural supervision for $\hat{P}_{\mathrm{gold}}$ in Equation~\eqref{eq:kl_span}. Slight gains in low-resource settings.
+  \item \textbf{Span pooling alternatives}: Replaced gated attention with mean/max pooling for spans; gated attention retained higher semantic alignment (measured by cosine with target label embeddings).
+\end{itemize}
