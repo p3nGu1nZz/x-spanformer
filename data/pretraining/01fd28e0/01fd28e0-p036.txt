@@ -1,0 +1,16 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+Our simulations also predict that removing the bias term reduces task-specific alignment in span- rich tasks (e-g;, nested NER) will improve performance over 3.9% Fl, indicating the necessity of soft alignment priors:
+8
+Conclusion
+In this work; we have introduced the X-Spanformer , a tokenizer-free, span-aware encoder archi- tecture grounded in linguistic theory and implemented through  differentiable span  routing and multi-site injection strategies. While our design is theoretically motivated and formally validated; experimental evaluation is pending: At present, we are in the process of curating task-specific datasets necessary for empirical analysis: Accordingly; we reserve quantitative conclusions and broader discussions for future work; once adequate benchmarking data has been collected and eval- uated:
+Appendix
+L
+Training Hyperparameters
+Parameter Value Description Optimizer AdamW with decoupled weight decay Learning rate schedule Cosine decay with 10% warmup Initial LR le-4 base LR used for all modules Dropout 0.1 applied to all nonlinearity layers Max grad norm 1.0 gradient clipping threshold Epochs 50 full fine-tuning duration Batch size 64 across all stages Span width Umax 10 max width considered per token Entropy Ao 1.0 initial entropy coefficient Decay 0.1 exponential decay rate Span pooling strategy Gated self-attention with key-query masking and layer norm
+Table 2: Hyper-parameters used in all experiments. Span ~embeddings are pooled using Pool(Ti:j), which may implement mean; max; Or gated self-attention over the selected token embeddings. Ablation configura- tions and experimental notes appear below.
+2
+Additional Experimental Details
+All models trained on a single Al00 GPU.
+Training time per epoch ranged from 1.1-2.3 minutes depending on task and sequence length: Code will be released with reproducible seeds and configuration files.
+37

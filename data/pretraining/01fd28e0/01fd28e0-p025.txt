@@ -1,0 +1,16 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+Proof: We begin by recalling that during early training, the span logits Wk are updated primarily by the entropy term: 8Lfinal Aent (t) Wk H(Pt),; dw= with entropy defined over softmax-normalized span probabilities: IS1 exp(wp H(Pt) = - @k log " @k where @k k=1 Cj exp(w}
+The entropy gradient with respect to logits is: OH Q (Iogak) +1) . dwk Logit descent then yields: (t+1) Aoe-vt t Wj U k = n Qk (log ak + 1).
+Following standard smooth convex analysis (e.g-, gradient-based decay of entropy potentials) , and assuming that the entropy is Lipschitz-smooth and that ||VH(Pt)ll? Z cH(Pt), we obtain: H(Pi+1) < H(Pt) (1 _ ncAoe -vt)
+Unrolling the recursion gives: t-1 t-1 H(Pt) < H(Po) . II (1 - ncAoe-ys < H(Po) exp ~ncAo e "Y8 s=0 s=0
+Using the inequality:
+t_1 =e"Yt e"Ys = 1 ~ e-Y s-0
+1
+e"
+we obtain:
+ncAo where C = 1 ~e-Y
+H(Pt) < H(Po) . e-C(1-e-v) ,
+Since H(Po) < Hmax and 1 - e"yt 1 monotonically; we recover the sharper asymptotic bound: H(Pt) < Hmax  e"Yt as t - OX
+Proposition 9 (Exponential Entropy Decay under Annealed Regularization). Let Pt {P6) denote the span distribution at epoch t, computed via softmax over logits (t) Wij with entropy defined aS H(Pt) = - PG) log PG) (i,j) Suppose the training objective is Lt = Ltask + Aent (t) . H(Pt); with Aent (t) = Aoe -vt , for constants Ao > 0, ~ > 0. Assume:
+26

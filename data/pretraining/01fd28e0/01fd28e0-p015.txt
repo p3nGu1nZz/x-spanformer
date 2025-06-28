@@ -1,0 +1,33 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+Remark: Proposition 6 establishes the upper bound of entropy over span routing distributions. Early training with high Aent promotes structural exploration, while annealing enables convergence to sparse, high-salience spans. This   tradeoff between   uncertainty maximization and structural commitment parallels entropy-annealed models of parse induction [55] and marginal span recovery [56].
+(a) Epoch 1
+Epoch 10
+Epoch 50
+0.04 0.04 2 0.03 2 0,03 1 0.02 ] 0,02- Ann | 0.01 0.01 20 60 100 40 60 80 Span index Span index
+Input sequence embeddings Candidate Scoring spans
+40 Span index
+Span Induction with Entropic Regularization
+Entropy
+0.03
+2 0.02 1 0.01 0.00
+Candidate spans
+1
+Salience probabilities
+Regularization
+3
+20 40 Span 60 Index
+Entropy
+Loss
+80
+Figure 3: Illustration of span induction with entropic annealing: Candidate spans compete via softmax routing; high-entropy stages spread mass broadly, while later epochs concentrate on salient structures.
+4.3
+Controller-Aware Generation and Final Objective
+The fused span summary vector 3 € Rd serves as a global control signal for conditioning the trans former encoder. Rather than statically appending $, X-Spanformer supports multiple integration pathways that modify computation at different stages of the network: To compute the controller, we define:
+K
+exp( Wk_ K e=1 exp(we)
+S =
+@kSk, k=1
+where @k
+where each sk Pool(cik:jk . is a pooled span representation, and Wk = 96 (8k, Ok, confk) is a learned span-specific Salience score incorporating structural and uncertainty features.
+16

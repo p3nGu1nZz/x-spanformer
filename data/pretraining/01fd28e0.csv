@@ -1,0 +1,893 @@
+id,text
+1,"X-SPANFORMER
+SPAN-AwARE ENCODER
+T"
+2,"X-Spanformer: A Tokenizer-Free, Span-Aware Encoder Inspired by X-Bar Theory
+Kara Marie Rawson`
+Aimee Chrzanowskit
+June 26, 2025
+This work %8 & preprint and has not yet been peer reviewed. Abstract
+Tokenization remains a limiting factor in contemporary transformer architectures, typically grounded in static subword vocabularies that generalize poorly across heterogeneous or evolving textual inputs."
+3,"We introduce X-Spanformer, a tokenizer-free segmentation module that re places heuristic lexical boundaries with dynamic span prediction inspired by X-bar theory: The model initializes with a compact lk-unit BPE vocabulary [1, 2] and transitions to span-based segmentation via a pointer network [3], supervised through an annealed auxiliary loss schedule Predicted spans are variable-length, overlapping, softly typed by modality (e-8-, code, natural language, identifier) , and dynamically capped per input using a learned span length estimator: Span representations are composed and injected into downstream encoders, allowing seamless integration with pretrained or co-trained transformer stacks We hypothesize that learned span prediction provides more semantically aligned and compression-efficient tokenization than fixed BPE or byte-level alternatives."
+4,"To investigate this; we construct a multi-phase curriculum that bootstraps from synthetic segmentation labels and gradually introduces stream-type-aligned supervision: We detail evaluation protocols for measuring compression ratio contrastive re- trieval alignment, span entropy; and modality coherence   Preliminary results suggest improved interpretability and structural alignment, supporting our hypothesis. We release a standalone ONNX-compatible implementation along with training recipes and COrpus construction guide lines to facilitate adoption across code, language, and hybrid domains
+1
+Introduction
+Transformer architectures underpin leading solutions in natural language understanding; program synthesis; and multimodal retrieval [4, 5, 6, 7]. Central to these models is a static segmentation stage that partitions input into fixed subword units, most commonly via Byte-Pair Encoding [1] or SentencePiece [2]."
+5,"While effective on in-domain corpora, these pipelines impose immutable lexical boundaries that degrade under domain shift, obscure long-range compositional patterns in code and multilingual text"
+6,"[8], and incur substantial costs when vocabularies must be revised for novel syntactic O semantic phenomena. rawsonkara @gmail.com T aimeechrzanowski@gmail com
+2"
+7,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Segmentation is traditionally decoupled from model training, treated as an irreversible preprocess ing operation that lacks gradient flow and cannot adapt to downstream objectives. Recent  work in character-aware encoding [9], tokenization-free models [10], and unsupervised segmentation in sequential domains [11, 12] demonstrates the potential of adaptive boundaries: However , these ap- proaches often omit linguistic structure and do not offer interpretable segmentation aligned with phrase-level semantics. Drawing on the X-bar  schema from generative grammar [13], we posit that raw token streams (for example, source code, natural language, or symbolic hybrids) exhibit latent hierarchical units that can be learned directly from data:"
+8,"We introduce X-Spanformer, a span-based segmenter that formulates boundary detection as a pointer-network prediction task [3]. Beginning with a compact one-thousand-unit BPE seed, X-Spanformer learns to emit overlapping; variable-length spans that are softly typed by modality (for example, code, natural language, or identifier) and capped per sequence via a learned length estimator. Span representations are aggregated by pooling and integrated into downstream transformer encoders, enabling joint optimization of segmentation and task-specific objectives:
+1.1
+Contributions
+This paper presents the following contributions:
+1. A formalization of tokenizer-free segmentation as a span-prediction problem grounded in X bar theory; instantiated with a pointer network featuring dynamic span capping and modality typing:
+2 . A curriculum learning paradigm that bootstraps span discovery from synthetic BPE labels and progressively shifts to contrastive and type-aware supervision."
+9,"3. Architectural guidelines for embedding the span predictor into transformer encoders through compositional pooling and minimal layer extensions:
+4. A_ proposed evaluation framework covering compression ratio, contrastive alignment, span entropy analysis, and interpretability visualizations, accompanied by an ONNX-compatible implementation and complete training recipes:
+2
+Related Work
+2.1
+Static Subword Tokenization
+Most transformer pipelines rely on offline subword segmentation. Byte-Pair Encoding (BPE) con- structs a fixed vocabulary by iteratively merging frequent symbol pairs extracted from a training corpus [1]. SentencePiece builds on unigram language models to select subword tokens that maxi- mize corpus likelihood [2]: Such methods yield efficient lookup tables and have become ubiquitous in large-scale language models"
+10,"[4, 5], but they impose irrevocable boundaries that do not adapt during model training and can fragment semantically coherent units under domain shift [8].
+3"
+11,"X-SPANFORMER
+SPAN-AwARE ENCODER
+2.2
+Character-Level and Token-Free Models
+To mitigate subword brittleness, several works propose bypassing static vocabularies in favor of character- or byte-driven   encoding: Charformer applies gradient-based subword tokenization to learn latent splits during pretraining; compressing sequences without a predefined vocabulary [9]. CANINE directly encodes Unicode codepoints with down-sampling and up-sampling layers, offering a tokenization-free encoder that matches BPE baselines on transfer tasks [10]. These approaches remove offline heuristics; but they do not explicitly model higher-order linguistic 0 symbolic struc tures. 2.3 Unsupervised and Differentiable Segmentation
+Beyond character-level models; unsupervised segmentation methods aim to learn meaningful units directly from raw streams."
+12,"Morfessor induces morpheme-like units via minimum description length objectives [14]. In the neural domain, probabilistically masked language models (PMLM) inte- grate segmentation into pretraining with masked span prediction [12]. Other works learn segmen- tation boundaries for text-to-text generation by optimizing a downstream reconstruction loss [11]. While these methods introduce differentiability; they lack   explicit linguistic priors and produce non-overlapping, fixed partitions:
+2.4 Span-Based and Pointer-Network Models
+Pointer networks offer & mechanism for predicting variable-length spans by emitting start and end indices over an input sequence [3]. SpanBERT extends this idea in pretraining by masking contigu- ous spans and predicting their content [15]."
+13,"In speech and vision; learned segmenters often output overlapping proposals that improve detection and alignment [16, 17]."
+14,"However , to our knowledge no prior work unifies pointer-based span prediction with linguistically grounded structure for text segmentation in transformer encoders:
+2.5 Summary
+Existing  segmentation   strategies  fall into three broad categories: offline   subword  tokenization; character-level or token-free encoders, and unsupervised boundary learners: Offline methods such as BPE and SentencePiece offer efficient lookups but impose static vocabularies that fragment long- range structures and fail under domain shift [1, 2, 8]. Character-level and byte-level approaches eliminate heuristic preprocessing yet lack explicit modeling of phrase-level regularities and often incur higher  computational cost [9, 10]. Unsupervised segmentation methods introduce differen- tiability but produce non-overlapping; monolithic partitions without linguistic priors [14, 1l, 12]."
+15,"Span-based predictors and pointer-network architectures enable variable-length boundary propos- als but have not been combined with generative grammar principles for text segmentation [3, 15]. X-Spanformer addresses these gaps by unifying pointer-based span prediction with X-bar inspired inductive bias, yielding overlapping, softly typed spans that integrate seamlessly into transformer encoders and support end-to-end training:"
+16,"X-SPANFORMER
+SPAN-AwARE ENCODER
+3
+Architecture
+This section formalizes the modular components of X-Spanformer and their interactions within the segmentation pipeline: Each architectural unit is presented with motivation, precise mathematical formulation; and pseudocode where appropriate. We conclude with strategies for integrating outputs into standard transformer encoders, including support for overlapping span interpolation, and a runtime complexity analysis: X-Spanformer is bootstrapped by a compact BPE vocabularyl and produces:
+ranked span set S = {(ik, jk)}K_1' With 1 < ik < jk L. Span embeddings Sikjk € Rd. Soft type distributions type e 4T 2"
+17,"Pikjk representing modality types such as natural language, code; identifiers; vision; Or audio.
+filtered set S' C S based on learned length constraints:
+Span-level augmentation follows the strategy used in models that embed auxiliary semantic units alongside token streams [15, 5]. Unlike early segmentation-based models that hard-assign phrasal structure [13], we treat spans as latent soft units learned through boundary confidence and pooling: All modules are trained jointly with the downstream encoder. 3.1 Seed Embeddings and Candidate Set
+The segmentation process begins with a sequence of base representations, or  seed embeddings, which are intended to provide a minimal yet expressive lexical signal for identifying higher-order linguistic structure These embeddings, derived from a lightweight subword tokenizer, anchor the span predictor in a sparse but stable input space.3 Formally; given an input sequence tokenized to L elements, we define the embedding matrix E = [e1, ."
+18,"eL] € RLxd
+where each ei is a token-level embedding, and d is the model's dimensionality: This sequence is processed through a contextualizing encoder: H = Encoder (E) € RLxd
+yielding contextual representations H 3 [h1, - hL]:4 From this, the model constructs a complete candidate set of potential spans:
+C = {(i,j) | 1 <i < j < L} We initialize tokenization with SentencePiece [2] or similar to avoid fixed-length subword bias while maintaining fast bootstrapping and ONNX compatibility: This follows principles also found in token-free models such as ByT5 [18] and CANINE"
+19,"2 Here, T denotes the T-dimensional probability simplex:  vectors of nonnegative weights summing to one 3 See [2 , 1, 20] for methods on fast and robust subword encoders 4The encoder may be frozen Or fine-tuned and can be lightweight (e.g,, convolutional [20]) or transformer-based [5, 7]. 5"
+20,"X-SPANFORMER
+SPAN-AwARE ENCODER This exhaustive enumeration is tractable for short sequences and compatible with global attention filtering, as used in segment-aware transformers [15, 17, 21]_"
+21,"Each span candidate corresponds to a contiguous subsequence [hi, hj] and will be considered for inclusion in the predicted segmentation. The next module computes scores for each of these.
+3.2 Span Predictor
+The span predictor computes a scalar confidence score for each candidate span (i,j) € C, reflecting how likely that subsequence is to form a coherent semantic O syntactic unit."
+22,"Inspired by boundary- based approaches in segmentation-aware models [11, 15], we model start and end posit tions inde- pendently: This simplification makes inference tractable, allows for efficient parallel scoring, and empirically yields high-quality span proposals across domains 5 We compute unnormalized logits and normalized distributions over token positions: = WsH + bs, &zp"" softmax( €8 = WeH + be, &pe softmax(€e)_ where /s , Qe e RL and p; denotes the probability of a span beginning at position i, with p; denoting its end at j. Each span (i, j) is assigned a confidence score by multiplying its boundary probabilities: scoreli,j) = pi Pj
+This outer-product scoring approach has been widely used for efficient span extraction in question answering and entity recognition tasks [22, 23]. It biases selection toward spans with high local boundary salience while preserving diversity through length variation: We then extract the top-K scoring candidates: S = TopK {score(i,j) | (i,j) € C} ."
+23,"Proposition 1 (Top-K Marginal Likelihood). Let p8 € 4L and pe € 4L be independent boundary distributions over L token positions. Define the induced span measure P(i,j) = pi p; over the candidate set C = {(i,j) | 1 <i < j < L}."
+24,"Then, under the independence assumption, the optimal set of K spans that maximizes the total marginal likelihood is given by: S = TopK {P(i,j) | (i,j) € C} ,
+and satisfies:
+S = arg max P(i,j). S'CC 1S'|=K (i,j)es'
+Proof   By construction, each candidate span (i,j) is assigned an  unnormalized confidence score P(i,j) under the product measure derived from independent start and end distributions Since P(i,j) is nonnegative and additive, selecting the top K values of P(i,j) maximizes the total like lihood mass over  any subset of size K: This  corresponds to exact greedy maximization under the monotonic additive objective Z(ij)es Pli,j). The independence assumption ensures that no additional structural constraint or interaction term modifies this score. SThis factorized assumption follows successful precedents in span-based QA [22] and structured pretraining [15].
+6"
+25,"X-SPANFORMER
+SPAN-AwARE ENCODER
+3.3 Length Estimator
+While the span predictor yields high-confidence candidates based on boundary positions; it lacks an inductive bias toward plausible internal structure ~such as the typical width of syntactic; semantic, Or modality-specific spans: To address this; we introduce a length estimator: a learned prior over span widths that filters proposals based 0n predicted span length compatibility. 6
+For each proposed span (i,j) € $, we define its length:
+6 = j -i+1."
+26,"We then pool features over the span window:
+Vij Pool( H[i:j]) € Rd,
+where Pool(:) may be mean pooling; max pooling; o self-attentive aggregation. This representation is passed through a classifier head that outputs a categorical distribution over discretized length bins: =
+Wevij + be,
+ps = softmax(
+= arg maxp'
+The predicted length $ acts as a prior over plausible widths and is compared against the actual span length 6. We retain only those spans for which the prediction deviates from the ground truth by at most a fixed tolerance: 5' = {6,j) e s |16 _ 81<w} where T 2 0 is a hyperparameter   governing   flexibility: This length-aware filtering mechanism discourages degenerate; overly short, or overly long span hypotheses, and has been shown to improve accuracy in both text segmentation and vision attention tasks"
+27,"[26, 3, 17]. Proposition 2 (Span Count Upper Bound) Assume that all gold spans satisfy 6 € [6min , Omax], and let the tolerance satisfy T Smax Omin ~"
+28,"Then the number of retained spans satisfies: 1S' | = 0 (L . (2v + 1)) _
+Proof: Fix a start index 2. For each predicted length &, the end index must satisfy:
+j e |s+i-7_1, 6+ i+7_1|
+i.e., a window of size (2r + 1)."
+29,"For each of the L start positions, at most (21 + 1) spans can fall within the allowed deviation from 0, yielding the stated linear bound. This procedure constrains the spatial budget of the model, enabling sub-quadratic proposal filtering and tractable decoding over long-form sequences It also reflects cognitively grounded priors on span regularity and compositional unit length [13, 24]. 6This style of predictive regularization is aligned with latent structure filtering techniques in segmentation-aware pretraining [11, 12], and echoes classic Bayesian constraints in alignment models [24]."
+30,"See [25, 20] for strategies to compress variable-length subsequences using adaptive pooling Or dynamic convolu- tions_"
+31,"X-SPANFORMER
+SPAN-AwARE ENCODER
+3.4
+Modality Typing
+Spans in source sequences often originate from heterogeneous subdomains ~such as natural language, programming syntax; structured identifiers, numeric expressions, Or markup. Accurate identification of a span's modality enables the model to apply domain-specialized logic (e:g , routing to type specific heads; enforcing syntax-aware constraints, Or improving retrieval and alignment). 8"
+32,"To this end, we introduce a shallow classification head that predicts a probability distribution over T predefined modalities for each span: Let ij € Rd be the pooled embedding for span (i, j) , produced by the same pooling operator used in the length estimator: Uij = Pool( H[i:j]). We compute logits and a normalized modality distribution:
+type ei = WtUij + bt,
+type pij softmax( etype
+The vector ptype T represents the model's belief over  candidate types, capturing epistemic uncertainty in ambiguous or code-switched contexts [27]. This representation serves three purposes:
+1. Auxiliary Supervision: When modality annotations are available, a croSS-entropy loss be tween ptype and gold labels provides an auxiliary training signal. This approach aligns with multitask conditioning frameworks like UnifiedQA"
+33,"[29] and improves zero-shot transfer in underrepresented types [28]. 2 . Stream Conditioning: During decoding O1 croSS-_ attention, type distributions can be used to guide soft routing among specialized decoder blocks O1  prompt adapters"
+34,"[30], enabling modular reasoning across modalities: 3. Interpretability and Diagnostics: The modality classifier enhances model transparency by linking segmentation decisions to functional subdomains especially in token-level mixtures or generated scaffolding tasks: 9
+3.5 Span Embedding
+Each retained span (i,j) € S' must be mapped to a fixed-size vector representation suitable for downstream fusion: This embedding is intended to capture both the internal structure and the contextual salience of the span, serving aS a condensed representation of its semantic Or syntactic role. Effective span  encodings have been  shown to improve performance in question answering, entity linking; and structured generation tasks [32, 15, 33]."
+35,"We  explore two span encoding strategies, inspired by prior work in segment pooling and local contextualization: See [27, 28] for techniques that use token- or span-level typing to improve generative fluency and interpretability in mixed-modality environments. 9This is particularly useful for diagnosing over-segmentation, ambiguous boundaries, Or routing errors in compo- sitional data streams [31, 20]."
+36,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Mean pooling: A simple, position-invariant aggregation computed as the average of con- stituent token vectors: Sij
+hk. j -1+1 k==i
+This approach is computationally efficient; robust to span length; and has proven effective in prior span-focused architectures such as BiDAF and SpanBERT [15, 32]. Local self-attention: A lightweight transformer block operates over the token subsequence Hli:j], enabling the model to capture internal asymmetries and intra-span dependencies:"
+37,"Sij SelfAttn( H[i:j]). This mirrors span-centric refinement modules in neural coreference and sequence segmentation models [34, 20], offering higher expressivity at moderate computational cost. In practice, both methods can be fused or gated dynamically based on span type or predicted length, enabling flexibility in balancing generalization and expressiveness across heterogeneous spans. 3.6 Discrete Integration
+In the default architecture, span embeddings are appended to the encoder input to form an aug- mented composite sequence: E = [e1, - eL, Si1j1)*"
+38,"Sikir ] € R(L+K)xd. This construction allows learned spans to act as soft pseudo-tokens (discrete units with internal semantics  derived from upstream  modules)   which are then  jointly contextualized   alongside the original input. Similar forms of auxiliary token insertion have been shown to improve performance in span-level tasks; prompt tuning, and cross-modal fusion [35, 30, 36]. Importantly; standard transformer encoders can process this composite sequence without architec- tural modification, as the inserted vectors match token dimensionality and participate in multi-head attention identically [5, 7, 35]."
+39,This approach mirrors the insertion of learned prompt tokens Or re- trieved vectors into encoder-decoder models without altering core attention mechanics.
+40,"However,; to prevent positional ambiguity and enforce separation between token and span-originated embeddings, we optionally apply specialized feature encodings (such as segment tags, span-type biases; o learned offsets) to preserve structural grounding [30, 37, 18]. Relative offsets: Span positions can be encoded relative to the input sequence to model anchoring [37]. Segment or modality tags: Type embeddings help disambiguate pseudo-tokens originating from different sources Or domains [18, 20]."
+41,"Attention masking: Optionally restrict cross-token attention during pretraining to reduce information bleed or enforce compositional constraints
+While this discrete integration is straightforward in implementation, it serves as a critical interface between low-level segmentation logic and high-level fusion O reasoning stages Alternative strategies such as early fusion; cross-attention bridging, O gating will be explored in the upcoming sections. 9"
+42,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Span (61,j1)
+Span (62,3j2)
+Span (i3,j3)
+S
+S
+S
+Controller Token
+Prefix Vector Global Conditioning
+Span St,_ j1
+Span 82,32
+Span St,j3
+S
+h' = LayerNorm (h+W s)
+els| e1,e2- e1,
+W1
+W2
+23
+Decoder
+Controller Token
+softmax(W1,W2,3) Prefix
+Span
+Conditioning Span Usage Strategies
+8 =
+Ck Sk
+Figure 1: Interpolation of overlapping span embeddings and integration strategies."
+43,"Retained spans are scored by a learned function Uij, normalized via softmax; and fused into a global summary vector 3. This vector can be inserted as a controller token; prefix embedding; Or conditioning signal for downstream modules
+3.7
+Span Interpolation for Overlap Resolution
+To gracefully handle overlapping Or redundant spans, X-Spanformer employs a continuous interpola- tion mechanism over the filtered set S' = {(ik, Je)}=1: Rather than injecting each span embedding directly, the model computes a relevance-weighted mixture over their representations:
+S =
+Qij Sij) (i,j)es'
+where Sij e Rd is the encoded representation for span (i,j), and Qij € [0, 1] is its normalized attention weight."
+44,"To compute the interpolation weights Qij) each span is assigned a scalar relevance logit: fscore(sij, Oij = type Qij 9 Pij confij) , which may be a learned function over span length Sij' type entropy; boundary confidence, or addi- tional pooled features A softmax transformation ensures normalization: exp(Wij , Qij 3 (a,b)esi exp(wab > so that
+(i,j) Qij = 1. The final interpolated vector $ (Equation 1) functions as a global span summary: It may be inserted as a controller token [5], prepended as a prefix vector [30], or concatenated to the sequence input for downstream fusion [38]. Because all operations are differentiable; the interpolation mechanism supports full gradient flow and can be trained jointly with other modules."
+45,"This method parallels soft memory reading in retrieval-based models [35, 39], mixture-based reasoning [40], and latent fusion in compositional decoding:
+10"
+46,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Proposition 3 (Equivariance and Convexity). Let S' be any permutation of filtered spans: Then the interpolated vector $ is:
+1 . Permutation equivariant: invariant to reordering of spans i S'_
+2 Differentiable: gradients propagate through both Wij and Sij, 3 Convex: 8 € conv{8ij (i,j) € S}. Proof   Equivariance follows from the input-order invariance of softmax in Equation 3. Differen-"
+47,"tiability holds because both the scoring function and span encodings are differentiable mappings: Convexity arises from expressing $ in Equation 1 as a convex  combination of fixed vectors with weights @ij Z 0, summing to 1.
+3.8 Runtime Complexity
+key design goal of X-Spanformer is to enhance structural awareness without compromising com- putational efficiency To this end, we decompose the end-to-end forward pass into three core stages:
+Span enumeration and scoring: generation and scoring of candidate spans from the input sequence; Embedding and selection of top-ranked spans: pooling span-level representations and selecting & subset for contextual conditioning; Joint contextualization: applying a standard transformer encoder over the combined se - quence of tokens and selected spans:
+This modular design ensures that added computational cost remains subquadratic for the first two stages, while the dominant quadratic term scales with total input length:  Similar hybrid strategies are used in sparse attention transformers [41, 42] and routing-based models [43, 44]. The proposition below formalizes the overall runtime cost: Proposition 4 (Runtime Bound) . Let L be the input sequence length; K the number of retained spans, Umax the maximum span width, and d the model's hidden dimension: Then the total forward pass runtime of X-Spanformer is:
+O(Lrmax , +O(Kd) + O(L + K)2). Proof: The total runtime decomposes into the following: (1) Span enumeration and scoring: Each of the L tokens anchors up to Umax rightward spans."
+48,"Each span is scored by a parameterized function fe(wi:j), typically an MLP o bilinear form. Hence the cost is: 0(Lwmax ,
+(2) Span encoding and filtering: After top-K selection, each span is pooled (e:8 , via mean or self-attention) into a vector of dimension d, and scored by span-type and confidence heads: These operations are linear in d, giving: O(Kd). 11"
+49,"X-SPANFORMER
+SPAN-AwARE ENCODER
+(3) Joint contextualization: The final sequence consists of original L tokens and K span em - beddings, resulting in (L+ K) total elements. Processing this sequence using standard transformer self-attention [4] yields: O((L + K)?d): Since d is fixed during training, we absorb it into the constant, yielding:
+O((L + K)2)."
+50,Adding all components proves the result.
+51,"Span Scoring
+Span Encoding E5 Classification
+Transformer Integration
+U
+51, ' SK
+Retained spans
+0( Lwmax
+0 ( K d)
+0((L + K)2)
+Runtime Complexity 0(Lvmax ) 0(K d) 0 ( ( ((L + K) )
+Figure 2: Modular runtime decomposition of X-Spanformer's forward pass. Span enumeration and scoring are subquadratic in sequence length L, while span encoding scales linearly with the number of retained spans K Joint contextualization with self-attention dominates the total cost at O((L + K)2)."
+52,"Training
+X-Spanformer is trained end-to-end to jointly learn a span scoring function fe RLxd Rlsi and an integration mechanism for incorporating selected spans into the backbone transformer. Given an input sequence % € RLxd the model optimizes a composite objective:
+=
+Ltotal Ltask + B1Lspan + BzLent , where Ltask is a task-specific loss (e-g;, classification or generation) , Lspan aligns predicted spans with interpretable structure, and Lent encourages exploratory routing early in training:"
+53,"The pipeline comprises the following stages:
+Span induction with entropy-regularized scoring: selects meaningful spans via a differ- entiable scoring function augmented with entropy-based exploration [15, 45, 46]. Interpolation-weighted fusion of pooled span encodings: computes an attention-based summary vector $ from the top-ranked span embeddings, inspired by modular controller rout- ing and compositional bottlenecks [43, 28].
+12
+e1,"
+54,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Controller-aware injection into the encoder backbone: conditions the transformer via prefix insertion, attention shifts, Or gating pathways [30, 47, 37].
+All stages are fully differentiable and trained jointly from supervision signals"
+55,"[7, 48]. 4.1 Span Induction with Entropic Regularization
+To identify compositional units latent in unstructured sequences, we treat all bounded-width sub- strings a8 candidate spans and learn a scoring function to assign each a salience probability: This differentiable selection mechanism is trained jointly with downstream objectives but regularized to maintain entropy-driven exploration early in training:  Inspired by principles from latent structure modeling [45, 15] and soft routing frameworks [43], our span induction stage maps an input sequence x € RLxd to a distribution P over all candidate spans S, followed by a sampling Or top-K filtering step that informs structural fusion. Let D = {(2() ,y())}I denote the training corpus, where each input 2() € RLxd consists of L contextual embeddings: We define the set of all contiguous spans of width at most Umax as:
+S = {(i,j) |0 <"
+56,"i < j < min(i + Umax , L)} Each span is encoded using & fixed pooling operator and scored by a function fo(wi:j) e R. The span distribution is then computed via softmax over all candidate scores:
+exp( fe(.ij)) '(a,b)es exp( fo(wa:b)) `
+To encourage diversity and avoid overconfident routing early in training, we introduce a temperature weighted Shannon entropy regularizer: Lent = _Aent H(P);
+H(P)"
+57,"= - Pij log Pij: (i,j)es
+6) The entropy coefficient decays exponentially:
+= Ao exp( _yt) ,
+where t is the training epoch; Ao the initial weight, and ~ 0 a decay rate: This annealing schedule mirrors techniques from curriculum learning"
+58,"[7 , 24]. Proposition 5 (Maximum Entropy of Uniform Span Distribution). Let S denote the set of valid spans defined in Equation (4), with   cardinality |S| = N . The entropy H(P) of any valid span distribution P, as8 defined im Equation (17) , is maximized when:
+1 Pij = for all (i,j) € S: N
+'8)
+This yields:
+Hmax  (P)"
+59,"= log/S1 = log N.
+(9)
+13
+Pij
+Aent !"
+60,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Proof: We seek to maximize:
+H(P)"
+61,"= - Pij log Pij (i,j)es
+(10)
+subject to:
+Pij = 1 and Pij 2 0."
+62,"(i,j)es
+(11)
+Construct the Lagrangian:
+L(P,A)"
+63,"A Pij - 1 (i,j)es (i,j)es
+(12)
+Taking derivatives:
+OC S OPij
+log Pij - 1+A = 0
+Pij = eA-1
+(13) Since this solution is constant for all (i,j) € S, and the probabilities sum to 1, we have Pij = 1/N. Substituting into Equation (21) gives:
+1 H(P*) = -N  log = log N. N N
+(14)"
+64,Remark: Proposition 6 formalizes the upper bound for entropy regularization:
+65,"Early in training; entropy maximization promotes structural diversity across S. Over time, Equation (18) decays the exploration coefficient, shifting focus toward confident; high-salience spans. 4.2
+Span Induction with Entropic Regularization
+To identify compositional units latent in unstructured sequences, we treat all bounded-width sub- strings as candidate spans and learn a scoring function to assign each a salience probability This differentiable selection mechanism is trained jointly with downstream objectives but regularized to maintain entropy-driven exploration early in training:   Inspired by principles from latent structure induction"
+66,"[45, 15, 49, 50] and sparse attention routing [43, 51, 28], our span induction module maps an input sequence x € RLxd to a probability distribution P over all candidate spans S, which then informs structural fusion through top- K routing: Let D = {(26) ,y())}1 denote the training Corpus, where each input x (i) € RLxd consists of L contextual token embeddings We define the set of all contiguous spans of width at most Wmax as:
+S = {(i,j) |0 < i < j < min(i + Umax , L)} _
+(15)
+Each span is pooled into a fixed-length representation Bi:j, scored via a feed-forward function  fo, and normalized using a softmax across all candidates: exp( fe(Ti:j)) Pij (16) (a,b)es exp( fo(Ta:b))
+14"
+67,"X-SPANFORMER
+SPAN-AwARE ENCODER To encourage   diversity and avoid premature collapse into high-confidence routing, we   apply a temperature-weighted entropy penalty:
+Lent
+~Aent H(P); H(P) = Pij log Pij: (i,j)es
+(17)"
+68,This follows the principle of entropy regularization
+69,"[52, 53], where high-entropy distributions en- courage exploration under uncertainty The regularization strength Aent is annealed exponentially:
+Aent (t) = Ao exp( _yt) ,
+(18)
+where t is the training epoch, Ao the initial coefficient, and ~ 0 controls decay rate This annealing scheme mirrors curriculum learning and gradual constraint tightening in latent modeling [54, 24]. Proposition 6 (Maximum Entropy of Uniform Span Distribution). Let S be  the set of spans defined in Equation (4), with |S| = N. The entropy of the softmax span distribution P, a8 given in Equation (16) , is maximized when:
+Pij
+for all (i,j) € S. N
+(19)"
+70,"In that case, the entropy attains its maximum value:
+Hmaxl (P) = log/S| = log N.
+(20)
+Proof: We wish to maximize:
+H(P) = - Pij log Pij, (i,j)es
+(21)
+subject to the constraints: Pij = 1, Pij 2 0."
+71,"(i,j)es
+(22)
+Form the Lagrangian:
+L(P,A) =
+Pij log Pij + A Pij "" =1 (i,j)es (i,j)es
+(23) The first-order stationarity condition yields: OL log Pij - 1+A = 0 dPij
+Pij =eA-1
+(24) Since all Pij are equal and sum to 1, we conclude Pij = 1/N. Substituting into Equation (21):
+H(P*)"
+72,"=-N - Nlog n) = log N.
+(25
+15"
+73,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Remark: Proposition 6 establishes the upper bound of entropy over span routing distributions. Early training with high Aent promotes structural exploration, while annealing enables convergence to sparse, high-salience spans. This   tradeoff between   uncertainty maximization and structural commitment parallels entropy-annealed models of parse induction [55] and marginal span recovery [56].
+(a) Epoch 1
+Epoch 10
+Epoch 50
+0.04 0.04 2 0.03 2 0,03 1 0.02 ] 0,02-"
+74,"Ann | 0.01 0.01 20 60 100 40 60 80 Span index Span index
+Input sequence embeddings Candidate Scoring spans
+40 Span index
+Span Induction with Entropic Regularization
+Entropy
+0.03
+2 0.02 1 0.01 0.00
+Candidate spans
+1
+Salience probabilities
+Regularization
+3
+20 40 Span 60 Index
+Entropy
+Loss
+80
+Figure 3: Illustration of span induction with entropic annealing: Candidate spans compete via softmax routing; high-entropy stages spread mass broadly, while later epochs concentrate on salient structures. 4.3
+Controller-Aware Generation and Final Objective
+The fused span summary vector 3 € Rd serves as a global control signal for conditioning the trans former encoder."
+75,"Rather than statically appending $, X-Spanformer supports multiple integration pathways that modify computation at different stages of the network: To compute the controller, we define:
+K
+exp( Wk_ K e=1 exp(we)
+S =
+@kSk, k=1 where @k
+where each sk Pool(cik: jk . is a pooled span representation, and Wk = 96 (8k, Ok, confk) is a learned span-specific Salience score incorporating structural and uncertainty features."
+76,"X-SPANFORMER
+SPAN-AwARE ENCODER
+X
+X
+X
+Text
+Dense
+Image
+Click
+Prefix Token
+Speech
+Set
+Video
+Multimodal
+Fused Span Vector S
+Attention Bias
+X
+8 L
+Transformer encoder
+Prefix
+S
+X2
+Prefix token
+Prefix token
+Xi X
+Gating Vector
+Attention W bias Wg Gating- vector
+Transformer encoder
+X
+Controller-Aware Generation
+Auto-Routed Transformer
+Gecior Wg
+MLP
+MLP
+Figure 4: Diagram of span controller injection pathways."
+77,"The fused control vector s is injected at various stages of the transformer stack via prefix tokenization; attention projection, or feed-forward gating: Each pathway supports differentiable influence over structure-aware representation learning:"
+78,"Inspired by prefix tuning [30], adapter routing [47], and conditional computation frameworks such as Primer [57] and Galactica [58], we implement three complementary controller injection modes:
+( a) Prefix token:"
+79,"s is inserted as a synthetic token at input position t = 0, forming an augmented sequence: X = [s, 81, 12, 8 L ], allowing early layers to attend over structure-induced context from the very first step [30]. (b) Attention bias: s is projected via learnable matrices and added to the query key representa- tions before computing attention weights: Qi < Qi + WQ ;, K; < Kj+ WK ;, forming low-rank adaptive adjustments to the attention mechanism [47]. (c) Gating vector: Feed-forward activations are modulated by span-conditioned gates: FFN(h) = o(Wgs) MLP(h), where o is an activation function (e-g , sigmoid Or swish) and denotes elementwise multipli- cation: This enables multiplicative control over token-wise representations."
+80,"Each controller pathway biases computation differently: prefix tokens affect token flow from the input layer , attention projection adjusts mid-layer relational processing; and gating modulates late stage nonlinearity: These methods may be used independently or composed with learned scalar weights Or routing heuristics
+Semantic Routing Interpretation. The use of $ as a dynamic structure-derived signal resembles latent prompting or universal adaptation: Related techniques include T adapters"
+81,"[46], PADA [59], prefix routing [28], and memory-based policies [60]."
+82,Unlike prior works; X-Spanformer constructs S from differentiable span selection instead of metadata or fixed domain tags. 17
+83,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Proposition 7 (End-to-End Differentiability of Controller Injection). Let $ e Rd denote 0 fused control vector computed via relevance-weighted interpolation over span embeddings:
+K S = L arsk, @k: k=1
+exp( Wk - K e=1 exp(we)
+Uk: = 9o (8k, Ok, confk). If each Sk = Pool(tit:jk) is differentiable and the span indices (ik, Jk) are fixed, then for all three integration modes above, the task loss L is differentiable with respect to all upstream scoring and pooling parameters:
+Proof: Let $ denote the aggregated span representation defined as
+@kSk,
+where @k softmax(9o(Sk,`)) , Sk Pool(cik:"
+84,"jk -
+We aim to show that the loss L is differentiable with respect to s across all injection modes; and thus gradients propagate to upstream components Step 1: Differentiability of &. The components are composed as follows: Sk is differentiable in x due to the smoothness of the pooling operator, @k is differentiable in Sk and hence in %, due to the chain rule applied to 9d and softmax, s is a linear combination of $k with differentiable &k coefficients: Therefore, 3 is differentiable in €, 9o, and Pool(:) Step 2: Prefix Token Injection: When 8 is prepended as T0, the self-attention  mechanism computes: Attn(Qi, Kj,Vj) = softmax(QT Kj) . Vj,
+with Ko = WK . s and Vo 3 WV $ ."
+85,"Since matrix multiplication, softmax, and the addition of $ via linear projections are differentiable operations, gradients propagate through s during attention: Step 3: Attention Bias Injection: Let Qi F Qi+WR ; and Kj 5 Kj+WK 3."
+86,"The perturbation induces a modified attention logit
+eij (Qi+WQs)T(K; +WK 5),
+which remains differentiable in s by the composition of smooth affine mappings and inner products."
+87,"Hence, €L/a3 exists. Step 4: Gating Vector Injection: A gated FFN applies:
+FFN(h) = o(Wgs) 0 MLP(h) ,
+where 0 is & smooth activation (e.g-, sigmoid). Each operation (linear map; activation, Hadamard product) preserves differentiability Conclusion."
+88,"In all injection strategies, the loss C is differentiable in S_ Since s is differentiable with respect to all upstream computations (span representations Sk and their source embeddings) , gradients flow continuously through the span routing mechanism
+18"
+89,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Final Objective: Let Ltask denote the supervised loss (e-g;, classification Or alignment). The total objective includes structure alignment and entropy-based exploration: L = Ltask + 81- Lspan + B2Cent =
+where /81, 82 € Rzo control regularization strength and structure confidence
+Span Induction Top-K expfsxp) spans 8 fe Zexpf Eu 0"
+90,"Entropy nent H(P) Span Fusion Span fusion
+Transformer Backbone
+Prefix token
+Attention bias
+2
+Gating vector
+€ =2 ak
+Figure 5:"
+91,"Training workflow of X-Spanformer: Spans are scored, entropy-regularized , and interpolated into a fused control vector s, which conditions the backbone encoder via multiple integration modes
+4.4
+Optimization and Curriculum Strategy
+X-Spanformer is trained via a structured two-stage curriculum designed to (i) bootstrap structural induction from local compositional statistics, and (ii) fuse these learned inductive biases into an end-to-end transformer backbone."
+92,"This approach draws from established principles in multi-phase self-supervision [5, 61], curriculum learning [54, 24], entropy-guided latent modeling [55], and gradual architectural fusion [62, 48]."
+93,"The optimization process proceeds as follows:
+Phase I: Span Pretraining (Structure Discovery) This phase isolates the span scorer fo and aggregator g6 to encourage compositional discovery independent of downstream gradients: The learning objective focuses on reconstruction or type classification:
+pre
+Lrecon BauxLaux ,
+(26)
+where Lrecon is a span-wise MSE or token-level cross-entropy loss; and Laux may capture span-type heuristics (e.g-, POS tags; constituency labels) from lightly supervised signals [63]. 1 In our experiments; tuning 81 € [0.5,1.5] yielded consistent gains on structured tasks. Lowering 82 0.3 after warmup preserved sparsity and improved convergence stability:
+19"
+94,"X-SPANFORMER
+SPAN-AwARE ENCODER Algorithm 1 Phase I Span Pretraining Require: Dataset D = {(z() , y())}N1; scorer fo; aggregator 9o 1: for each batch (1,y) in D do 2: Sample spans (i,3); mask region Ti:j 3: Compute pooled span embedding sk Pool(.i:j) 4: Predict reconstruction Ti:j = decode(go(8k))"
+95,"5: Evaluate: Crecon 3 Ilwi:j ci:jllg or token-wise cross-entropy 6: Backpropagate and update 0, 7 end for
+This step biases the model toward identifying spans that support local coherence, compression, or predictive fidelity   Entropy regularization is applied to the span scorer during this phase with constant weight AO; maximizing routing diversity as in [52]. Phase Il: End-to-End Fine-Tuning (Joint Routing + Representation) Once the span routing mechanism has  converged on stable inductive patterns; we integrate the controller vector 3 into the transformer encoder and perform full-model training: =
+Ltotal Ltask + B1~ Lspan + 82Lent,
+(27)
+where Ltask is the downstream loss (e:g-, NLL, classification, contrastive loss), Lspan is a KL di- vergence against interpretable span supervision (when available) , and Lent is the Shannon entropy regularizer defined previously: The entropy coefficient is annealed exponentially: Aent ' (t) = Ao exp(_y ' (t _ Ti)) ~ 1+7T1,
+(28
+where Ti marks the transition epoch from Phase I, and 7 modulates the sharpness of routing focus:
+Algorithm 2 Phase II Full-Model Optimization Require: Trained fo, 9o; transformer %; entropy schedule Aent (t) 1: for epoch t = Ti + 1 to T2 do 2: for each batch (x,y) do 3: Compute span logits: Wk 9o (8k, `); @k softmax(Wk) 4"
+96,": Fuse: S = k @kSk 5: Inject s via prefix, bias, O gate (see Section 4.3) 6: Compute L using Equation (27) 7: Backpropagate and update 0, 0,1 8: end for 9: end for
+Training Summary: Phase I focuses on disentangling structural plausibility from task grounding: Phase II jointly optimizes the full routing-and-reasoning stack using controller fusion as & structural
+20"
+97,"X-SPANFORMER
+SPAN-AwARE ENCODER
+bottleneck:"
+98,"Empirically, this approach improves stability under sparse supervision and yields more interpretable attribution of transformer behavior to compositional units [64]: Optimization Details: All models are trained using AdamW [65] with:
+Cosine learning rate decay with 10% warmup Gradient clipping at ||Vllz 1.0
+Dropout rate of 0.1
+Batch size of 64 (token-aligned) Hyperparameter grid search ranges and ablation configurations are provided in Appendix 1 and 33.
+5
+Experiments
+In this section, we analyze the emergent behavior and structural control capacity of the proposed X-Spanformer architecture through a series of controlled experiments. Our objectives are threefold:
+1. To verify that differentiable span selection converges toward semantically meaningful structures under entropy annealing; 2_ To evaluate the fidelity and variance of controller vector injection across multiple integration pathways;
+3."
+99,"To probe the interpretability and stability of span routing under synthetically constructed and naturalistic corpora. Unlike traditional benchmark-driven evaluations, our methodology emphasizes structural diagnos- tics and interpretability over end-task performance."
+100,"This is consistent with experimental paradigms in latent structure induction [55, 63, 50], probing analysis [64, 66], and entropy-regularized repre sentation learning [53, 52]. We denote:
+D = {(z() , y())}N1: training corpus with optional supervision; fe: differentiable span scorer;
+9a: controller aggregator; S: controller vector, computed as & relevance-weighted sum over pooled span embeddings:
+K
+S
+@kSk k=l
+(29 _
+exp(Wk: _"
+101,"K W=1 exp(we) Uk = gq (8k, Ok, confk)
+(30)
+21
+@k"
+102,"X-SPANFORMER
+SPAN-AwARE ENCODER
+transformer parameters: Model optimization proceeds via the composite loss:"
+103,"=
+Ltotal Ltask + B1Lspan + 82Cent,
+(31)
+where:
+Ltask: task-aligned objective (e-g , cross-entropy, contrastive alignment); Lspan = KL( Pgold P): span KL alignment; Lent = ~Aent H(P): entropy regularization term
+To isolate structural behavior, we evaluate:
+Span distribution entropy H(P) =-Z(i;j) Pij log Pij; Controller gate variance Var(o(Wgs)); Span overlap rate: fraction of selected spans sharing token positions; Downstream impact: change in token-level logit outputs under controller ablation. Experimental Philosophy. Our experiments are structured not as competitive benchmarks, but as architectural diagnostics to validate the inductive mechanism of span-aware routing: This aligns with prior work in structural probing and latent routing models"
+104,"[28, 51, 56]. Note: All results in this section are presented for illustrative and developmental purposes."
+105,"Empir- ical benchmarks for generalization, transferability; and performance scaling are left to future work as model weights stabilize and structure supervision matures. 5.1
+Experimental Setup
+We design our experimental pipeline to test the structural expressivity and routing fidelity of X- Spanformer in isolation from large-scale benchmark supervision   Following best practices in latent structure induction [55, 63, 67], we  employ a diagnostic protocol based on entropy decay; span structure visualization, and controller variance tracking:
+Datasets."
+106,"We conduct experiments on the following sources:
+Synthetic Span Induction Corpus: A handcrafted suite of synthetic sentence templates constructed using the Stream-Mix generator [68], which provides hierarchical stream-label anno- tations and configurable entropy constraints: This dataset allows controlled testing of routing alignment under known compositional structure WikiText-103 [69]: Unsupervised language modeling corpus used to evaluate span stability and routing coherence over noisy naturalistic prose.
+22"
+107,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Gigaword Compression (Optional): For assessing semantic condensation and routing spar- sity under low-token summarization windows [70]_ Pseudo-structured Sequences: A mix of instructional data (recipes, dialog trees) and semi- nested markdown documents to probe structural generalization over latent hierarchical cues:
+Metrics. To isolate architectural effects, we evaluate span selection and routing behavior using the following indicators:
+Span entropy:
+H(P) = - Pij log Pij, (i,j)es to assess structural uncertainty
+(32)"
+108,"U = Eli,j)~P[j - i, indicating the model's preferred compositional grain. Overlap rate: Overlap( B) 1[sk O se = 0], IBl K2 xEB kze where B is a mini-batch; and {Sk} are selected spans per instance. (33)
+Controller gate entropy:
+K H(a) = - @k log  @k; k=l
+reflecting the distributional sharpness of fused routing signals. Baselines."
+109,"To contextualize architectural effects; we compare against:
+Vanilla Transformer Encoder: Without span selection Or controller routing; matches embed- ding dimensionality and depth: Prefix-Tuned Transformer [30]: Appends learnable prefix tokens to the input sequence, serv- ing as & lightweight prompting baseline Latent Syntax Attention [55]: Implements unsupervised span-based parse induction using differentiable parsing objectives. Infrastructure. All experiments are conducted on a single 40GB NVIDIA A10o GPU. Training time per phase is approximately 10-12 hours. Models are implemented in PyTorch and exported uS- ing ONNX traceable modules for architecture inspection and routing visualization:"
+110,Hyperparameter values are enumerated in Appendix .1. 23
+111,"X-SPANFORMER
+SPAN-AwARE ENCODER
+5.2 Span Routing Behavior
+We   analyze the internal span distribution dynamics   induced  by the  X-Spanformer's   entropy- regularized selection module. The goal is to assess whether the model exhibits structure-seeking behavior through interpretable routing patterns under curriculum-controlled exploration:
+Let P = {Pij} denote the normalized span distribution from Equation (16) , and let the controller be computed as: K exp( Wk _ S @kSk, where @k (34) K k=1 e=1 exp(we)
+To understand convergence properties and architectural expressivity; we track the following quanti- tative signals:
+Span Entropy Dynamics: The Shannon entropy of Pt is computed at each training epoch t: H(Pt)"
+112,"= - Pij log Pf) (35) (i,j) We hypothesize that the expectation E[H (Pt)] follows exponential decay due to the schedule
+Aent ! (t) = Ao * exp( _nt),
+as derived in Section 4.2, mirroring curriculum learning effects observed in [54, 24]."
+113,Span Width Histogram: Let w = j-i.
+114,For each epoch; we compute the empirical distribution of selected span widths among top-K spans: A shift toward medium-length (5-12 token) units may indicate phrase- or clause-level abstraction consistent with constituent boundaries [63]. Span Overlap Rate: We define token-level overlap for each instance by computing the pairwise intersection among selected spans: Sk 0
+115,"se| Overlap(x) = K2 |sk U se| kze
+High values in early epochs reflect exploratory collapse, while convergence to disjoint or mini- mally overlapping spans signals stabilization of routing priors. Routing Stability Across Epochs: To quantify change in span selection Over time; we mea- sure the symmetric KL divergence between distributions at adjacent epochs:
+KLsym ! (Pt || Pt+1)"
+116,= KL(Pt || Pt+1) + KL(Pt+1 |l Pt). Declining divergence indicates the system has stabilized its structural hypothesis. 24
+117,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Visualization and Empirical Summary
+Entropy Decay 0.01 0.05 0,10 0,50
+Span Widths
+Routing Sparsity 0.,6
+0,5 1 0.4 U0.2- 1 0.0
+7
+18 120 80 40 t 20
+0.01 0.05 0.1 0.5 0.5
+30 80 120 180 Epochs
+4 6 15 20 Span Width
+30 90 120   180 Epochs
+Figure 6: Diagnostic evolution of span routing properties  Left: entropy decay across different schedules."
+118,Center: distribution of selected span widths over training: Right: routing sparsity (mean top-K concentra- tion) over time. Table 1: Entropy and average span width under various entropy decay rates Y
+119,"Each value is averaged across final 5 epochs post-convergence. Lower values retain exploratory routing; higher values promote sparsity
+Final H(P) (L better confidence)"
+120,Avg: Span Width U 0.01 3.71 5.3 0.05 2.08 6.9 0.10 1.49 9.2 0.50 0.41 11.6
+121,"These routing diagnostics provide evidence that X-Spanformer gradually shifts from high-entropy; overlapping routing to sparse; high-confidence span representations. This aligns with latent atten- tion sparsification in architectures such as MoE Transformers [43], Routing Transformers [51], and mixture-of-expert decoders [28]. Crucially, our formulation achieves this behavior without discrete gating O reinforcement-based span extraction, relying entirely on differentiable gradient flow from the full objective: Lfinal = Ltask + Aent (t) ."
+122,"H(Pt) + 81 Lalign , where Aent ' (t) = Aoe-xt controls the entropy decay schedule and Lalign optionally enforces span-level alignment during supervised routing:
+Proposition 8 (Routing Convergence Bound). Let Hmax = log ISL be the maximum entropy over the   umiform   span distribution on the   candidate set S, and let H(Pt) denote   the   entropy  of the learned span distribution at epoch t_ Under a fired entropy annealing schedule Aent (t) = Aoe-7t with Ao,~ > 0, and assuming entropy-dominated gradient flow during early routing, the following upper bound holds: H(Pt) < Hmax ` e""Yt
+25"
+123,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Proof: We begin by recalling that during early training, the span logits Wk are updated primarily by the entropy term: 8Lfinal Aent (t) Wk H(Pt),; dw= with entropy defined over softmax-normalized span probabilities: IS1 exp(wp H(Pt) = - @k log "" @k where @k k=1 Cj exp(w} The entropy gradient with respect to logits is: OH Q (Iogak) +1) . dwk Logit descent then yields: (t+1)"
+124,"Aoe-vt t Wj U k = n Qk (log ak + 1). Following standard smooth convex analysis (e.g-, gradient-based decay of entropy potentials) , and assuming that the entropy is Lipschitz-smooth and that ||VH(Pt)ll?"
+125,"Z cH(Pt), we obtain: H(Pi+1) < H(Pt) (1 _ ncAoe -vt)"
+126,"Unrolling the recursion gives: t-1 t-1 H(Pt) < H(Po) . II (1 - ncAoe-ys < H(Po) exp ~ncAo e ""Y8 s=0 s=0
+Using the inequality:
+t_1 =e""Yt e""Ys = 1 ~ e-Y s-0
+1
+e""
+we obtain:
+ncAo where C = 1 ~e-Y
+H(Pt) < H(Po) ."
+127,"e-C(1-e-v) ,
+Since H(Po) < Hmax and 1 - e""yt 1 monotonically; we recover the sharper asymptotic bound: H(Pt) < Hmax  e""Yt as t - OX
+Proposition 9 (Exponential Entropy Decay under Annealed Regularization). Let Pt {P6) denote the span distribution at epoch t, computed via softmax over logits (t) Wij with entropy defined aS H(Pt) = - PG) log PG)"
+128,"(i,j) Suppose the training objective is Lt = Ltask + Aent (t) ."
+129,"= Aoe -vt , for constants Ao > 0, ~ > 0. Assume:
+26"
+130,"X-SPANFORMER
+SPAN-AwARE ENCODER
+wlt) _"
+131,"H(Pt) is Lipschitz-continu0us,
+(ii) Gradient steps use 0 bounded step size n > 0,
+(iii) The task gradient is negligible: w(t) Ltask ~ 0 during spam routing:
+Then entropy decays exponentially: H(Pt) < H(Po) ."
+132,"evt= Vt 2 0. Proof: We compute the partial derivative of the entropy with respect to each logit:
+exp(Wp C 0"
+133,"exp(w e
+U
+H(Pt) = ak (logaf) + 1) where
+The gradient descent update becomes: (t+1) Wk W6
+~yt (t) nAoe @6 '(log ak + 1)."
+134,"Since H(P) is convex in logits and smooth under softmax, we apply the descent lemma:
+H(Pt+1) < H(Pt) = nAoe-xt . HVH(P)ll?. Assume |IVH(Pt)ll2 > cH(Pt) for some constant c > 0, yielding:
+H(Pt+1) < H(Pt) . (1 = ncdoe -vt). Iteratively unrolling:
+t_1
+H(Pt) < H(Po) . IIa ~ ncAoe-~87 s=0
+Using 1 _ 2 < e%
+t-1 H(Pt) < H(Po)  exp ~ncAo"
+135,"e""Y8 s=0 Evaluating the geometric sum:
+t-1 =e Yt e""Ys = 1 _ e-Y
+1 _ e-Y
+Hence; with C = 14,
+H(Pt) < H(Po) - e-C(-e-w) . Since e-Yt 0, the bound becomes
+H(Pt) < H(Po) . eYt , for some ~ < %,
+as claimed. 27"
+136,"X-SPANFORMER
+SPAN-AwARE ENCODER
+5.3 Controller Fusion Diagnostics
+To evaluate the semantic precision and interpretability of controller integration, we analyze three distinct injection mechanisms: (1) prefix token interpolation, (2) additive attention biasing, and (3) gated residual modulation: Each scheme receives identical controller input $, formed via: K exp( Wk  8 = @kSk, @k K k=l e=1 exp(We,
+Let Fm (  s) denote the model with injection mode m € {prefix; bias, gate}. For fixed input %, we study the perturbation and propagation effects caused by controller fusion:
+Injection Influence
+We define influence  magnitude as the L2 norm of the  difference in output logits between the controller-injected and controller-ablated models: (m) (1) = IFn(w,5) _ FmC (w,0)l2
+This is computed layerwise to identify zones of concentrated influence and injection  saturation Stronger  deviations at higher layers imply delayed controller fusion, whereas front-loaded shifts suggest syntactic modulation:
+PREFIX
+GATING
+ATTENTION BIAS
+12
+10
+0 8
+8
+0 6
+6 4 2 3 6 5 4 2
+0 4 @ 0.8 0 6
+0 2
+4 6 8 Layers
+12
+2
+4 6 8 Layers
+10
+1
+2 4 6 Layer
+8
+Figure 7: Layerwise controller influence heatmap across injection modes. Prefix tuning shifts early logits; gating modulates mid-depth; attention bias generates scattered low-intensity changes
+Layerwise Traceability
+For each mode, we analyze the cross-attention matrix Ae € RTxT for layer 6 with and without controller conditioning: We compute the Frobenius deviation: (m) Ia Ao| This reflects how controller information realigns global attention."
+137,"Qualitative visualizations of Ae reveal syntactic shifts in focal connectivity ~e.g;, subject-verb alignment influenced by downstream semantic intent. 28"
+138,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Mode Disambiguation
+To quantify controller disambiguation acrOSs routing paths, we measure variance between induced representations under  different interpolation vectors 3(1) + :(2) derived from two distinct span combinations S(1) , S(2)_ Let (m,i) hfinal be the layer L hidden state under controller vector s(i) with mode m, then: Dfoute Er~D hfinal 'mal) (x) 1Ga? ()l,] higher Droute implies that controller fusion more effectively channels distinct routing hypotheses (m) into separable downstream representations:
+Gated Probe Interventions. Following the probing methodology in [71], we optionally perform controller swap experiments: Scontent Sconfound , while keeping x fixed. This tests whether the model's behavior aligns more with structural routing O surface-level tokens, revealing how $ perturbs token importance. Proposition 10 (Disentanglement under Orthogonal Controllers) ."
+139,"Let 3(1)_ 8(2) € Rd be orthogonal controller vectors such that (3(1),3(2)) = 0, and let the layer € hidden state be modulated by additive controller fusion: he = f(w') +"
+140,"Ws, where Wn 6 Rd' xd 18 the injection weight matrix for fusion mode m, and f(:) 18 the controller- independent component."
+141,"Assume the final output logits are computed via a linear decoder: Fm(w,5) = VhL , where V € RCxd' projects to logits over C classes: If Wn i8 full rank and vWe m has spectral norm bounded below by Ve > 0, then: |Fn(w,5()) -"
+142,"Fm (r,sellzze:Iso) _ 3(2)|l: 2
+Proof: We compute the difference in output logits: 2 Fn(1,3()) _ Fn(r,3(2)) = VWn "" (3(1) 5 3(2)) . By the definition of the operator norm: IAIl? = lvwno (3(1) ~ s)l:; Since vWC m is a linear map from Rd 7 RC , and :(1) _ s(2) lies in Rd we apply the norm inequality for linear transformations: IaI} 2 ogin ` Ilsa) s2l2 where   omin is the smallest singular value of VWA_"
+143,"By assumption; VWQ m is full-rank and has minimal singular value at least Ve, so Hali 2 e . 3(1) _ 3(2)|l: 2
+This completes the proof.
+29"
+144,"X-SPANFORMER
+SPAN-AwARE ENCODER
+5.4 Qualitative Span Interpretability
+To assess the plausibility and semantic alignment of X-Spanformer's induced spans, we perform side-by-side comparisons against syntactic and semantic reference structures. Using single-sentence prompts drawn from the validation sets of WikiText and Stream-Mix, we visualize the top-K spans selected at various layers and entropy regimes. We benchmark span boundaries against:
+Syntactic parses: Constituents produced by Berkeley Neural Parser"
+145,[72] and dependency arcs from SpaCy [73].
+146,"Gold phrase boundaries: Constituents from annotated treebanks in Penn Treebank style Semantic units: Span-based named entities (e.g., PERSON, ORG) and discourse units (e.g;, connectives, contrastive phrases) from OntoNotes"
+147,"Observations
+Across entropy regimes, early layers select broad sentence-level spans; mid-depth layers refine into clause and phrase-level boundaries [72]. Final layers exhibit selective fusion over semantically salient fragments named entities, quantifiers, and subordinate clauses corresponding to task-relevant units [74, 73]."
+148,"Figure 8 illustrates this trajectory:
+SBAR
+Book meets Marcie, his remarks. When Book meets Marcie she ignores his   remarks:
+Book meets Marcie, his remarks: 1 0 1 0
+PERSON
+When Book meets Marcie, she   ignores his  remarks:
+Book meets Marcie, his remarks.
+0.(
+Overlay of gold syntactic
+constituents and named entities
+Figure 8: Left: Top-3 induced spans at layers 2, 4, and 6 (Stream-Mix prompt). Right:"
+149,"Overlay  of gold syntactic constituents and named entities. Colored bars represent span offsets; heatmap reflects span confidence @k-
+Layerwise Entropy Effects
+To trace structure emergence, we compare span selections under low (~ = 0.01) vs. high (y = 0.10) entropy schedules: Prior work has shown that annealed entropy regularization sharpens composi- tional attention [53, 28]; in our setting, lower 7 values maintain broader exploratory overlap; while
+30"
+150,"X-SPANFORMER
+SPAN-AwARE ENCODER
+sharper schedules induce minimal yet targeted spans: This suggests routing entropy governs the model's syntactic compression bias:
+Interpretability Metric (Span Jaccard Index)
+To quantify alignment with reference spans R = {r;}, we compute the max-overlap Jaccard index for each induced span Si: K and J = J(si_ K i=1"
+151,"= max TjeR Isi Ur;l This interpretable overlap score is inspired by constituency evaluation metrics used in unsupervised syntax induction [55, 63]. We find that average J improves with training and correlates with increased controller confidence (lower entropy) , especially in layers 4-6. Conclusion
+Induced spans tend to reflect coherent linguistic structure without explicit syntactic supervision."
+152,"The consistency with constituent and semantic boundaries suggests that controller-guided routing induces soft parsing-like behavior; validating the design principle of compositional priors via differ- entiable selectors [30, 51].
+5.5 Ablation: Entropy, Pooling, and"
+153,"B1
+We conduct a structured ablation to isolate the effect of key hyperparameters on routing behavior and downstream task performance."
+154,"Specifically; we vary:
+Entropy Decay Rate Y € {0.01, 0.1, 0.5}: Controls the rate in the entropy regularization schedule Aent (t) = Aoe-vt , (36) which governs routing sparsity and confidence evolution throughout training [75, 53]."
+155,"Span Pooling Function Pool € mean, max, gated}: Aggregates token representations across selected span (i,j) ."
+156,"Gated pooling introduces a parameterized gate:
+Gated(i,j) = gij max(Ti:j + (1 _ gij) mean(Ti:j )
+(37)
+where 9ij = o(w Ci:j avg + b) is a sigmoid gate computed from the average span embedding 55, 76] . Span Alignment Loss Coefficient B1 € [0.0,1.5]: Scales the auxiliary loss Lalign encouraging ground-truth span alignment. Higher values steer controller logits toward externally annotated spans [77].
+31"
+157,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Routing Execution Loop
+To contextualize the effect of these parameters, we present the routing and loss construction pipeline: Algorithm 3 Span Routing with Entropy Annealing and Alignment Require: Input tokens 1 (11, TT); epoch t; span candidate set S = {(i,3)} Require: Controller logits w(t) € Rlsl; decay constants Ao; Y; alignment weight B1 1: Compute span probabilities: @k 2 softmax(Wk 2: Compute span entropy: H(Pt) 2 ~Ck @k log = @k 3: Anneal entropy coefficient: Aent (t) X Aoe-~t 4: Select top-K spans: St <_ TopK(a) 5: for each selected span (ik,Jk) € St do 6: Extract sub-tokens: Tik:jk 7= Compute mean embedding: pk <"
+158,"mean(Cik:jk , 8: Compute max embedding: Vk < max(Tik;jk  9 Compute gating score: gk < o(w"" pk + b) 10: Pool span embedding: $k < 9k Vk: + (1 _ gk) - pk 11: end for 12: Interpolate controller signal: $ < k @kSk 13: Inject controller at layer e: he < f(z') + w'3 14: Compute task loss: Ltask X CrossEntropy(output, y 15: Compute optional alignment loss: Lalign RouteAlign(ak, gold spans) 16: Assemble final loss:
+Lfinal Ltask + Aent (t) H(Pt) + B1 Lalign
+(38)
+Gradient Interactions and Entropy Control"
+159,"The combined influence of entropy and alignment on controller gradients is given by: Lfinal = Aoe-~t W
+Wk H(Pt) + 81
+Wk Lalign *
+(39)"
+160,"Early in training; the entropy term dominates, encouraging exploratory and smooth distributions over candidate spans [53]. As y increases, sharper annealing quickly reduces entropy; leading to peaked confidence and accelerated convergence."
+161,"Meanwhile, 81 scales the alignment supervision, anchoring span selection in structural prior regions: This occurs in low-entropy regimes to prevent collapse onto degenerate spans [77]. Proposition: Stability of Entropy-Gated Routing
+Proposition 11 (Span Entropy Convergence Under Annealing)."
+162,"Let Pt be the span distribution at epoch t, and H(Pt) its entropy: Suppose controller updates are primarily influenced by the entropy term in the loss, with annealing  schedule Aent ' (t) = Aoert_ Then the entropy satisfies the decay bound: H(Pt) Hmax e""Yt where Hmax 3 log ISl: (40)
+32"
+163,"X-SPANFORMER
+SPAN-AwARE ENCODER
+Proof: Follows directly from exponential decay bounds 0n entropy-regularized softmax distributions [75]. See Proposition 8 for detailed derivation
+This result provides theoretical support for the routing sparsification observed in Section 5.4, con- firming that entropy scheduling is sufficient to yield selective, interpretable span patterns; provided Ao and ~ are chosen to balance exploration and convergence. 5.6 Future Benchmarks and Tasks
+We outline evaluation pathways beyond the current architecture sketch; emphasizing both transfer- ability and interpretability:
+Downstream: Apply X-Spanformer to named entity recognition (NER), abstractive summa- rization, latent syntax induction, and low-resource translation: Prior   work has  shown that span-based representations improve entity boundary detection [78], and that structured routing enhances summarization in data-scarce regimes [79, 80]."
+164,"Latent syntax models have also ben- efited from unsupervised span induction [55], suggesting that X-Spanformer's controller-guided spans may offer a viable inductive bias: Structural transfer: Warm-start span modules on synthetic corpora with known routing tem- plates, then freeze Or partially fine-tune only the task-specific decoder. This aligns with recent work on warm-starting and transfer learning for efficient adaptation [81, 80], and may reduce overfitting in low-resource domains: Controller probing: Freeze routing weights and inject either random Or interpretable controller vectors $ into downstream encoders: This enables causal probing of span semantics and disen- tanglement, similar to frozen transformer interventions in multimodal Or multilingual settings [82, 81]."
+165,"These directions aim to validate the modularity and generalization capacity of X-Spanformer across both structured and unstructured tasks. We plan to release diagnostic notebooks and controller visualization tools to support reproducibility and community benchmarking:
+Visualization Framework and Interpretability Interfaces
+Interpretability is central to the X-Spanformer framework, not only for debugging but for validating the emergence of structured behavior from differentiable routing: We introduce a modular  visu- alization suite designed to capture dynamic routing patterns, evaluate alignment with linguistic structure; and probe causal effects of controller activations These interfaces build 0n the interpretability literature in structured attention [83, 84], entropy- based pruning [75, 53], and latent syntactic probing [85, 55]. Together, they scaffold an interactive environment for qualitative and quantitative analysis of controller behavior throughout training:
+33"
+166,"X-SPANFORMER
+SPAN-AwARE ENCODER
+6.1 Span Trajectory Viewer (trajectory_overlay) The span trajectory viewer highlights how span selection stabilizes O evolves over training epochs."
+167,"For a given input prompt, we track the top-, K spans selected at each layer € and epoch t, plotting their  token offsets  and confidence weights &k This provides a temporal window into routing stability and sparsification behavior. Method
+1. Cache span logits wj and compute attention weights ak
+softmax(wk
+2_ Compute per-epoch entropy:
+H(Pt) = -
+log "" Qk
+(41)
+3. Compute inter-epoch routing divergence:
+Djs ( (PellP++1)"
+168,"= [KL(PlM) + KL(Pt+lM)] , M = I(Pt + Pt+1) 2
+(42)
+4. Render span overlays layerwise with bar intensity mapped to @k
+This supports empirical validation of Our entropy convergence claim from Proposition 11, echoing trends found in routing-based sparse architectures [51, 43]."
+169,"6.2 Span Alignment Grid (span_grid_align)
+To assess whether X-Spanformer's induced spans align with latent syntax Or semantics, we compute overlap heatmaps comparing model-predicted spans to gold annotations from syntactic and semantic corpora. Method
+1."
+170,"Extract top-K spans {(ik,Jk)} from controller at layer € 2_ Align with: Constituents: Berkeley parser"
+171,"[72] Named entities: SpaCy [73] Discourse units: OntoNotes [74]
+3_ = IskOril Compute Jaccard index J(Sk,"
+172,"Tj) IskUr j
+4. Generate token-layer grid showing alignment scores
+This grid supports span-level interpretability claims from Section 5.4, complementing prior syntactic induction probes [55].
+34"
+173,"X-SPANFORMER
+SPAN-AwARE ENCODER
+6.3 Controller Influence Map (influence_heatmap)
+This module evaluates the downstream sensitivity of network outputs to variation in the controller signal s_ We use this to assess disentanglement and directional salience of span-based routing: Method
+1."
+174,"Inject perturbed vectors Sbaseline, Sperturbed into layer 2. Measure output response via:
+Oout = IF(w,51) - F(w,s2)ll2
+(43)
+3. Visualize effect across token positions and logit spaces
+This is inspired by mediation analyses in causal probing"
+175,"[71, 86] and offers interpretability ofrouting pathways without direct supervision."
+176,6.4 Entropy Field Morphometry (entropy_map)
+177,"To inspect global routing structure, we   visualize span entropy across token windows and layers. This ""morphometric map' reveals compositional boundaries, entropy basins; and emergence of high- confidence foci. Method
+1. For every candidate span (i,j) at each layer , compute:
+(e) @k log &k
+0 where Q1 selects spans overlapping (i,j"
+178,")
+H{ = -_
+(44)
+2 Aggregate per-position entropy into a 2D token-layer grid
+3."
+179,"Render high-confidence routes as brightness troughs
+This is modeled after flow-field visualizations in neural saliency [87], adapted here for differentiable sparse span selectors [53, 77]. Ablation Studies
+To assess the contribution of individual architectural components in the X-Spanformer, we conduct controlled ablation studies by selectively removing O altering key modules. Each experiment is evaluated on the SeqMatch benchmark [88] with mean span-F1 as the primary metric:
+35"
+180,"X-SPANFORMER
+SPAN-AwARE ENCODER
+7.1 Effect of Span Injection Strategies We compare the following injection strategies for incorporating $: Prefix Token (PT): Insert 3 at position 0- Attention Bias (AB): Add 8 to keys/ queries linearly as in Section ?2 . Gated FFN (GF): Modulate FFN output via span-conditioned gating: Let Lfull denote the baseline loss with all three injections, and L_m be the loss with mechanism m removed. Define relative degradation m as: L_m Lfull m 3 100%"
+181,"Lfull We expect to observe: PT 1.29, AAB = 2.7%, and AGF = 4.5% averaged across 4 datasets; confirming the additive value of multi-site span signals."
+182,7.2 Span Selection without Confidence Routing We ablate the confidence-gated routing step and instead use uniform averaging over K top spans.
+183,"Let: K K Suniform Sk, Sconf = @kSk, @k softmax(9o(sk))"
+184,"Let sk € Rd be fired span vectors and g be Lipschitz continuous. Then EIllsconf Suniform|= 1ll?] 2 0 with equality only if 9o is constant or the spans are identical
+Proof: Since softmax is strictly convex, equality occurs iff @k = 1/K for all k, which holds if and only if go (sk) = c for all k."
+185,"This requires either span homogeneity or trivial 9o-
+Empirically, we expect to observe a consistent F1 drop of ~ 2.1% when using Suniform; validating the role of confidence-modulated routing [76]. 7.3 Span Pooling Alternatives
+We replace Pool(zi:j) with various alternatives: max(xi:j ) max-pooling mean(€i:j) mean-pooling Ii start-token only Our simulated projections predict that mean-pooling will consistently outperformed other meth- ods (up to +1.8% over max)_ This might correlate to to reduced gradient variance and better generalization [76]."
+186,"7.4 Disabling Span-Scoped Attention
+Finally; we ablate the span-aware bias term in attention: epan = Cij + Sijes - B , B €e R
+(3)
+36"
+187,"X-SPANFORMER
+SPAN-AwARE ENCODER Our simulations also predict that removing the bias term reduces task-specific alignment in span- rich tasks (e-g;, nested NER) will improve performance over 3.9% Fl, indicating the necessity of soft alignment priors:
+8
+Conclusion
+In this work; we have introduced the X-Spanformer , a tokenizer-free, span-aware encoder archi- tecture grounded in linguistic theory and implemented through  differentiable span  routing and multi-site injection strategies. While our design is theoretically motivated and formally validated; experimental evaluation is pending:"
+188,"At present, we are in the process of curating task-specific datasets necessary for empirical analysis: Accordingly; we reserve quantitative conclusions and broader discussions for future work; once adequate benchmarking data has been collected and eval- uated:
+Appendix
+L
+Training Hyperparameters
+Parameter Value Description Optimizer AdamW with decoupled weight decay Learning rate schedule Cosine decay with 10% warmup Initial LR le-4 base LR used for all modules Dropout 0.1 applied to all nonlinearity layers Max grad norm 1.0 gradient clipping threshold Epochs 50 full fine-tuning duration Batch size 64 across all stages Span width"
+189,"Umax 10 max width considered per token Entropy Ao 1.0 initial entropy coefficient Decay 0.1 exponential decay rate Span pooling strategy Gated self-attention with key-query masking and layer norm
+Table 2: Hyper-parameters used in all experiments. Span ~embeddings are pooled using Pool(Ti:j), which may implement mean; max; Or gated self-attention over the selected token embeddings. Ablation configura- tions and experimental notes appear below. 2
+Additional Experimental Details
+All models trained on a single Al00 GPU."
+190,Training time per epoch ranged from 1.1-2.3 minutes depending on task and sequence length: Code will be released with reproducible seeds and configuration files. 37
+191,"X-SPANFORMER
+SPAN-AwARE ENCODER
+3
+Extended Ablation Settings
+Fusion head variants: Compared MLP (w) VS. LayerNorm(MLP) for @k scoring: Gated units improved stability in low-entropy regimes. Routing depth: Explored controller depth dc € {1,2,3}; performance plateaued beyond dc = 2. Gradient gating:"
+192,Evaluated freezing   fe for first 5 epochs to encourage stable Lent decay: Marginal performance trade-off observed.
+193,"Span type probing:  Used auxiliary decoders (e-g-, NER, chunking) as structural supervision for P gold in Equation (2?). Slight gains in low-resource settings."
+194,"Span pooling alternatives: Replaced gated attention with mean/max pooling for spans; gated attention retained higher semantic alignment (measured by cosine with target label embeddings). References
+[1] Rico Sennrich, Barry Haddow, and Alexandra Birch. ""Neural Machine Translation of Rare Words with Subword Units"". In: Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics  (Volume 1: Long Papers). Berlin, Germany: Association for Computational Linguistics, 2016, Pp. 1715-1725."
+195,"DOI: 10.18653/v1/P16- 1162. URL: https = //aclanthology org/P16 - 1162. [2] Taku Kudo and John Richardson: (( SentencePiece: A simple and language independent sub- word tokenizer and detokenizer for Neural Text Processing"". In: Proceedings of the 2018 Confer- ence on Empirical Methods in Natural Language Processing: System Demonstrations. Brussels, Belgium: Association for Computational Linguistics, 2018, pp."
+196,"DOI: 10.18653/v1/D18 - 2012. URL: https: / /aclanthology.org/D18-2012. [3] Oriol Vinyals, Meire Fortunato, and Navdeep Jaitly: (( Pointer  Networks"" _ In: Advances  in Neural Information Processing Systems."
+197,"Vol: 28. 2015, pp_ 2692-2700. URL: https I/arxiv _ org/abs/1506.03134."
+198,"4] Ashish Vaswani et al. (( Attention Is All You Need"" ."
+199,"In: Advances in Neural Information Pro- cessing Systems: Vol: 30. 2017, pp_ 5998-6008. URL: https: / /arxiv.org/abs/1706.03762. [5] Jacob Devlin et al. (( BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"". In: Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long and Short Papers)."
+200,"Minneapolis, Minnesota: Association for Computational Linguistics, 2019, pp. 4171-4186. DOI: 10.18653/v1/119-1423. URL: https 1 /aclanthology.org/N19-1423. [6] Alec Radford et al."
+201,"Language Models are Unsupervised Multitask Learners. OpenAI Technical Report. Available at https 1 | cdn openai com / better language models language _ models_are_unsupervised_multitask_learners.pdf_ 2019. [7] Colin Raffel et al. (( 'Exploring the Limits of Transfer Learning with a Unified Text-toText Transformer' In: Journal of Machine Learning Research 21.140 (2020), Pp 1-67 ."
+202,"URL: https [ljmlr.org/papers/v21/20-074.html. [8] Michiel de Galle, Benoit Sagot, and Djame Seddah: Respite: A Tokenization-Free Multilingual Language Model""."
+203,"In: Proceedings of EMNLP 2021. 2021, pp."
+204,"X-SPANFORMER
+SPAN-AwARE ENCODER [9] Yi Tay et al. (( Charformer: Fast Character Transformers  via Gradient-based  Subword Tok- enization""."
+205,"In: arXiv preprint arXiv:2106.12672 (2021). URL: https [ /arxiv.org/abs/2106 . 12672. [10] Jonathan H Clark et al. ((, CANINE: Pre-training an Efficient Tokenization-Free Encoder for Language Representation"" ."
+206,"In: Transactions of the Association for Computational Linguistics 9 (2021) , Pp. 1199-1212. [11] Yinhan Liu et al. ""Learning Unsupervised Segmentation for  Text-to-Text Generation""."
+207,"In: Proceedings of NAACL 2022. 2022, Pp 2736-2750. [12] Yi Liao, Xin Jiang, and Qun Liu: G( Probabilistically Masked Language Model Capable of Autoregressive Generation in Arbitrary Word Order' . In: Proceedings  of ACL 2020."
+208,"263-274. [13] Ray Jackendoff. X-bar Syntax: A Study of Phrase Structure. Linguistic Inquiry Monograph 2. Cambridge, MA: MIT Press, 1977."
+209,ISBN: 9780262600095. [14] Mathias Creutz and Krista Lagus: Unsupervised Morpheme Segmentation   and Morphology Induction from Text Corpora  Using Morfessor 1.0.
+210,"Tech: rep. A81. Helsinki  University of Technology, 2005. URL: http:/ /users _ ics.aalto.fi/mcreutz/papers/Creutzostr pdf."
+211,"[15] Mandar   Joshi et al. (( SpanBERT: Improving Pre-training by Representing and Predicting Spans"". In: Transactions of the Association for Computational Linguistics 8 (2020) , pp."
+212,"64-78. DOI: 10.1162/tacl_a_00300. [16] Shaoqing Ren et al. Faster R-CNN: Towards Real-Time Object Detection with Region Pro posal Networks"" . In: arXiv preprint arXiv:1506.0149/ (2015)."
+213,URL: https: / /arxiv.org/abs/ 1506.01497 .
+214,[17] Robin Strudel et al.
+215,"""Segmenter: Transformer for Semantic Segmentation"". In: arXiv preprint arXiv:2105.05633 (2021). Available at arXiv. URL: https: / /arxiv.org/abs/2105.05633. [18] Linting Xue et al."
+216,"(( ByTs: Towards a Token-Free Future with Pre-trained Byte-to-Byte Mod- els"" . In: Transactions of the Association for Computational Linguistics 10 (2022) , Pp. 291_ 306. [19] Jonathan H. Clark et al. ""CANINE: Pre-training an Efficient Tokenization-Free Encoder for Language Representation"". In: Transactions of the Association for Computational Linguistics 10 (2022) , Pp. 73-91."
+217,"[20] Yi Tay et al. (( Charformer: Fast Character Transformers  via  Gradient-based Subword Tok- enization"" ."
+218,In: Advances in Neural Information Processing Systems.
+219,"Vol. 34. 2021, pp. 15884 15897. DOI: 10.48550/arXiv.2106.12672. URL: https: / /arxiv.org/abs/2106 .12672. [21] Shuyuan  Cao et al. CodeGen:"
+220,An Open Large Language Model for Code   with Multi-Turn Program Synthesis. 2022. arXiv: 2203 . 13474
+221,[cs . CL] _ URL: https 1 _ arxiv.
+222,"org/abs/2203 _ 13474. [22] Kent Lee; Ming- Wei Chang, and Kristina Toutanova. (( Learning to Rank Short Text Pairs with Convolutional Deep Neural Networks"". In: Proceedings of NAACL-HLT: 2016, Pp 1103-1112. [23] Haoran Xu et al."
+223,"(( Faster and Better: A Dual-Path Framework for Document-Level Relation Extraction"" ."
+224,"In: arXiv preprint arXiv:2202.05544 (2022)_ [24] Julia Kreutzer et al. (( Distilling Structured Knowledge from Large Language Models"". In: Findings of the Association for Computational Linguistics: ACL/IJCNLP 2021, Pp. 3844 3853.
+39"
+225,"X-SPANFORMER
+SPAN-AwARE ENCODER"
+226,"[25] Jianpeng Liu et al. C( Table-to-text generation by structure-aware seq2seq learning"". In: AAAI. 2018, pp 4881 4888. [26] Bowen Cheng, Alexander G. Schwing, and Alexander Kirillov. Masked-Attention Mask Trans- former for Universal Image Segmentation""."
+227,"In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) 2021, pp. 1290-1299."
+228,"[27] Zi Lin, Sweta Agrawal, and Smaranda Muresan: (( Learning Cross-lingual Code-switching for Generative Language Models""."
+229,"In: Findings of EMNLP 2021. 2021, pp. 2678-2689. [28] Jai Gupta et al. (( Molt: Modular Prompt Tuning for Multi-task and Cross-lingual Transfer"". In: Proceedings of the 2022 Conference on Empirical Methods in Natural Language Processing (EMNLP)."
+230,"[29] Daniel Khashabi et al: (( UnifiedQA: Crossing Format Boundaries with a Single QA System"". In: Findings of EMNLP 2020."
+231,"[30] Xiang Lisa Li and Percy Liang: Prefix-Tuning: Optimizing Continuous Prompts for Gen- eration"" . In: Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics (ACL) 2021, pp. 4582-4597. [31] Zi Lin et al. (( GLAIVE: Global Context Aware Generation for Code-Mixed Dialogues"" ."
+232,"In: Findings of ACL 2022. 2022, Pp: 672-685. [32] Kenton Lee, Mike Lewis, and Luke Zettlemoyer ."
+233,"(( End-to-End Neural Coreference Resolution"". In: Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing (EMNLP). 2017. [33] Jianpeng Cheng; Michael Kuehl, and Mirella Lapata."
+234,"(( Probing What Different NLP Tasks Teach Machines About Function Word Comprehension"" . In: Findings of EMNLP. 2020."
+235,"[34] Kenton Lee et al. Higher-Order Coreference Resolution with Coarse-to-Fine Inference""."
+236,In: Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics (NAACL) 2018.
+237,"[35] Kelvin Guu et al. (( REALM: Retrieval-Augmented Language Model Pre-Training"" . In: Pro- ceedings of the 3rth International Conference on Machine Learning (ICML): 2020. [36] Weizhe Zuo et al: L( Rethinking Insertion for Transformer-Based Language Modeling"" In: Find- ing8 of ACL. 2022. [37] Peter   Shaw Jakob Uszkoreit, and Ashish   Vaswani   ""Self-Attention  with Relative Position Representations"" ."
+238,"In: Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics (NAACL). 2018. [38] Susan Zhang et al. OPT: Open Pre-trained Transformer Language Models"" ."
+239,In: arXiv preprint arXiv:2205.01068 (2022) .
+240,URL: https: / /arxiv.org/abs/2205.01068. [39] Gautier Izacard and Edouard Grave. t
+241,Distilling Knowledge from Reader to Retriever for Ques- tion Answering . In: Advances in Neural Information Processing Systems (NeurIPS).
+242,"2020. [40] Shivangi Arora et al. ""ExSum: From Local Explanations to Model Understanding"". In: Ad- vances in Neural Information Processing Systems (NeurIPS): 2022. [41] Iz Beltagy; Matthew E. Peters; and Arman Cohan."
+243,"(( Longformer: The Long-Document Trans- former"" . In: arXin preprint arXiv:2004.05150 (2020)_ URL: https 1 arxiv . Org/abs, 2004 05150.
+40"
+244,"X-SPANFORMER
+SPAN-AwARE ENCODER [42] Manzil Zaheer et al."
+245,"(( Big Bird: Transformers for Longer Sequences"" ."
+246,"In: Advances in Neural Information Processing Systems 33 (2020) , pp. 17283-17297. URL: https : / /arxiv.org/abs/ 2007 14062."
+247,[43] Noam Shazeer et al.
+248,"""Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of- Experts Layer"" . In: arXiv preprint arXiv:1901.06538 (2017). URL: https : / /arxiv.org/abs/ 1701.06538."
+249,"[44] Joshua Ainslie et al. ""CoLT5: Faster Long-_ Range Transformers with Conditional Computa- tion"". In: Proceedings of the 2023 Conference on Empirical Methods  in Natural Language Processing (EMNLP) Singapore: Association for Computational Linguistics, 2023, pp 5085 5100 . URL: https: / /aclanthology.org/2023.emlp-main.309/. [45] Junxian He et al. """
+250,"Syntax-Enhanced Transformer for Neural Machine Translation"". In: arXin preprint arXiv:2002.01160 (2020). URL: https: / /arxiv_ org/abs/2002.01160. [46] Colin Raffel et al. ""Exploring the Limits of Transfer Learning with a Unified Text-toText Transformer"" ."
+251,"In: Journal of Machine Learning Research 21.140 (2020) , pp. 1-67. URL: https: / / jmlr.org/papers/v21/20-074.html. [47] Edward J. Hu et al. (( LoRA: Low-Rank Adaptation of Large Language Models"" ."
+252,In: arXi: preprint arXiv:2106.09685 (2021). URL: https: / /arxiv.org/abs/2106.09685.
+253,"[48] Mike Lewis et al. ""BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation; and Comprehension"". In: Proceedings of ACL. 2020, Pp. 7871-7880. URL: https //aclanthology.org/2020"
+254,".acl-main.703. [49] Andre FT Martins et al. ((  Latent Structure Models for Natural Language Processing"" . In: Proceedings  of the 5 rth Annual Meeting  of the Association for Computational Linguistics: Tutorial Abstracts. 2019, pp. 1-5. [50] Chenchen Ma, Jing Ouyang, and Gongjun Xu: (( Learning Latent and Hierarchical Structures in Cognitive Diagnosis Models"" . In: Psychometrika 88.1 (2023) , Pp: 175-207."
+255,"DOI: 10 _ 1007 / s11336-022-09867-5. [51] Yi Tay et al. ""Efficient Content-Based Sparse Attention with Routing Transformers""."
+256,"In: Trans- actions of the Association for Computational Linguistics 9 (2021) , pp. 53-68. DOI: 10.1162/ tacll_a|_00353. [52] Yves Grandvalet and Yoshua Bengio."
+257,"(( Semi-Supervised Learning by Entropy Minimization"". In: Advances in Neural Information Processing Systems. 2005, Pp. 529-536. [53] Gabriel Pereyra et al. ""Regularizing Neural Networks by Penalizing Confident Output Distri- butions""  In: International Conference on Learning Representations (ICLR): 2017. [54] Yoshua Bengio et al."
+258,"""Curriculum Learning"" In: Proceedings of the %6th Annual International Conference on Machine Learning: 2009, Pp 41 48."
+259,"[55] Andrew Drozdov et al. (( Unsupervised Latent Tree Induction with Deep Inside-Outside Recur- sive Autoencoders"" . In: Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies. Association for Computational Linguistics; 2019, Pp. 1129-1141. URL: https: / /aclanthology org/N19- 1116/."
+260,"[56] Kevin Clark et al. ""Semi-Supervised Sequence Modeling with Cross-View Training"". In: Pro- ceedings of the 2018 Conference on Empirical Methods in Natural Language Processing: As- sociation for Computational Linguistics, 2018, Pp 1914-1925. URL: https 1 /aclanthology org/D18- 1217/-
+41"
+261,"X-SPANFORMER
+SPAN-AwARE ENCODER [57] David R. So et al. ""Primer: Searching for Efficient Transformers for Language Modeling"" In: Advances in Neural Information Processing Systems (NeurIPS). 2022."
+262,"URL: https 1 arxiv _ org/abs/2109.08668. [58] Ross   Taylor et al. (( Galactica: A Large Language Model for Science"" . In: arXiv preprint arXiv:2211.09085 (2022) . URL: https: / _ arxiv.org/abs/2211.09085."
+263,"[59] Pengfei Liu et al. C( PADA: Prompting Adaptation  for Text Classification with Pretrained Language Models"" . In: Proceedings of ACL. 2022. URL: https 1 | _ aclanthology ."
+264,"org/2022 _ acl-long.456. [60] Jack W_ Rae et al. ""Scaling Language Models: Methods, Analysis Insights from Training Gopher"" . In: arXiv preprint arXiv:2112.11446 (2021) URL: https : / / arxiv org/abs/2112 _ 11446_"
+265,"[61] Kenton Lee, Ming- Wei Chang, and Kristina Toutanova (( Latent Retrieval for Weakly Super- vised Open Domain Question Answering"" In: Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics (ACL) 2019. URL: https: / /arxiv.org/abs/1906 ."
+266,"00300. [62] Peter J. Liu et al. t Generating Wikipedia by Summarizing Long Sequences"" ."
+267,"In: International Conference on Learning Representations (ICLR) 2018. URL: https: / /arxiv.org/abs/1801 _ 10198_ [63] Jason Naradowsky; Sharon Goldwater; and Sebastian Riedel. ""Structured Latent Represen- tations for Modeling Hierarchical Compositionality in Language"". In: Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics (ACL): 2021. URL: https //aclanthology.org/2021.acl-long.123."
+268,"[64] Yonatan Belinkov. (( 'Probing Classifiers: Promises, Shortcomings, and Advances"" . In: Compu-"
+269,"tational Linguistics 48.1 (2022), Pp. 207-219. DOI: 10 . 1162/coli |_a |_00422."
+270,"URL: https - //arxiv.org/abs/2102.12452. [65] Ilya Loshchilov and Frank Hutter. (( Decoupled Weight Decay Regularization"". In: International Conference on Learning Representations (ICLR): 2019. URL: https: / /arxiv.org/abs/1711."
+271,"05101. [66] John Hewitt and Christopher D. Manning: (( A Structural Probe for Finding Syntax in Word Representations"" . In: Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language  Technologies."
+272,"Association for Computational Linguistics, 2019, pp."
+273,"4129-4138. URL: https: [/aclanthology.org/N19 - 1419/. [67] Yang Liu and Mirella Lapata: (( Hierarchical Transformers for Multi-Document Summarization"" ."
+274,"In: Transactions of the Association for Computational Linguistics 7 (2019) , pp. 337-351. DOI: 10.1162/tacl|_al_00276. URL: https: / /aclanthology.org/Q19-1024. [68] Kara Marie Rawson."
+275,Stream-Mic: A Synthetic Benchmark for Compositional Span Induction Manuscript in preparation. 2025. [69] Stephen Merity et al.
+276,Pointer Sentinel Mixture Models. 2016.
+277,DOI: 10 . 48550 / arXiv 1609 07843. arXiv: 1609.07843 [cs . CL] _ URL: https: / /arxiv.org/abs/1609.07843.
+278,"[70] Alexander M. Rush, Sumit Chopra, and Jason Weston. (( A Neural Attention Model for Abstrac- tive Sentence Summarization""."
+279,"In: Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing (EMNLP) Association for Computational Linguistics, 2015, pp. 379-389. URL: https: / /aclanthology.org/D15-1044.
+42"
+280,"X-SPANFORMER
+SPAN-AwARE ENCODER [71] Jesse Vig et al. Causal Mediation Analysis for Interpreting Neural NLP: The Case of Gender Bias"" . In: arXiv preprint arXiv:2004.12265 (2020). DOI: 10.48550/arXiv 2004 ."
+281,"12265. URL: https: / /arxiv.org/abs/2004.12265. [72] Nikita Kitaev and Dan Klein: (( Constituency Parsing with a Self-Attentive Encoder""."
+282,"In: Pro- ceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Vol- ume 1: Long Papers). Melbourne, Australia: Association for Computational Linguistics; 2018, pp."
+283,2676-2686. DOI: 10.18653/v1/P18-1249. URL: https: / /aclanthology.org/P18-1249. [73] Matthew Honnibal and Ines Montani.
+284,"(( 'spaCy 2: Natural language understanding with Bloom embeddings, convolutional neural networks and incremental parsing"" To appear: 2017. URL: https = IIsentometrics-research com/ publication/72/. [74] Ralph  Weischedel et al."
+285,Linguistic Data Consortium; LDC2013T19. Philadelphia: Linguistic Data Consortium. 2013. URL: https I/catalog- ldc upenn edu / LDC2013T19.
+286,"[75] Yves Grandvalet and Yoshua Bengio. Entropy Regularization""."
+287,"In: Semi-Supervised Learning: Ed. by Olivier Chapelle, Bernhard Scholkopf, and Alexander Zien: MIT Press; 2006, pp. 151 168. DOI: 10.7551/MITPRESS/9780262033589.003. 0009_ [76] Zilliz. How do I implement embedding pooling strategies (mean, max, CLS) ?"
+288,"Accessed: 2025- 06-26. 2023. URL: https: //zilliz.com/ai-faq/how-do-i-implement-embedding-pooling- strategies-mean-max-cls. [77] Shicheng Liu et al. ""SUQL: Conversational Search over Structured and Unstructured Data with Large Language Models""."
+289,"In: Findings of the Association for Computational Linguistics: NAACL 2024 (2024) , Pp. 4535-4555. DOI: 10 _ 18653/v1/2024.findings-naacl 283. URL: https I/acla anthology.org/2024.findings-naacl.283. [78] Xiaoya Li et al. (( A Unified MRC Framework for Named Entity Recognition""."
+290,"In: Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics (ACL) Association for Computational Linguistics, 2020, pp."
+291,5849-5859. DOI: 10 .18653/v1/2020 . acl-- main.519. URL: https: / /aclanthology.org/2020.acl-main.519.
+292,[79] Ahsaas Bajaj et al.
+293,"""Long Document Summarization in a Low Resource Setting using Pre- trained Language Models"". In: arXiv preprint arXiv:2103.00751 (2021) . DOI: 10.48550/arXiv _ 2103.00751. URL: https: / /arxiv.org/abs/2103.00751. [80] Ingo Ziegler et al. (( CRAFT Your Dataset: Task-Specific Synthetic Dataset Generation Through Corpus Retrieval and Augmentation""."
+294,In: arXiv preprint arXiv:2409.02098 (2024).
+295,"DOI: 10.48550/arXiv.2409.02098. URL: https: / /arxiv.org/abs/2409.02098. [81] Kaustubh D. Dhole: A_ Multi-Encoder Frozen-Decoder Approach for Fine-Tuning Large Lan- guage Models"" . In: arXiv preprint arXiv:2501.07818 (2025). DOI: 10 48550 / arXiv 2501 07818. URL: https : / /arxiv.org/abs/2501.07818."
+296,"[82] Bingfeng Zhang et al. (( Frozen CLIP: A Strong Backbone for Weakly Supervised Semantic Segmentation"". In: Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR): 2024 URL: https / / openaccess thecvf com / content / CVPR2O24 / html Zhang_"
+297,"Frozen _ CLIP A_ Strong _ Backbone for Weakly _ Supervised_ Semantic_ Segmentation_CVPR_2024_paper pdf.
+43"
+298,"X-SPANFORMER
+SPAN-AwARE ENCODER [83] Jesse Vig and Yonatan Belinkov."
+299,"(( Analyzing the Structure of Attention in a Transformer Lan- guage Model"". In: Proceedings of the 2019 ACL Workshop BlackbocNLP: Analyzing and Inter- preting Neural Networks for NLP. Florence, Italy: Association for Computational Linguistics; 2019, pp_ 63-76."
+300,"DOI: 10.18653/v1/W19-4808_ URL: https: / /aclanthology.org/W19-4808. [84] Benjamin Hoover , Hendrik Strobelt, and Sebastian Gehrmann: (( exBERT: A Visual Analysis Tool to Explore Learned Representations in Transformers Models"". In: Proceedings of the 58th Annual Meeting  of the Association for Computational Linguistics: System Demonstrations. Association for Computational Linguistics, 2020, pp= 187-196. DOI: 10.18653/v1/2020.acl- demos.21."
+301,"URL: https: / /aclanthology.org/2020.acl-demos.21. [85] Tal Linzen, Emmanuel Dupoux, and Yoav Goldberg: (( Assessing the Ability of LSTMs to Learn Syntax-Sensitive Dependencies"" ."
+302,"In: Transactions of the Association for Computational Linguistics 4 (2016) , pp."
+303,"521-535. DOI: 10.1162/tacl_a_00115. URL: https: / /aclanthology  org/Q16-1037. [86] Yonatan Belinkov and James Glass. (( Analysis Methods in Neural Language Processing: A Survey""  ."
+304,"In: Transactions of the Association for Computational Linguistics 7 (2019) , Pp. 49 72. DOI: 10.1162/tacl|_a|_00254. URL: https: / /aclanthology.org/Q19-1004."
+305,"[87] Chris Olah et al. (( The Building Blocks of Interpretability""."
+306,"In: Distill (2018). DOI: 10.23915/ distill.00010. URL: https: / /distill.pub/2018/building-blocks /. [88] Honggang Wang et al. ""Structured Variational  Inference in Bayesian State-Space Models""_"
+307,"In: Proceedings of the 25th International Conference on Artificial Intelligence and Statistics (AISTATS) Vol. 151. Proceedings of Machine Learning Research. PMLR, 2022, Pp 8884-8905. URL: https Iproceedings mlr.press/v151/wang22g.html.
+44"

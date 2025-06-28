@@ -1,0 +1,18 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+3.3 Length Estimator
+While the span predictor yields high-confidence candidates based on boundary positions; it lacks an inductive bias toward plausible internal structure ~such as the typical width of syntactic; semantic, Or modality-specific spans: To address this; we introduce a length estimator: a learned prior over span widths that filters proposals based 0n predicted span length compatibility. 6
+For each proposed span (i,j) € $, we define its length:
+6 = j -i+1.
+We then pool features over the span window:
+Vij Pool( H[i:j]) € Rd,
+where Pool(:) may be mean pooling; max pooling; o self-attentive aggregation. This representation is passed through a classifier head that outputs a categorical distribution over discretized length bins:
+=
+Wevij + be,
+ps = softmax(
+= arg maxp'
+The predicted length $ acts as a prior over plausible widths and is compared against the actual span length 6. We retain only those spans for which the prediction deviates from the ground truth by at most a fixed tolerance: 5' = {6,j) e s |16 _ 81<w} where T 2 0 is a hyperparameter   governing   flexibility: This length-aware filtering mechanism discourages degenerate; overly short, or overly long span hypotheses, and has been shown to improve accuracy in both text segmentation and vision attention tasks [26, 3, 17]. Proposition 2 (Span Count Upper Bound) Assume that all gold spans satisfy 6 € [6min , Omax], and let the tolerance satisfy T Smax Omin ~ Then the number of retained spans satisfies: 1S' | = 0 (L . (2v + 1)) _
+Proof: Fix a start index 2. For each predicted length &, the end index must satisfy:
+j e |s+i-7_1, 6+ i+7_1|
+i.e., a window of size (2r + 1). For each of the L start positions, at most (21 + 1) spans can fall within the allowed deviation from 0, yielding the stated linear bound.
+This procedure constrains the spatial budget of the model, enabling sub-quadratic proposal filtering and tractable decoding over long-form sequences It also reflects cognitively grounded priors on span regularity and compositional unit length [13, 24]. 6This style of predictive regularization is aligned with latent structure filtering techniques in segmentation-aware pretraining [11, 12], and echoes classic Bayesian constraints in alignment models [24]. See [25, 20] for strategies to compress variable-length subsequences using adaptive pooling Or dynamic convolu- tions_
