@@ -8,7 +8,7 @@ class TokenizedInput(BaseModel):
     preserve_whitespace: Optional[bool] = Field(default=True, description="Whether spacing and formatting were preserved during tokenization")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "input": ["The", " ", "quick", " ", "brown", " ", "fox", "."],
                 "tokenizer": "whitespace",

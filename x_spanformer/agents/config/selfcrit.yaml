@@ -1,0 +1,42 @@
+agent_name: selfcrit
+
+model:
+  name: phi4:mini # Ollama model name
+  temperature: 0.2 # Controls output variance
+  max_context_tokens: 131072 # Model’s total memory window
+  max_turn_tokens: 4096 # Max allowed per message (Ollama constraint)
+
+dialogue:
+  max_turns: 12 # Max back-and-forth turns per segment evaluation
+  memory_limit: 24 # Max conversation history messages
+  trim_strategy: rolling # Options: rolling | cutoff | prioritization
+
+evaluation:
+  passes: 3 # Number of consensus votes per segment
+  max_retries: 3 # Retry threshold for model failures
+  format_enforcement: strict # Require line-structured output
+  enable_followups: true # Enable recursive re-evaluation on "revise"
+
+regex_filters:
+- pattern: "\\b\\w{40,}\\b"
+  reason: "long token, likely noise"
+
+- pattern: "\\S{25,}"
+  reason: "long unspaced word"
+
+templates:
+  system: selfcrit_system.j2
+  score: segment_score.j2
+  followup: segment_followup.j2
+  consensus_dispute: segment_consensus_dispute.j2
+  format_hint: segment_format_hint.j2
+
+format:
+  expected_fields: [ score, status, reason ]
+  strict_line_count: 3
+  parse_strategy: regex # Options: regex | json | lines
+
+logging:
+  verbosity: minimal # Options: minimal | full | debug
+  track_consensus: true
+  return_all_passes: false

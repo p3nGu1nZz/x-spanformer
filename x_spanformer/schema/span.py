@@ -9,7 +9,7 @@ class SpanLabel(BaseModel):
     text: Optional[str] = Field(None, description="Span text (redundant with input[span[0]:span[1]+1], but useful for validation/debug)")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "span": [4, 4],
                 "label": "noun",

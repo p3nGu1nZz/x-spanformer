@@ -17,7 +17,7 @@ class XPSpan(BaseModel):
     text: Optional[str] = Field(None, description="Human-readable span content (optional, for debugging)")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "span": [2, 5],
                 "category": "XP",

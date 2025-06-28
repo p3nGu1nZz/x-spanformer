@@ -12,7 +12,7 @@ class SourceInfo(BaseModel):
     source_url: Optional[str] = Field(None, description="URL or repo link to the document if public")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "document_id": "d41d8cd98f00b204e9800998ecf8427e",
                 "filename": "xbar_transformer_2024.pdf",

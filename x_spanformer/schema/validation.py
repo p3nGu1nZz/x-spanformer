@@ -13,7 +13,7 @@ class ValidationResult(BaseModel):
     issues: List[ValidationIssue] = Field(default_factory=list, description="List of validation issues found")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "is_valid": False,
                 "issues": [

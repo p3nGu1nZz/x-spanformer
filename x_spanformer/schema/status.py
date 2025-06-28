@@ -18,7 +18,7 @@ class RecordStatus(BaseModel):
     ] = Field(default_factory=list, description="Ordered log of completed preprocessing/enrichment stages")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "stages": [
                     "csv_ingested",
