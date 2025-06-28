@@ -1,6 +1,3 @@
----
----
-
 # 🧠 X-Spanformer
 
 **Tokenizer-free, span-aware transformer grounded in X-bar theory**  
