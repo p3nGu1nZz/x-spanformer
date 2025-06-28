@@ -1,11 +1,16 @@
-Evaluate the following text span for quality of writing, clarity, and structure.
+Evaluate this text segment as potential training data for X-Spanformer (tokenizer-free span-aware model).
 
-Return exactly three lines using this format:
-Score: 0.0–1.0
-Status: keep | revise | discard
-Reason: one short sentence
+Consider:
+- Does it have clear structural elements that can be segmented into meaningful spans?
+- Is it clean and well-formed for training purposes?
+- Does it represent valuable patterns for learning span composition?
 
-Text:
+Text segment:
 ---
 {{ text }}
 ---
+
+Respond in exactly 3 lines:
+Score: 0.0-1.0
+Status: keep | revise | discard  
+Reason: brief structural assessment

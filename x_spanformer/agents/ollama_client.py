@@ -15,15 +15,24 @@ async def chat(
 	temperature: float = 0.2
 ) -> str:
 	client = AsyncClient()
-	messages: List[Message] = [{"role": "system", "content": system or DEFAULT_SYSTEM}]
-	messages.extend(conversation)
+	messages: List[Message] = conversation  # conversation already includes system prompt from DialogueManager
 
-	c.print(f"[bold blue]💬 chat()[/] sending [cyan]{len(messages)}[/] messages to [magenta]{model}[/] @ T={temperature}")
+	c.print(f"[bold blue]Sending to {model} (T={temperature}):[/bold blue]")
+	for i, msg in enumerate(messages):
+		role_color = "yellow" if msg["role"] == "system" else "cyan" if msg["role"] == "user" else "green"
+		c.print(f"[{role_color}]Message {i+1} ({msg['role']}):[/{role_color}]")
+		c.print(f"[white]{msg['content']}[/white]")
+		c.print()
+
 	response = await client.chat(
 		model=model,
 		messages=messages,
 		options={"temperature": temperature}
 	)
 	content = response["message"]["content"]
-	c.print(f"[green]✔ Reply received[/] — [dim]{len(content)} chars[/dim]")
+	
+	c.print(f"[bold green]Response from {model}:[/bold green]")
+	c.print(f"[white]{content}[/white]")
+	c.print()
+	
 	return content

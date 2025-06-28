@@ -1,7 +1,6 @@
 import re
 
 from rich.console import Console
-from rich.panel import Panel
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 from x_spanformer.agents.config_loader import load_selfcrit_config
@@ -24,7 +23,7 @@ SCORE_PATTERN = re.compile(
 def parse_response(raw: str) -> dict:
 	match = SCORE_PATTERN.search(raw)
 	if not match:
-		c.print(Panel.fit(f"[bold yellow]⚠ Unparseable model response:[/]\n[dim]{raw.strip()[:160]}...", border_style="yellow"))
+		c.print(f"[yellow]⚠ Unparseable model response:[/yellow] {raw.strip()[:160]}...")
 		return {"score": 0.5, "status": "revise", "reason": "unparseable"}
 	return {
 		"score": float(match["score"]),
@@ -34,11 +33,11 @@ def parse_response(raw: str) -> dict:
 
 @retry(stop=stop_after_attempt(cfg["evaluation"]["max_retries"]), wait=wait_fixed(0.5))
 async def judge_segment(text: str) -> dict:
-	c.print(f"[white]🔎 Evaluating span (len={len(text)}):[/] [dim]{text[:96]}{'…' if len(text) > 96 else ''}[/]")
+	c.print(f"[dim]Evaluating text segment ({len(text)} chars)[/dim]")
 
 	for rx in RE_FLAGGED:
 		if rx.search(text):
-			c.print(f"[red]❌ Regex filter matched:[/] [dim]{rx.pattern}[/] — span discarded")
+			c.print(f"[red]Regex filter matched: {rx.pattern} — discarding[/red]")
 			return {"score": 0.1, "status": "discard", "reason": "regex filter triggered"}
 
 	system = render_prompt(cfg["templates"]["system"], text=text)
@@ -50,24 +49,23 @@ async def judge_segment(text: str) -> dict:
 	for i in range(passes):
 		dm = DialogueManager(system_prompt=system, max_turns=cfg["dialogue"]["max_turns"])
 		dm.add("user", render_prompt(cfg["templates"]["score"], text=text))
-		c.print(f"[cyan]• Pass {i+1}/{passes}[/] — requesting judgment...")
+		c.print(f"[cyan]Pass {i+1}/{passes} — requesting judgment...[/cyan]")
 
 		reply = await chat(
 			model=model,
 			conversation=dm.as_messages(),
-			system=system,
 			temperature=temp
 		)
 
 		result = parse_response(reply)
 		consensus.append(result)
-		c.print(f"[green]↳ Response {i+1}:[/] [white]{result['status']}[/], [dim]score={result['score']}[/] — {result['reason']}")
+		c.print(f"[green]Response {i+1}: {result['status']}, score={result['score']} — {result['reason']}[/green]")
 
 		if result["status"] in {"keep", "discard"}:
-			c.print(f"[bold magenta]✓ Early consensus:[/] Decisive result: [bold]{result['status']}[/]")
+			c.print(f"[magenta]Early consensus: {result['status']}[/magenta]")
 			return result
 
-	c.print(f"[yellow]⚖ Fallback triggered:[/] using majority + mean")
+	c.print(f"[yellow]Using majority vote from {len(consensus)} responses[/yellow]")
 	statuses = [r["status"] for r in consensus]
 	scores = [r["score"] for r in consensus]
 	reasons = sorted({r["reason"] for r in consensus})
@@ -78,11 +76,6 @@ async def judge_segment(text: str) -> dict:
 		"reason": " / ".join(reasons)
 	}
 
-	c.print(Panel.fit(
-		f"[bold white]Final Consensus[/]\n"
-		f"[green]Status:[/] {final['status']}\n"
-		f"[cyan]Score:[/] {final['score']}\n"
-		f"[dim]Reason:[/] {final['reason']}",
-		title="🧠 Aggregated Judgment", border_style="cyan"
-	))
+	c.print(f"[bold green]Final: {final['status']}, score={final['score']}[/bold green]")
+	c.print(f"[dim]Reason: {final['reason']}[/dim]")
 	return final

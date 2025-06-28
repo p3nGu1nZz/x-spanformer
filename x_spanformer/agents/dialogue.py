@@ -11,12 +11,12 @@ class DialogueManager:
 		self.history: list[dict[str, str]] = []
 		self.system = system_prompt
 		self.max_turns = max_turns
-		c.print(f"[bold cyan]🗣 DialogueManager[/] initialized — [dim]max_turns={max_turns}[/dim]")
+		c.print(f"[dim]DialogueManager initialized — max_turns={max_turns}[/dim]")
 
 	def add(self, role: Literal["user", "assistant"], content: str):
 		self.history.append({"role": role, "content": content})
 		self.history = self.history[-2 * self.max_turns:]
-		c.print(f"[white]↳ Message added:[/] role=[cyan]{role}[/], total turns=[green]{len(self.history)}[/]")
+		c.print(f"[dim]Message added: role={role}, total turns={len(self.history)}[/dim]")
 
 	def as_messages(self) -> list[dict[str, str]]:
 		return [{"role": "system", "content": self.system}] + self.history

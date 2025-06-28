@@ -4,16 +4,13 @@ import csv
 import json
 import sys
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import langid
 from rich.console import Console
-from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
-from rich.table import Table
 
 from x_spanformer.agents.config_loader import load_selfcrit_config
 from x_spanformer.agents.selfcrit import judge_segment
@@ -23,28 +20,56 @@ from x_spanformer.schema.pretrain_record import PretrainRecord
 c = Console()
 
 def echo_config(cfg: dict):
-    c.rule("[bold cyan]Using SelfCrit Configuration")
-    c.print(f"[white]• Model:[/] {cfg['model']['name']} @ T={cfg['model']['temperature']}")
-    c.print(f"[white]• Voting:[/] {cfg['evaluation']['passes']} passes | Retry: {cfg['evaluation']['max_retries']}")
-    c.print(f"[white]• Regex filters:[/] {len(cfg.get('regex_filters', []))}")
-    c.print(f"[white]• Templates:[/] {', '.join(cfg['templates'].keys())}")
+    c.print("[bold cyan]═══ SelfCrit Configuration ═══[/bold cyan]")
+    c.print(f"[white]Model:[/white] [green]{cfg['model']['name']}[/green] @ T={cfg['model']['temperature']}")
+    c.print(f"[white]Voting:[/white] [yellow]{cfg['evaluation']['passes']}[/yellow] passes | Retry: [yellow]{cfg['evaluation']['max_retries']}[/yellow]")
+    c.print(f"[white]Regex filters:[/white] [blue]{len(cfg.get('regex_filters', []))}[/blue]")
+    c.print(f"[white]Templates:[/white] [cyan]{', '.join(cfg['templates'].keys())}[/cyan]")
+    c.print()
 
 def manifest(p: Path):
     stem = p.stem
     m = p.parent / stem / f"{stem}.json"
     if m.exists():
-        with m.open("r", encoding="utf-8") as f: d = json.load(f)
+        with m.open("r", encoding="utf-8") as f: 
+            d = json.load(f)
         return d.get("csv") or p.name, "pdf2seg (manifest v1)"
     return p.name, "unknown"
 
-def rows(p: Path, col: str, w: int, cfg: dict) -> list[PretrainRecord]:
-    with p.open("r", encoding="utf-8") as x: data = list(csv.DictReader(x))
-    if not data: c.print(f"[red]⚠ No rows in {p.name}"); return []
-    if col not in data[0]: c.print(f"[red]⚠ Missing '{col}' in {p.name}"); return []
+def rows(p: Path, col: str, w: int, cfg: dict, save_interval: int = 10, output_path: Optional[Path] = None, base_name: str = "dataset") -> list[PretrainRecord]:
+    with p.open("r", encoding="utf-8") as x: 
+        data = list(csv.DictReader(x))
+    if not data: 
+        c.print(f"[red]⚠ No rows in {p.name}[/red]")
+        return []
+    if col not in data[0]: 
+        c.print(f"[red]⚠ Missing '{col}' in {p.name}[/red]")
+        return []
 
     src, tool = manifest(p)
     spans = [r.get(col, "").strip() for r in data if r.get(col, "").strip()]
-    if not spans: c.print(f"[red]⚠ No usable '{col}' values in {p.name}"); return []
+    if not spans: 
+        c.print(f"[red]⚠ No usable '{col}' values in {p.name}[/red]")
+        return []
+
+    c.print(f"[green]Processing {len(spans)} text segments from {p.name}[/green]")
+    if save_interval > 0 and output_path:
+        c.print(f"[cyan]Incremental saving enabled: every {save_interval} segments to {output_path}[/cyan]")
+    c.print()
+
+    def save_incremental(records: list[PretrainRecord]):
+        """Save records incrementally to prevent data loss"""
+        if not output_path or not records:
+            return
+        
+        output_path.mkdir(parents=True, exist_ok=True)
+        dataset_file = output_path / f"{base_name}.jsonl"
+        
+        with dataset_file.open("w", encoding="utf-8") as writer:
+            for record in records:
+                writer.write(json.dumps(record.model_dump(), ensure_ascii=False) + "\n")
+        
+        c.print(f"[blue]💾 Saved {len(records)} records to {dataset_file.name}[/blue]")
 
     async def process():
         sem = asyncio.Semaphore(w)
@@ -54,41 +79,51 @@ def rows(p: Path, col: str, w: int, cfg: dict) -> list[PretrainRecord]:
         async def score(idx: int, t: str):
             try:
                 async with sem:
-                    if cfg["logging"].get("log_queries", False):
-                        c.log(f"[grey50]Judging text:[/] {t[:120]}…")
+                    c.print(f"[bold blue]━━━ Processing segment {idx + 1}/{len(spans)} ━━━[/bold blue]")
+                    c.print(f"[dim]Text ({len(t)} chars):[/dim] {t}")
+                    c.print()
+                    
                     r = await judge_segment(t)
-                    if cfg["logging"].get("log_responses", False):
-                        c.log(f"[grey50]Judge response:[/] {r}")
+                    
+                    c.print(f"[bold green]Response:[/bold green]")
+                    c.print(f"[white]{json.dumps(r, indent=2)}[/white]")
+                    c.print()
+                    
                     return idx, r
             except Exception as e:
-                c.log(f"[red]Judge error:[/] {str(e)[:100]}… for text: {t[:60]}…")
-                return idx, {"score": 0.5, "status": "revise", "reason": "selfcrit error"}
+                c.print(f"[red]Error processing segment {idx + 1}:[/red] {str(e)}")
+                c.print(f"[dim]Text was:[/dim] {t[:100]}...")
+                c.print()
+                return idx, {"score": 0.5, "status": "revise", "reason": "processing error"}
 
-        with Progress(SpinnerColumn(), TextColumn("[bold cyan]→"), BarColumn(bar_width=None),
-                      transient=True, console=c) as pb:
-            task_id = pb.add_task(f"[white]Evaluating {p.name}", total=len(spans))
-            
-            tasks = [score(i, t) for i, t in enumerate(spans)]
+        for i, text in enumerate(spans):
+            try:
+                idx, r = await score(i, text)
+                tag = r["status"]
+                reasons.append(r["reason"])
+                stats[tag] += 1
+                lang = langid.classify(text)[0]
+                recs.append(PretrainRecord(raw=text, meta=RecordMeta(
+                    source_file=src, doc_language=lang, extracted_by=tool,
+                    confidence=r.get("score"), tags=[tag] if tag != "keep" else [], notes=r.get("reason")
+                )))
+                
+                # Incremental save check
+                if save_interval > 0 and output_path and (i + 1) % save_interval == 0:
+                    save_incremental(recs)
+                    
+            except asyncio.CancelledError:
+                c.print("[yellow]Processing cancelled.[/yellow]")
+                # Save what we have so far
+                if save_interval > 0 and output_path and recs:
+                    save_incremental(recs)
+                break
+            except Exception as e:
+                c.print(f"[red]Error in main loop for segment {i + 1}:[/red] {str(e)}")
 
-            for future in asyncio.as_completed(tasks):
-                try:
-                    idx, r = await future
-                    text = spans[idx]
-                    tag = r["status"]
-                    reasons.append(r["reason"])
-                    stats[tag] += 1
-                    lang = langid.classify(text)[0]
-                    recs.append(PretrainRecord(raw=text, meta=RecordMeta(
-                        source_file=src, doc_language=lang, extracted_by=tool,
-                        confidence=r.get("score"), tags=[tag] if tag != "keep" else [], notes=r.get("reason")
-                    )))
-                    if cfg["logging"].get("track_consensus", True) and r["reason"] == "unparseable":
-                        c.log(f"[yellow]⚠ Unparseable output:[/] {text[:72]}…")
-                except asyncio.CancelledError:
-                    c.print("[yellow]Processing cancelled.[/]")
-                    break
-                finally:
-                    pb.update(task_id, advance=1)
+        # Final incremental save if there are remaining records
+        if save_interval > 0 and output_path and recs and len(recs) % save_interval != 0:
+            save_incremental(recs)
 
         return recs, stats, reasons
 
@@ -97,72 +132,79 @@ def rows(p: Path, col: str, w: int, cfg: dict) -> list[PretrainRecord]:
         show_summary(p.name, stats, reasons)
         return recs
     except KeyboardInterrupt:
-        c.print("\n[bold red]Interrupted by user. Exiting.[/]")
+        c.print("\n[bold red]Interrupted by user. Exiting.[/bold red]")
         return []
 
 def show_summary(name: str, stats: Counter, reasons: list[str]):
-    tbl = Table(title=f"📊 SelfCrit Summary – {name}", expand=True)
-    tbl.add_column("Status", justify="center")
-    tbl.add_column("Count", justify="right")
+    c.print(f"[bold cyan]═══ Summary for {name} ═══[/bold cyan]")
     for k in ("keep", "revise", "discard"):
-        tbl.add_row(k, str(stats.get(k, 0)))
-    c.print(tbl)
-
+        count = stats.get(k, 0)
+        color = "green" if k == "keep" else "yellow" if k == "revise" else "red"
+        c.print(f"[{color}]{k.capitalize()}:[/{color}] {count}")
+    
     top = Counter(reasons).most_common(5)
     if top:
-        c.print("[blue]🔍 Top reasons returned:")
+        c.print("\n[blue]Top reasons:[/blue]")
         for r, n in top:
-            c.print(f"[cyan]•[/] [white]{r}[/] — [dim]{n}x")
+            c.print(f"[cyan]•[/cyan] [white]{r}[/white] [dim]({n}x)[/dim]")
+    c.print()
 
-def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int):
+def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: int = 10):
     cfg = load_selfcrit_config()
     echo_config(cfg)
 
     csvs = [i] if i.is_file() else sorted(i.glob("*.csv"))
     if not csvs:
-        c.print(f"[red]⚠ No CSVs found in {i}[/]"); return
+        c.print(f"[red]⚠ No CSVs found in {i}[/red]")
+        return
 
     if not i.is_file():
-        s = "\n".join(f"[cyan]•[/] {x.name}" for x in csvs)
-        c.print(Panel.fit(f"[bold magenta]📁 Found {len(csvs)} CSV files\n{s}", border_style="bright_magenta"))
+        c.print(f"[bold magenta]Found {len(csvs)} CSV files:[/bold magenta]")
+        for x in csvs:
+            c.print(f"[cyan]• {x.name}[/cyan]")
     else:
-        c.print(f"[bold magenta]📁 Processing single CSV file: [cyan]{i.name}[/]")
+        c.print(f"[bold magenta]Processing single CSV file: {i.name}[/bold magenta]")
+    c.print()
 
+    base = n.strip().removesuffix(".json").removesuffix(".jsonl") or "dataset"
+    
     allr = []
     for src in csvs:
-        c.print(f"[white]→ Processing CSV: [cyan]{src.name}[/]")
-        r = rows(src, f, w, cfg)
+        c.print(f"[white]→ Processing CSV: [cyan]{src.name}[/cyan][/white]")
+        r = rows(src, f, w, cfg, save_interval, o, base)
         if r:
             allr.extend(r)
-            c.print(f"[green]✔ Successfully processed: [cyan]{src.name}[/]")
+            c.print(f"[green]✔ Successfully processed: {src.name}[/green]")
         else:
-            c.print(f"[red]⚠ No records extracted from: [cyan]{src.name}[/]")
+            c.print(f"[red]⚠ No records extracted from: {src.name}[/red]")
+        c.print()
 
     if not allr:
-        c.print(f"[red]⚠ No valid records found across all CSVs[/]")
+        c.print(f"[red]⚠ No valid records found across all CSVs[/red]")
         return
 
     total = len(allr)
     kept = sum(1 for r in allr if not r.meta.tags)
     ratio = round(kept / total * 100, 2)
-    c.rule("[bold green]Final Summary")
-    c.print(f"[white]Total records:[/] {total}")
-    c.print(f"[green]Kept:[/] {kept} ([cyan]{ratio}%[/])")
-    c.print(f"[yellow]Discarded:[/] {total - kept}")
+    
+    c.print("[bold green]═══ Final Summary ═══[/bold green]")
+    c.print(f"[white]Total records:[/white] {total}")
+    c.print(f"[green]Kept:[/green] {kept} [cyan]({ratio}%)[/cyan]")
+    c.print(f"[yellow]Discarded:[/yellow] {total - kept}")
+    c.print()
 
-    base = n.strip().removesuffix(".json").removesuffix(".jsonl") or "dataset"
     o.mkdir(parents=True, exist_ok=True)
     j1, j2 = o / f"{base}.jsonl", o / f"{base}.json"
 
     with j1.open("w", encoding="utf-8") as writer:
         for x in allr:
             writer.write(json.dumps(x.model_dump(), ensure_ascii=False) + "\n")
-    c.print(f"[green]✔ Wrote[/] [white]{total}[/] entries → [cyan]{j1.name}[/]")
+    c.print(f"[green]✔ Wrote {total} entries → {j1.name}[/green]")
 
     if pretty:
         with j2.open("w", encoding="utf-8") as writer:
             json.dump([x.model_dump() for x in allr], writer, ensure_ascii=False, indent=2)
-        c.print(f"[bold cyan]•[/] Pretty JSON → {j2.name}")
+        c.print(f"[cyan]• Pretty JSON → {j2.name}[/cyan]")
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
@@ -172,5 +214,6 @@ if __name__ == "__main__":
     p.add_argument("--pretty", action="store_true")
     p.add_argument("-n", "--name", type=str, default="dataset")
     p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--save-interval", type=int, default=10, help="Save dataset incrementally after every N segments (0 to disable)")
     a = p.parse_args()
-    run(a.input, a.output, a.field, a.pretty, a.name, a.workers)
+    run(a.input, a.output, a.field, a.pretty, a.name, a.workers, a.save_interval)
