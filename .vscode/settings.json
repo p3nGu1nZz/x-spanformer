@@ -1,0 +1,5 @@
+{
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": [],
+  "python.testing.pytestParallelEnabled": false
+}

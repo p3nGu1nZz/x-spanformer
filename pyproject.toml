@@ -5,5 +5,19 @@ description = "Tokenizer-free, span-aware encoder architecture inspired by X-bar
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "jinja2>=3.1.6",
+    "langid>=1.1.6",
+    "ollama>=0.5.1",
     "pdf2seg>=1.0.1",
+    "rich>=13.7.1",
+    "tenacity>=9.1.2",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
+]
+
+[tool.setuptools]
+packages = ["x_spanformer"]

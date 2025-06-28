@@ -1,5 +1,5 @@
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class EntropyProfile(BaseModel):
@@ -8,8 +8,8 @@ class EntropyProfile(BaseModel):
     structure_variance: Optional[float] = Field(None, ge=0.0, description="Entropy or deviation of span lengths or roles")
     fluency_score: Optional[float] = Field(None, ge=0.0, le=1.0, description="Optional fluency/confidence score from a validator or model")
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra = {
             "example": {
                 "token_entropy": 2.34,
                 "span_overlap": 1.8,
@@ -17,3 +17,4 @@ class EntropyProfile(BaseModel):
                 "fluency_score": 0.91
             }
         }
+    )

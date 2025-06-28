@@ -1,5 +1,5 @@
 from typing import Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class RecordType(BaseModel):
@@ -8,9 +8,10 @@ class RecordType(BaseModel):
         description="Domain type of the record: code, natural language, or mixed"
     )
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra = {
             "example": {
                 "type": "mixed"
             }
         }
+    )

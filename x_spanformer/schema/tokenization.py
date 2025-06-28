@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class TokenizedInput(BaseModel):
@@ -7,11 +7,12 @@ class TokenizedInput(BaseModel):
     tokenizer: Optional[str] = Field(None, description="Name or version of the tokenizer used (e.g., 'whitespace', 'byte-level')")
     preserve_whitespace: Optional[bool] = Field(default=True, description="Whether spacing and formatting were preserved during tokenization")
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra = {
             "example": {
                 "input": ["The", " ", "quick", " ", "brown", " ", "fox", "."],
                 "tokenizer": "whitespace",
                 "preserve_whitespace": True
             }
         }
+    )
