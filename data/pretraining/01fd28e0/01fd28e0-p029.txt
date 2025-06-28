@@ -1,0 +1,22 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+5.4 Qualitative Span Interpretability
+To assess the plausibility and semantic alignment of X-Spanformer's induced spans, we perform side-by-side comparisons against syntactic and semantic reference structures.  Using single-sentence prompts drawn from the validation sets of WikiText and Stream-Mix, we visualize the top-K spans selected at various layers and entropy regimes. We benchmark span boundaries against:
+Syntactic parses: Constituents produced by Berkeley Neural Parser [72] and dependency arcs from SpaCy [73]. Gold phrase boundaries: Constituents from annotated treebanks in Penn Treebank style Semantic units: Span-based named entities (e.g., PERSON, ORG) and discourse units (e.g;, connectives, contrastive phrases) from OntoNotes [74].
+Observations
+Across entropy regimes, early layers select broad sentence-level spans; mid-depth layers refine into clause and phrase-level boundaries [72]. Final layers exhibit selective fusion over semantically salient fragments named entities, quantifiers, and subordinate clauses corresponding to task-relevant units [74, 73]. Figure 8 illustrates this trajectory:
+SBAR
+Book meets Marcie, his remarks.
+When Book meets Marcie she ignores his   remarks:
+Book meets Marcie, his remarks:
+1 0 1 0
+PERSON
+When Book meets Marcie, she   ignores his  remarks:
+Book meets Marcie, his remarks.
+0.(
+Overlay of gold syntactic
+constituents and named entities
+Figure 8: Left: Top-3 induced spans at layers 2, 4, and 6 (Stream-Mix prompt). Right: Overlay  of gold syntactic constituents and named entities. Colored bars represent span offsets; heatmap reflects span confidence @k-
+Layerwise Entropy Effects
+To trace structure emergence, we compare span selections under low (~ = 0.01) vs. high (y = 0.10) entropy schedules: Prior work has shown that annealed entropy regularization sharpens composi- tional attention [53, 28]; in our setting, lower 7 values maintain broader exploratory overlap; while
+30

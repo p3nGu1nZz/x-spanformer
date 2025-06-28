@@ -1,0 +1,15 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+Segmentation is traditionally decoupled from model training, treated as an irreversible preprocess ing operation that lacks gradient flow and cannot adapt to downstream objectives. Recent  work in character-aware encoding [9], tokenization-free models [10], and unsupervised segmentation in sequential domains [11, 12] demonstrates the potential of adaptive boundaries: However , these ap- proaches often omit linguistic structure and do not offer interpretable segmentation aligned with phrase-level semantics. Drawing on the X-bar  schema from generative grammar [13], we posit that raw token streams (for example, source code, natural language, or symbolic hybrids) exhibit latent hierarchical units that can be learned directly from data: We introduce X-Spanformer, a span-based segmenter that formulates boundary detection as a pointer-network prediction task [3]. Beginning with a compact one-thousand-unit BPE seed, X-Spanformer learns to emit overlapping; variable-length spans that are softly typed by modality (for example, code, natural language, or identifier) and capped per sequence via a learned length estimator. Span representations are aggregated by pooling and integrated into downstream transformer encoders, enabling joint optimization of segmentation and task-specific objectives:
+1.1
+Contributions
+This paper presents the following contributions:
+1. A formalization of tokenizer-free segmentation as a span-prediction problem grounded in X bar theory; instantiated with a pointer network featuring dynamic span capping and modality typing:
+2 . A curriculum learning paradigm that bootstraps span discovery from synthetic BPE labels and progressively shifts to contrastive and type-aware supervision. 3. Architectural guidelines for embedding the span predictor into transformer encoders through compositional pooling and minimal layer extensions:
+4. A_ proposed evaluation framework covering compression ratio, contrastive alignment, span entropy analysis, and interpretability visualizations, accompanied by an ONNX-compatible implementation and complete training recipes:
+2
+Related Work
+2.1
+Static Subword Tokenization
+Most transformer pipelines rely on offline subword segmentation. Byte-Pair Encoding (BPE) con- structs a fixed vocabulary by iteratively merging frequent symbol pairs extracted from a training corpus [1]. SentencePiece builds on unigram language models to select subword tokens that maxi- mize corpus likelihood [2]: Such methods yield efficient lookup tables and have become ubiquitous in large-scale language models [4, 5], but they impose irrevocable boundaries that do not adapt during model training and can fragment semantically coherent units under domain shift [8].
+3

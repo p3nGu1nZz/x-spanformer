@@ -1,0 +1,38 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+Span (61,j1)
+Span (62,3j2)
+Span (i3,j3)
+S
+S
+S
+Controller Token
+Prefix Vector Global Conditioning
+Span St,_ j1
+Span 82,32
+Span St,j3
+S
+h' = LayerNorm (h+W s)
+els| e1,e2- e1,
+W1
+W2
+23
+Decoder
+Controller Token
+softmax(W1,W2,3)
+Prefix
+Span
+Conditioning Span Usage Strategies
+8 =
+Ck Sk
+Figure 1: Interpolation of overlapping span embeddings and integration strategies. Retained spans are scored by a learned function Uij, normalized via softmax; and fused into a global summary vector 3. This vector can be inserted as a controller token; prefix embedding; Or conditioning signal for downstream modules
+3.7
+Span Interpolation for Overlap Resolution
+To gracefully handle overlapping Or redundant spans, X-Spanformer employs a continuous interpola- tion mechanism over the filtered set S' = {(ik, Je)}=1: Rather than injecting each span embedding directly, the model computes a relevance-weighted mixture over their representations:
+S =
+Qij Sij) (i,j)es'
+where Sij e Rd is the encoded representation for span (i,j), and Qij € [0, 1] is its normalized attention weight. To compute the interpolation weights Qij) each span is assigned a scalar relevance logit: fscore(sij, Oij = type Qij 9 Pij confij) , which may be a learned function over span length Sij' type entropy; boundary confidence, or addi- tional pooled features A softmax transformation ensures normalization: exp(Wij , Qij 3 (a,b)esi exp(wab >
+so that
+(i,j) Qij = 1.
+The final interpolated vector $ (Equation 1) functions as a global span summary: It may be inserted as a controller token [5], prepended as a prefix vector [30], or concatenated to the sequence input for downstream fusion [38]. Because all operations are differentiable; the interpolation mechanism supports full gradient flow and can be trained jointly with other modules. This method parallels soft memory reading in retrieval-based models [35, 39], mixture-based reasoning [40], and latent fusion in compositional decoding:
+10

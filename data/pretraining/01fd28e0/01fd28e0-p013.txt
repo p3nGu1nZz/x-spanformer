@@ -1,0 +1,27 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+Proof: We seek to maximize:
+H(P) = - Pij log Pij (i,j)es
+(10)
+subject to:
+Pij = 1 and Pij 2 0. (i,j)es
+(11)
+Construct the Lagrangian:
+L(P,A) = - Pij log Pij + A Pij - 1 (i,j)es (i,j)es
+(12)
+Taking derivatives:
+OC S OPij
+log Pij - 1+A = 0
+Pij = eA-1
+(13)
+Since this solution is constant for all (i,j) € S, and the probabilities sum to 1, we have Pij = 1/N. Substituting into Equation (21) gives:
+1 H(P*) = -N  log = log N. N N
+(14)
+Remark: Proposition 6 formalizes the upper bound for entropy regularization: Early in training; entropy maximization promotes structural diversity across S. Over time, Equation (18) decays the exploration coefficient, shifting focus toward confident; high-salience spans.
+4.2
+Span Induction with Entropic Regularization
+To identify compositional units latent in unstructured sequences, we treat all bounded-width sub- strings as candidate spans and learn a scoring function to assign each a salience probability This differentiable selection mechanism is trained jointly with downstream objectives but regularized to maintain entropy-driven exploration early in training:   Inspired by principles from latent structure induction [45, 15, 49, 50] and sparse attention routing [43, 51, 28], our span induction module maps an input sequence x € RLxd to a probability distribution P over all candidate spans S, which then informs structural fusion through top- K routing: Let D = {(26) ,y())}1 denote the training Corpus, where each input x (i) € RLxd consists of L contextual token embeddings We define the set of all contiguous spans of width at most Wmax as:
+S = {(i,j) |0 < i < j < min(i + Umax , L)} _
+(15)
+Each span is pooled into a fixed-length representation Bi:j, scored via a feed-forward function  fo, and normalized using a softmax across all candidates: exp( fe(Ti:j)) Pij (16) (a,b)es exp( fo(Ta:b))
+14

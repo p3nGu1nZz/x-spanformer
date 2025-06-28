@@ -1,0 +1,31 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+5.3 Controller Fusion Diagnostics
+To evaluate the semantic precision and interpretability of controller integration, we analyze three distinct injection mechanisms: (1) prefix token interpolation, (2) additive attention biasing, and (3) gated residual modulation: Each scheme receives identical controller input $, formed via: K exp( Wk  8 = @kSk, @k K k=l e=1 exp(We,
+Let Fm (  s) denote the model with injection mode m € {prefix; bias, gate}. For fixed input %, we study the perturbation and propagation effects caused by controller fusion:
+Injection Influence
+We define influence  magnitude as the L2 norm of the  difference in output logits between the controller-injected and controller-ablated models: (m) (1) = IFn(w,5) _ FmC (w,0)l2
+This is computed layerwise to identify zones of concentrated influence and injection  saturation Stronger  deviations at higher layers imply delayed controller fusion, whereas front-loaded shifts suggest syntactic modulation:
+PREFIX
+GATING
+ATTENTION BIAS
+12
+10
+0 8
+8
+0 6
+6 4 2 3 6 5 4 2
+0 4 @ 0.8 0 6
+0 2
+4 6 8 Layers
+12
+2
+4 6 8 Layers
+10
+1
+2 4 6 Layer
+8
+Figure 7: Layerwise controller influence heatmap across injection modes. Prefix tuning shifts early logits; gating modulates mid-depth; attention bias generates scattered low-intensity changes
+Layerwise Traceability
+For each mode, we analyze the cross-attention matrix Ae € RTxT for layer 6 with and without controller conditioning: We compute the Frobenius deviation: (m) Ia Ao| This reflects how controller information realigns global attention. Qualitative visualizations of Ae reveal syntactic shifts in focal connectivity ~e.g;, subject-verb alignment influenced by downstream semantic intent.
+28

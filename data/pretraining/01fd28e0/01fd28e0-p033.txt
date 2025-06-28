@@ -1,0 +1,24 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+6.1 Span Trajectory Viewer (trajectory_overlay)
+The span trajectory viewer highlights how span selection stabilizes O evolves over training epochs. For a given input prompt, we track the top-, K spans selected at each layer € and epoch t, plotting their  token offsets  and confidence weights &k This provides a temporal window into routing stability and sparsification behavior.
+Method
+1. Cache span logits wj and compute attention weights ak
+softmax(wk
+2_ Compute per-epoch entropy:
+H(Pt) = -
+log " Qk
+(41)
+3. Compute inter-epoch routing divergence:
+Djs ( (PellP++1) = [KL(PlM) + KL(Pt+lM)] , M = I(Pt + Pt+1) 2
+(42)
+4. Render span overlays layerwise with bar intensity mapped to @k
+This supports empirical validation of Our entropy convergence claim from Proposition 11, echoing trends found in routing-based sparse architectures [51, 43].
+6.2 Span Alignment Grid (span_grid_align)
+To assess whether X-Spanformer's induced spans align with latent syntax Or semantics, we compute overlap heatmaps comparing model-predicted spans to gold annotations from syntactic and semantic corpora.
+Method
+1. Extract top-K spans {(ik,Jk)} from controller at layer € 2_ Align with: Constituents: Berkeley parser [72] Named entities: SpaCy [73] Discourse units: OntoNotes [74]
+3_ = IskOril Compute Jaccard index J(Sk, Tj) IskUr j
+4. Generate token-layer grid showing alignment scores
+This grid supports span-level interpretability claims from Section 5.4, complementing prior syntactic induction probes [55].
+34

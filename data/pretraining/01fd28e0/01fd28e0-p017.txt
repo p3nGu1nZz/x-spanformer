@@ -1,0 +1,17 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+Proposition 7 (End-to-End Differentiability of Controller Injection). Let $ e Rd denote 0 fused control vector computed via relevance-weighted interpolation over span embeddings:
+K S = L arsk, @k: k=1
+exp( Wk - K e=1 exp(we)
+Uk: = 9o (8k, Ok, confk).
+If each Sk = Pool(tit:jk) is differentiable and the span indices (ik, Jk) are fixed, then for all three integration modes above, the task loss L is differentiable with respect to all upstream scoring and pooling parameters:
+Proof: Let $ denote the aggregated span representation defined as
+@kSk,
+where @k softmax(9o(Sk,`)) , Sk Pool(cik:jk -
+We aim to show that the loss L is differentiable with respect to s across all injection modes; and thus gradients propagate to upstream components Step 1: Differentiability of &. The components are composed as follows: Sk is differentiable in x due to the smoothness of the pooling operator, @k is differentiable in Sk and hence in %, due to the chain rule applied to 9d and softmax, s is a linear combination of $k with differentiable &k coefficients: Therefore, 3 is differentiable in €, 9o, and Pool(:) Step 2: Prefix Token Injection: When 8 is prepended as T0, the self-attention  mechanism computes: Attn(Qi, Kj,Vj) = softmax(QT Kj) . Vj,
+with Ko = WK . s and Vo 3 WV $ . Since matrix multiplication, softmax, and the addition of $ via linear projections are differentiable operations, gradients propagate through s during attention: Step 3: Attention Bias Injection: Let Qi F Qi+WR ; and Kj 5 Kj+WK 3. The perturbation induces a modified attention logit
+eij (Qi+WQs)T(K; +WK 5),
+which remains differentiable in s by the composition of smooth affine mappings and inner products. Hence, €L/a3 exists. Step 4: Gating Vector Injection: A gated FFN applies:
+FFN(h) = o(Wgs) 0 MLP(h) ,
+where 0 is & smooth activation (e.g-, sigmoid). Each operation (linear map; activation, Hadamard product) preserves differentiability Conclusion. In all injection strategies, the loss C is differentiable in S_ Since s is differentiable with respect to all upstream computations (span representations Sk and their source embeddings) , gradients flow continuously through the span routing mechanism
+18

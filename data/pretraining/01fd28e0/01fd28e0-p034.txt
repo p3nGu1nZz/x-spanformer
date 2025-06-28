@@ -1,0 +1,24 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+6.3 Controller Influence Map (influence_heatmap)
+This module evaluates the downstream sensitivity of network outputs to variation in the controller signal s_ We use this to assess disentanglement and directional salience of span-based routing:
+Method
+1. Inject perturbed vectors Sbaseline, Sperturbed into layer 2. Measure output response via:
+Oout = IF(w,51) - F(w,s2)ll2
+(43)
+3. Visualize effect across token positions and logit spaces
+This is inspired by mediation analyses in causal probing [71, 86] and offers interpretability ofrouting pathways without direct supervision.
+6.4 Entropy Field Morphometry (entropy_map)
+To inspect global routing structure, we   visualize span entropy across token windows and layers. This "morphometric map' reveals compositional boundaries, entropy basins; and emergence of high- confidence foci.
+Method
+1. For every candidate span (i,j) at each layer , compute:
+(e) @k log &k
+0 where Q1 selects spans overlapping (i,j)
+H{ = -_
+(44)
+2 Aggregate per-position entropy into a 2D token-layer grid
+3. Render high-confidence routes as brightness troughs
+This is modeled after flow-field visualizations in neural saliency [87], adapted here for differentiable sparse span selectors [53, 77].
+Ablation Studies
+To assess the contribution of individual architectural components in the X-Spanformer, we conduct controlled ablation studies by selectively removing O altering key modules. Each experiment is evaluated on the SeqMatch benchmark [88] with mean span-F1 as the primary metric:
+35

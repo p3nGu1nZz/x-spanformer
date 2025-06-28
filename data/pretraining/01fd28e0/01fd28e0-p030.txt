@@ -1,0 +1,18 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+sharper schedules induce minimal yet targeted spans: This suggests routing entropy governs the model's syntactic compression bias:
+Interpretability Metric (Span Jaccard Index)
+To quantify alignment with reference spans R = {r;}, we compute the max-overlap Jaccard index for each induced span Si:
+K and J = J(si_ K i=1
+Isi nrjl J(si_ = max TjeR Isi Ur;l
+This interpretable overlap score is inspired by constituency evaluation metrics used in unsupervised syntax induction [55, 63]. We find that average J improves with training and correlates with increased controller confidence (lower entropy) , especially in layers 4-6.
+Conclusion
+Induced spans tend to reflect coherent linguistic structure without explicit syntactic supervision. The consistency with constituent and semantic boundaries suggests that controller-guided routing induces soft parsing-like behavior; validating the design principle of compositional priors via differ- entiable selectors [30, 51].
+5.5 Ablation: Entropy, Pooling, and B1
+We conduct a structured ablation to isolate the effect of key hyperparameters on routing behavior and downstream task performance.  Specifically; we vary:
+Entropy Decay Rate Y € {0.01, 0.1, 0.5}: Controls the rate in the entropy regularization schedule Aent (t) = Aoe-vt , (36) which governs routing sparsity and confidence evolution throughout training [75, 53]. Span Pooling Function Pool € mean, max, gated}: Aggregates token representations across selected span (i,j) . Gated pooling introduces a parameterized gate:
+Gated(i,j) = gij max(Ti:j + (1 _ gij) mean(Ti:j )
+(37)
+where 9ij = o(w Ci:j avg + b) is a sigmoid gate computed from the average span embedding 55, 76] .
+Span Alignment Loss Coefficient B1 € [0.0,1.5]: Scales the auxiliary loss Lalign encouraging ground-truth span alignment. Higher values steer controller logits toward externally annotated spans [77].
+31

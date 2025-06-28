@@ -1,0 +1,23 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+(3) Joint contextualization: The final sequence consists of original L tokens and K span em - beddings, resulting in (L+ K) total elements. Processing this sequence using standard transformer self-attention [4] yields: O((L + K)?d): Since d is fixed during training, we absorb it into the constant, yielding:
+O((L + K)2).
+Adding all components proves the result.
+Span Scoring
+Span Encoding E5 Classification
+Transformer Integration
+U
+51, ' SK
+Retained spans
+0( Lwmax
+0 ( K d)
+0((L + K)2)
+Runtime Complexity 0(Lvmax ) 0(K d) 0 ( ( ((L + K) )
+Figure 2: Modular runtime decomposition of X-Spanformer's forward pass. Span enumeration and scoring are subquadratic in sequence length L, while span encoding scales linearly with the number of retained spans K Joint contextualization with self-attention dominates the total cost at O((L + K)2).
+Training
+X-Spanformer is trained end-to-end to jointly learn a span scoring function fe RLxd Rlsi and an integration mechanism for incorporating selected spans into the backbone transformer. Given an input sequence % € RLxd the model optimizes a composite objective:
+=
+Ltotal Ltask + B1Lspan + BzLent , where Ltask is a task-specific loss (e-g;, classification or generation) , Lspan aligns predicted spans with interpretable structure, and Lent encourages exploratory routing early in training: The pipeline comprises the following stages:
+Span induction with entropy-regularized scoring: selects meaningful spans via a differ- entiable scoring function augmented with entropy-based exploration [15, 45, 46]. Interpolation-weighted fusion of pooled span encodings: computes an attention-based summary vector $ from the top-ranked span embeddings, inspired by modular controller rout- ing and compositional bottlenecks [43, 28].
+12
+e1,
