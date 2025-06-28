@@ -174,3 +174,4 @@ cython_debug/
 .pypirc
 uv.lock
 x_spanformer/agents/__pycache__/*
+dist
