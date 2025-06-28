@@ -1,0 +1,9 @@
+[project]
+name = "x-spanformer"
+version = "1.0.0"
+description = "Tokenizer-free, span-aware encoder architecture inspired by X-bar theory. Jointly learns segmentation and representation using pointer networks and compositional spans."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pdf2seg>=1.0.1",
+]

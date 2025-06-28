@@ -1,0 +1,15 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+3
+Architecture
+This section formalizes the modular components of X-Spanformer and their interactions within the segmentation pipeline: Each architectural unit is presented with motivation, precise mathematical formulation; and pseudocode where appropriate. We conclude with strategies for integrating outputs into standard transformer encoders, including support for overlapping span interpolation, and a runtime complexity analysis: X-Spanformer is bootstrapped by a compact BPE vocabularyl and produces:
+ranked span set S = {(ik, jk)}K_1' With 1 < ik < jk L. Span embeddings Sikjk € Rd. Soft type distributions type e 4T 2 Pikjk representing modality types such as natural language, code; identifiers; vision; Or audio.
+filtered set S' C S based on learned length constraints:
+Span-level augmentation follows the strategy used in models that embed auxiliary semantic units alongside token streams [15, 5]. Unlike early segmentation-based models that hard-assign phrasal structure [13], we treat spans as latent soft units learned through boundary confidence and pooling: All modules are trained jointly with the downstream encoder.
+3.1 Seed Embeddings and Candidate Set
+The segmentation process begins with a sequence of base representations, or  seed embeddings, which are intended to provide a minimal yet expressive lexical signal for identifying higher-order linguistic structure These embeddings, derived from a lightweight subword tokenizer, anchor the span predictor in a sparse but stable input space.3 Formally; given an input sequence tokenized to L elements, we define the embedding matrix E = [e1, . eL] € RLxd
+where each ei is a token-level embedding, and d is the model's dimensionality: This sequence is processed through a contextualizing encoder: H = Encoder (E) € RLxd
+yielding contextual representations H 3 [h1, - hL]:4 From this, the model constructs a complete candidate set of potential spans:
+C = {(i,j) | 1 <i < j < L}
+We initialize tokenization with SentencePiece [2] or similar to avoid fixed-length subword bias while maintaining fast bootstrapping and ONNX compatibility: This follows principles also found in token-free models such as ByT5 [18] and CANINE [19]. 2 Here, T denotes the T-dimensional probability simplex:  vectors of nonnegative weights summing to one 3 See [2 , 1, 20] for methods on fast and robust subword encoders 4The encoder may be frozen Or fine-tuned and can be lightweight (e.g,, convolutional [20]) or transformer-based [5, 7].
+5

@@ -1,0 +1,25 @@
+X-SPANFORMER
+SPAN-AwARE ENCODER
+bottleneck:  Empirically, this approach improves stability under sparse supervision and yields more interpretable attribution of transformer behavior to compositional units [64]: Optimization Details: All models are trained using AdamW [65] with:
+Cosine learning rate decay with 10% warmup Gradient clipping at ||Vllz 1.0
+Dropout rate of 0.1
+Batch size of 64 (token-aligned)
+Hyperparameter grid search ranges and ablation configurations are provided in Appendix 1 and 33.
+5
+Experiments
+In this section, we analyze the emergent behavior and structural control capacity of the proposed X-Spanformer architecture through a series of controlled experiments. Our objectives are threefold:
+1. To verify that differentiable span selection converges toward semantically meaningful structures under entropy annealing; 2_ To evaluate the fidelity and variance of controller vector injection across multiple integration pathways;
+3. To probe the interpretability and stability of span routing under synthetically constructed and naturalistic corpora.
+Unlike traditional benchmark-driven evaluations, our methodology emphasizes structural diagnos- tics and interpretability over end-task performance. This is consistent with experimental paradigms in latent structure induction [55, 63, 50], probing analysis [64, 66], and entropy-regularized repre sentation learning [53, 52].
+We denote:
+D = {(z() , y())}N1: training corpus with optional supervision; fe: differentiable span scorer;
+9a: controller aggregator; S: controller vector, computed as & relevance-weighted sum over pooled span embeddings:
+K
+S
+@kSk k=l
+(29 _
+exp(Wk: _ K W=1 exp(we)
+Uk = gq (8k, Ok, confk)
+(30)
+21
+@k

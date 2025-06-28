@@ -35,6 +35,26 @@ For full details, see [`/examples`](./examples) and the companion compiler agent
 
 ---
 
+## 🧪 Data Preprocessing
+
+To generate semantically coherent pretraining data without tokenizers, we use the [`pdf2seg`](https://pypi.org/project/pdf2seg) package:
+
+```bash
+pip install pdf2seg
+```
+
+Process scanned or structured PDFs into entropy-minimized text spans:
+
+```bash
+pdf2seg -i input.pdf -o raw_spans/
+```
+
+Use the output as either raw training strings (for unsupervised Phase I) or compile with `oxbar` to produce labeled span records.
+
+This enables X-Spanformer to bootstrap span boundaries from real-world documents with high structural signal, without relying on brittle tokenization.
+
+---
+
 ## 🧰 Repository Structure
 
 ```
@@ -59,15 +79,27 @@ x-spanformer/
 
 ---
 
-## 🔧 Compiler Agent: ox-bar
+## 🔧 Compiler Agents
 
-Use [`oxbar`](https://github.com/.../ox-bar) to generate span-labeled training records directly from raw strings or whitepaper paragraphs using local LLMs (e.g., LLaMA 3.3 via Ollama):
+### [`oxbar`](https://github.com/.../ox-bar)
+
+Generate structured span-labeled records using local LLMs:
 
 ```bash
 oxbar compile input.txt --type mixed --output spans.json
 ```
 
-Includes validation, confidence scoring, and fallback retry logic.
+Supports retry logic, confidence scoring, and mode switching.
+
+### [`pdf2seg`](https://pypi.org/project/pdf2seg)
+
+Segment PDF documents into structured clauses using OCR + spaCy:
+
+```bash
+pdf2seg -i paper.pdf -o spans/
+```
+
+Ideal for extracting domain-specific clause boundaries from scientific papers, REPL transcripts, or code-heavy PDFs.
 
 ---
 
@@ -75,7 +107,7 @@ Includes validation, confidence scoring, and fallback retry logic.
 
 - **Linguistics:** X-bar phrase theory, projection-based syntax, span recursion  
 - **Biomimicry:** Mycelial routing, compositional inference, entropy-driven adaptation  
-- **Transformer Augmentation:** Span-aware attention, controller modulation, dropout-driven routing
+- **Transformer Augmentation:** Span-aware attention, controller modulation, dropout-driven routing  
 
 ---
 
@@ -99,7 +131,7 @@ Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) to onboard.
 This research and code are licensed under the **Creative Commons Attribution 4.0 International (CC BY 4.0)**.
 
 ```
-Copyright (c) 2025
+Copyright (c) 2025  
 TAU SYSTEMS by NAXZYU CORP.
 ```
 
