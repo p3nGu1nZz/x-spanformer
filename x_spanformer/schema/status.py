@@ -1,5 +1,5 @@
 from typing import List, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class RecordStatus(BaseModel):
@@ -17,7 +17,7 @@ class RecordStatus(BaseModel):
         ]
     ] = Field(default_factory=list, description="Ordered log of completed preprocessing/enrichment stages")
 
-    class Config:
+    model_config = ConfigDict(
         json_schema_extra = {
             "example": {
                 "stages": [
@@ -28,3 +28,4 @@ class RecordStatus(BaseModel):
                 ]
             }
         }
+    )

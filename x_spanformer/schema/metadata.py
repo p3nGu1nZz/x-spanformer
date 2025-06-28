@@ -1,5 +1,5 @@
 from typing import Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 class RecordMeta(BaseModel):
     tags: Optional[List[str]] = Field(default_factory=list, description="Arbitrary tags (e.g. domain, quality, source)")
@@ -9,7 +9,7 @@ class RecordMeta(BaseModel):
     source_file: Optional[str] = Field(None, description="Original filename or source document ID (e.g. from adjacent metadata file)")
     notes: Optional[str] = Field(None, description="Optional textual explanation or scoring justification (e.g. from selfcrit)")
 
-    class Config:
+    model_config = ConfigDict(
         json_schema_extra = {
             "example": {
                 "tags": ["math", "multilingual", "noisy"],
@@ -20,3 +20,4 @@ class RecordMeta(BaseModel):
                 "notes": "short segment; missing verb — marked 'revise'"
             }
         }
+    )

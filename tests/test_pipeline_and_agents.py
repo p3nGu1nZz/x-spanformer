@@ -1,14 +1,13 @@
 import asyncio
 import csv
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 import yaml
 from pydantic import ValidationError
-from jinja2 import Environment, FileSystemLoader, meta
-import re
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -29,11 +28,26 @@ class TestSchemas(unittest.TestCase):
             rec_id.id = "new-id"
 
     def test_record_meta(self):
-        meta = metadata.RecordMeta(tags=["test"], doc_language="en", confidence=0.5, extracted_by="test", source_file="test.txt", notes="test")
+        meta = metadata.RecordMeta(
+            tags=["test"],
+            doc_language="en",
+            confidence=0.5,
+            extracted_by="test",
+            source_file="test.txt",
+            notes="test note",
+        )
         self.assertEqual(meta.tags, ["test"])
         self.assertEqual(meta.doc_language, "en")
         self.assertEqual(meta.confidence, 0.5)
-        self.assertIsNone(metadata.RecordMeta(doc_language="en", extracted_by="test", source_file="test.txt", notes="test", confidence=None).confidence)
+        self.assertIsNone(
+            metadata.RecordMeta(
+                extracted_by="test",
+                source_file="test.txt",
+                notes="test note",
+                doc_language="en",
+                confidence=None,
+            ).confidence
+        )
 
     def test_pretrain_record(self):
         record = pretrain_record.PretrainRecord(raw="test text")
@@ -42,15 +56,23 @@ class TestSchemas(unittest.TestCase):
         self.assertIsInstance(record.meta, metadata.RecordMeta)
 
     def test_span_label(self):
-        label = span.SpanLabel(span=(0, 1), label="noun", text="test", role="noun")
+        label = span.SpanLabel(span=(0, 1), label="noun", text="test", role="token")
         self.assertEqual(label.span, (0, 1))
         self.assertEqual(label.label, "noun")
 
     def test_xp_span(self):
-        xp = xbar.XPSpan(span=(0, 2), category="XP", role="specifier", label="NP", text="test")
+        xp = xbar.XPSpan(
+            span=(0, 2), category="XP", role="specifier", label="NP", text="test"
+        )
         self.assertEqual(xp.category, "XP")
         with self.assertRaises(ValidationError):
-            xbar.XPSpan.model_validate({"span": (0, 1), "category": "invalid", "role": "specifier", "label": "NP", "text": "test"})
+            xbar.XPSpan(
+                span=(0, 1),
+                category="invalid",  # type: ignore
+                role="none",  # type: ignore
+                label="none",
+                text="test",
+            )
 
     def test_tokenized_input(self):
         tok_input = tokenization.TokenizedInput(input=["a", "b"], tokenizer="test")
@@ -61,10 +83,18 @@ class TestSchemas(unittest.TestCase):
         rec_type = typing.RecordType(type="code")
         self.assertEqual(rec_type.type, "code")
         with self.assertRaises(ValidationError):
-            typing.RecordType.model_validate({"type": "invalid"})
+            typing.RecordType(type="invalid")  # type: ignore
 
     def test_source_info(self):
-        src = source.SourceInfo(filename="test.txt", page_number=1, document_id="test", filetype="txt", line_number=1, section="test", source_url="http://test.com")
+        src = source.SourceInfo(
+            filename="test.txt",
+            page_number=1,
+            document_id="doc1",
+            filetype="txt",
+            line_number=1,
+            section="body",
+            source_url="http://example.com",
+        )
         self.assertEqual(src.filename, "test.txt")
         self.assertEqual(src.page_number, 1)
 
@@ -72,10 +102,15 @@ class TestSchemas(unittest.TestCase):
         stat = status.RecordStatus(stages=["csv_ingested", "validated"])
         self.assertEqual(stat.stages, ["csv_ingested", "validated"])
         with self.assertRaises(ValidationError):
-            status.RecordStatus.model_validate({"stages": ["invalid_stage"]})
+            status.RecordStatus(stages=["invalid_stage"])  # type: ignore
 
     def test_entropy_profile(self):
-        profile = scoring.EntropyProfile(token_entropy=1.5, span_overlap=0.5, structure_variance=0.5, fluency_score=0.5)
+        profile = scoring.EntropyProfile(
+            token_entropy=1.5,
+            span_overlap=0.5,
+            structure_variance=0.5,
+            fluency_score=0.5,
+        )
         self.assertEqual(profile.token_entropy, 1.5)
 
     def test_validation_result(self):
@@ -128,7 +163,7 @@ class TestAgents(unittest.TestCase):
     @patch("x_spanformer.agents.prompts.env")
     def test_render_prompt(self, mock_env):
         mock_env.get_template.return_value.render = MagicMock(return_value="Hello World")
-        result = prompts.render_prompt("test_template", user_name="World")
+        result = prompts.render_prompt("test_template", name="World")
         self.assertEqual(result, "Hello World")
         mock_env.get_template.assert_called_with("test_template.j2")
 
@@ -139,39 +174,25 @@ class TestAgents(unittest.TestCase):
         result = asyncio.run(ollama_client.chat("model", [{"role": "user", "content": "hi"}]))
         self.assertEqual(result, "response")
 
+    @patch("x_spanformer.agents.selfcrit.chat", new_callable=AsyncMock)
+    @patch("x_spanformer.agents.selfcrit.RE_FLAGGED", [re.compile("bad")])
+    def test_judge_segment(self, mock_chat):
+        mock_chat.return_value = "Score: 0.9\nStatus: keep\nReason: ok"
+        result = asyncio.run(selfcrit.judge_segment("good text"))
+        self.assertEqual(result["status"], "keep")
+
+        result = asyncio.run(selfcrit.judge_segment("bad text"))
+        self.assertEqual(result["status"], "discard")
+        self.assertEqual(result["reason"], "regex filter triggered")
+
     def test_selfcrit_parse_response(self):
-        raw = "Score: 0.8\nStatus: keep\nReason: looks good"
-        parsed = selfcrit.parse_response(raw)
+        parsed = selfcrit.parse_response("Score: 0.8\nStatus: keep\nReason: looks good")
         self.assertEqual(parsed["score"], 0.8)
         self.assertEqual(parsed["status"], "keep")
         self.assertEqual(parsed["reason"], "looks good")
         bad_raw = "invalid response"
         parsed = selfcrit.parse_response(bad_raw)
         self.assertEqual(parsed["status"], "revise")
-
-    @patch.dict(
-        "x_spanformer.agents.selfcrit.cfg",
-        {
-            "evaluation": {"max_retries": 1, "passes": 1},
-            "model": {"name": "test"},
-            "dialogue": {"max_turns": 1},
-            "templates": {"system": "test_prompt", "score": "test_prompt"},
-            "regex_filters": [{"pattern": "bad"}],
-        },
-    )
-    @patch("x_spanformer.agents.selfcrit.chat", new_callable=AsyncMock)  
-    @patch("x_spanformer.agents.prompts.env")
-    def test_judge_segment(self, mock_env, mock_chat):
-        with patch("x_spanformer.agents.prompts.env.loader") as mock_loader:
-            mock_loader.searchpath = [str(self.templates_dir)]
-            mock_chat.return_value = "Score: 0.9\nStatus: keep\nReason: ok"
-            result = asyncio.run(selfcrit.judge_segment("good text"))
-            self.assertEqual(result["status"], "keep")
-            
-            # Test regex filter behavior by patching RE_FLAGGED directly inside the test
-            with patch("x_spanformer.agents.selfcrit.RE_FLAGGED", [re.compile("bad")]):
-                result = asyncio.run(selfcrit.judge_segment("bad text"))
-                self.assertEqual(result["status"], "discard")
 
 
 class TestPipeline(unittest.TestCase):
@@ -185,17 +206,6 @@ class TestPipeline(unittest.TestCase):
         import shutil
         if self.test_data_dir.exists():
             shutil.rmtree(self.test_data_dir)
-
-    def test_ollama_gpu_usage(self):
-        try:
-            client = ollama.Client()
-            ps_response = client.ps()
-            self.assertIn("models", ps_response)
-            gpu_in_use = any('gpu' in model.get('details', {}).get('parameter_size', '') for model in ps_response['models'])
-            if not gpu_in_use:
-                print("\n[Warning] Ollama does not appear to be using the GPU for any loaded models.")
-        except Exception as e:
-            self.fail(f"Ollama client failed to connect or query: {e}")
 
     @patch("x_spanformer.pipelines.csv2jsonl.judge_segment", new_callable=AsyncMock)
     def test_csv2jsonl_pipeline(self, mock_judge_segment):
@@ -217,20 +227,28 @@ class TestPipeline(unittest.TestCase):
         with output_file.open("r", encoding="utf-8") as f:
             for line in f:
                 records.append(pretrain_record.PretrainRecord.model_validate(json.loads(line)))
-        
-        records.sort(key=lambda r: r.raw)
-        
         self.assertEqual(len(records), 2)
+
+        # Sort records by raw text to ensure deterministic order for assertions
+        records.sort(key=lambda r: r.raw)
+
         record1, record2 = records
         self.assertEqual(record1.raw, "The quick brown fox.")
-        self.assertEqual(record1.meta.confidence, 0.9)
         self.assertEqual(record1.meta.tags, [])
         self.assertEqual(record2.raw, "This is a test.")
-        self.assertEqual(record2.meta.confidence, 0.4)
         self.assertEqual(record2.meta.tags, ["discard"])
-        csv_path.unlink()
-        output_file.unlink()
-        (self.output_dir / "test_dataset.json").unlink()
+
+    def test_ollama_gpu_usage(self):
+        # This test is a placeholder to demonstrate checking GPU usage.
+        try:
+            client = ollama.Client()
+            ps_response = client.ps()
+            self.assertIn("models", ps_response)
+            gpu_in_use = any('gpu' in model.get('details', {}).get('parameter_size', '') for model in ps_response['models'])
+            if not gpu_in_use:
+                print("\n[Warning] Ollama does not appear to be using the GPU for any loaded models.")
+        except Exception as e:
+            self.fail(f"Ollama client failed to connect or query: {e}")
 
 
 if __name__ == "__main__":

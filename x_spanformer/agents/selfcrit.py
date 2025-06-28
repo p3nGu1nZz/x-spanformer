@@ -41,7 +41,7 @@ async def judge_segment(text: str) -> dict:
 			c.print(f"[red]❌ Regex filter matched:[/] [dim]{rx.pattern}[/] — span discarded")
 			return {"score": 0.1, "status": "discard", "reason": "regex filter triggered"}
 
-	system = render_prompt(cfg["templates"]["system"])
+	system = render_prompt(cfg["templates"]["system"], text=text)
 	model = cfg["model"]["name"]
 	temp = cfg["model"].get("temperature", 0.2)
 	passes = cfg["evaluation"]["passes"]

@@ -1,5 +1,5 @@
 from typing import Literal, Optional, Tuple
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class XPSpan(BaseModel):
@@ -16,7 +16,7 @@ class XPSpan(BaseModel):
     label: Optional[str] = Field(None, description="Optional syntactic label (e.g., 'NP', 'VP', 'PP')")
     text: Optional[str] = Field(None, description="Human-readable span content (optional, for debugging)")
 
-    class Config:
+    model_config = ConfigDict(
         json_schema_extra = {
             "example": {
                 "span": [2, 5],
@@ -26,3 +26,4 @@ class XPSpan(BaseModel):
                 "text": "the quick fox"
             }
         }
+    )

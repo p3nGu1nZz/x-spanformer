@@ -1,5 +1,5 @@
 from typing import List, Optional, Tuple, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class SpanLabel(BaseModel):
@@ -8,7 +8,7 @@ class SpanLabel(BaseModel):
     role: Optional[str] = Field(None, description="Functional role within context (e.g., 'subject', 'assignment')")
     text: Optional[str] = Field(None, description="Span text (redundant with input[span[0]:span[1]+1], but useful for validation/debug)")
 
-    class Config:
+    model_config = ConfigDict(
         json_schema_extra = {
             "example": {
                 "span": [4, 4],
@@ -17,3 +17,4 @@ class SpanLabel(BaseModel):
                 "text": "fox"
             }
         }
+    )

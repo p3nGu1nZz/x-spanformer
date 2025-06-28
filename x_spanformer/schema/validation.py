@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class ValidationIssue(BaseModel):
@@ -12,7 +12,7 @@ class ValidationResult(BaseModel):
     is_valid: bool = Field(..., description="True if the record passed all validation checks")
     issues: List[ValidationIssue] = Field(default_factory=list, description="List of validation issues found")
 
-    class Config:
+    model_config = ConfigDict(
         json_schema_extra = {
             "example": {
                 "is_valid": False,
@@ -30,3 +30,4 @@ class ValidationResult(BaseModel):
                 ]
             }
         }
+    )
