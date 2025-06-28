@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "x-spanformer"
 version = "1.0.0"
@@ -13,7 +17,20 @@ dependencies = [
     "tenacity>=9.1.2",
 ]
 
-[dependency-groups]
+[project.optional-dependencies]
 dev = [
     "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
+    "pytest-xdist>=3.7.0",
 ]
+
+[tool.setuptools]
+packages = ["x_spanformer"]
+
+[dependency-groups]
+dev = [
+    "pytest-xdist>=3.7.0",
+]
+
+[project.scripts]
+csv2jsonl = "x_spanformer.pipelines.csv2jsonl:main"
