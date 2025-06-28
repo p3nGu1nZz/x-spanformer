@@ -7,7 +7,7 @@ from x_spanformer.schema.metadata import RecordMeta
 class PretrainRecord(BaseModel):
     raw: str = Field(..., description="The raw text segment extracted from source material")
     id: Optional[RecordID] = Field(default_factory=RecordID, description="Globally unique record ID")
-    meta: Optional[RecordMeta] = Field(default_factory=lambda: RecordMeta(**{}), description="Optional metadata about the segment")
+    meta: RecordMeta = Field(default_factory=lambda: RecordMeta(**{}), description="Metadata about the segment")
 
     model_config = ConfigDict(
         json_schema_extra = {

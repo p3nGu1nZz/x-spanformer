@@ -12,20 +12,42 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import langid
 from rich.console import Console
 
-from x_spanformer.agents.config_loader import load_selfcrit_config
 from x_spanformer.agents.selfcrit import judge_segment
 from x_spanformer.schema.metadata import RecordMeta
 from x_spanformer.schema.pretrain_record import PretrainRecord
 
 c = Console()
 
-def echo_config(cfg: dict):
-    c.print("[bold cyan]═══ SelfCrit Configuration ═══[/bold cyan]")
-    c.print(f"[white]Model:[/white] [green]{cfg['model']['name']}[/green] @ T={cfg['model']['temperature']}")
-    c.print(f"[white]Voting:[/white] [yellow]{cfg['evaluation']['passes']}[/yellow] passes | Retry: [yellow]{cfg['evaluation']['max_retries']}[/yellow]")
-    c.print(f"[white]Regex filters:[/white] [blue]{len(cfg.get('regex_filters', []))}[/blue]")
-    c.print(f"[white]Templates:[/white] [cyan]{', '.join(cfg['templates'].keys())}[/cyan]")
-    c.print()
+def run_pdf2seg(pdf_file: Path, output_dir: Path) -> Optional[Path]:
+    """Run pdf2seg on a PDF file to generate CSV output."""
+    try:
+        import pdf2seg
+        c.print(f"[yellow]Running pdf2seg on {pdf_file.name}...[/yellow]")
+        
+        output_dir.mkdir(parents=True, exist_ok=True)
+        csv_file = output_dir / f"{pdf_file.stem}.csv"
+        
+        # Load spacy model
+        nlp = pdf2seg.load("en")
+        
+        # Process PDF: convert to images, OCR, extract spans, save CSV
+        pdf2seg.pdf(str(pdf_file), output_dir)
+        spans = pdf2seg.extract(str(pdf_file), str(output_dir), nlp)
+        meta = {"tool": "pdf2seg", "source": pdf_file.name}
+        pdf2seg.save_csv(spans, str(csv_file), pdf_file.name, meta)
+        
+        if csv_file.exists():
+            c.print(f"[green]✔ Generated CSV: {csv_file.name}[/green]")
+            return csv_file
+        else:
+            c.print(f"[red]⚠ Expected CSV file not found: {csv_file.name}[/red]")
+            return None
+    except ImportError:
+        c.print(f"[red]pdf2seg package not found. Please ensure pdf2seg is installed.[/red]")
+        return None
+    except Exception as e:
+        c.print(f"[red]Error running pdf2seg on {pdf_file.name}: {e}[/red]")
+        return None
 
 def manifest(p: Path):
     stem = p.stem
@@ -108,20 +130,17 @@ def rows(p: Path, col: str, w: int, cfg: dict, save_interval: int = 10, output_p
                     confidence=r.get("score"), tags=[tag] if tag != "keep" else [], notes=r.get("reason")
                 )))
                 
-                # Incremental save check
                 if save_interval > 0 and output_path and (i + 1) % save_interval == 0:
                     save_incremental(recs)
                     
             except asyncio.CancelledError:
                 c.print("[yellow]Processing cancelled.[/yellow]")
-                # Save what we have so far
                 if save_interval > 0 and output_path and recs:
                     save_incremental(recs)
                 break
             except Exception as e:
                 c.print(f"[red]Error in main loop for segment {i + 1}:[/red] {str(e)}")
 
-        # Final incremental save if there are remaining records
         if save_interval > 0 and output_path and recs and len(recs) % save_interval != 0:
             save_incremental(recs)
 
@@ -150,28 +169,44 @@ def show_summary(name: str, stats: Counter, reasons: list[str]):
     c.print()
 
 def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: int = 10):
-    cfg = load_selfcrit_config()
-    echo_config(cfg)
+    # Config is already loaded by selfcrit module at import time
+    # Just show a simplified configuration summary
+    c.print("[bold cyan]═══ SelfCrit Configuration ═══[/bold cyan]")
+    c.print("[green]✔ SelfCrit agent ready for evaluation[/green]")
+    c.print()
 
-    csvs = [i] if i.is_file() else sorted(i.glob("*.csv"))
-    if not csvs:
-        c.print(f"[red]⚠ No CSVs found in {i}[/red]")
+    pdfs = [i] if i.is_file() and i.suffix.lower() == '.pdf' else sorted(i.glob("*.pdf"))
+    if not pdfs:
+        c.print(f"[red]⚠ No PDFs found in {i}[/red]")
         return
 
     if not i.is_file():
-        c.print(f"[bold magenta]Found {len(csvs)} CSV files:[/bold magenta]")
-        for x in csvs:
+        c.print(f"[bold magenta]Found {len(pdfs)} PDF files:[/bold magenta]")
+        for x in pdfs:
             c.print(f"[cyan]• {x.name}[/cyan]")
     else:
-        c.print(f"[bold magenta]Processing single CSV file: {i.name}[/bold magenta]")
+        c.print(f"[bold magenta]Processing single PDF file: {i.name}[/bold magenta]")
     c.print()
 
     base = n.strip().removesuffix(".json").removesuffix(".jsonl") or "dataset"
     
+    temp_csv_dir = o / "temp_csv"
+    temp_csv_dir.mkdir(parents=True, exist_ok=True)
+    
+    csvs = []
+    for pdf in pdfs:
+        csv_file = run_pdf2seg(pdf, temp_csv_dir)
+        if csv_file:
+            csvs.append(csv_file)
+    
+    if not csvs:
+        c.print(f"[red]⚠ No CSV files generated from PDFs[/red]")
+        return
+    
     allr = []
     for src in csvs:
         c.print(f"[white]→ Processing CSV: [cyan]{src.name}[/cyan][/white]")
-        r = rows(src, f, w, cfg, save_interval, o, base)
+        r = rows(src, f, w, {}, save_interval, o, base)  # Pass empty dict since regex_filters are handled in selfcrit module
         if r:
             allr.extend(r)
             c.print(f"[green]✔ Successfully processed: {src.name}[/green]")

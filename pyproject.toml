@@ -20,4 +20,6 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["x_spanformer"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["x_spanformer*"]
