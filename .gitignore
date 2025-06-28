@@ -175,3 +175,4 @@ cython_debug/
 out_dir
 data
 uv.lock
+x_spanformer/agents/__pycache__/*
