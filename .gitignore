@@ -175,3 +175,4 @@ cython_debug/
 uv.lock
 x_spanformer/agents/__pycache__/*
 dist
+data/pretraining/out/csv/*

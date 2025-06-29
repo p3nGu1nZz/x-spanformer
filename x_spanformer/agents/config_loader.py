@@ -6,7 +6,14 @@ from rich.table import Table
 
 c = Console()
 
-def load_selfcrit_config(name: str = "selfcrit.yaml") -> dict:
+def load_selfcrit_config(name: str = "selfcrit.yaml", quiet: bool = False) -> dict:
+	"""
+	Load the agent configuration file and render a summary table.
+	
+	Args:
+		config_name: The name of the config file to load.
+		quiet: If True, suppresses printing the config table.
+	"""
 	p = Path(__file__).parent / "config" / name
 	c.rule(f"[bold cyan]Loading SelfCrit Agent Config")
 
@@ -21,17 +28,19 @@ def load_selfcrit_config(name: str = "selfcrit.yaml") -> dict:
 
 	c.print(f"[green]✔ Successfully parsed:[/] [white]{name}[/white]")
 
-	tbl = Table(show_header=True, header_style="bold magenta")
-	tbl.add_column("Field", style="dim")
-	tbl.add_column("Value")
+	if not quiet:
+		tbl = Table(show_header=True, header_style="bold magenta")
+		tbl.add_column("Field", style="dim")
+		tbl.add_column("Value")
 
-	tbl.add_row("Agent", cfg.get("agent_name", "—"))
-	tbl.add_row("Model", cfg["model"]["name"])
-	tbl.add_row("Passes", str(cfg["evaluation"]["passes"]))
-	tbl.add_row("Retries", str(cfg["evaluation"]["max_retries"]))
-	tbl.add_row("Max Turns", str(cfg["dialogue"]["max_turns"]))
-	tbl.add_row("Regex Filters", str(len(cfg.get("regex_filters", []))))
-	tbl.add_row("Templates", ", ".join(cfg["templates"].keys()))
+		tbl.add_row("Agent", cfg.get("agent_name", "—"))
+		tbl.add_row("Model", cfg["model"]["name"])
+		tbl.add_row("Passes", str(cfg["evaluation"]["passes"]))
+		tbl.add_row("Retries", str(cfg["evaluation"]["max_retries"]))
+		tbl.add_row("Max Turns", str(cfg["dialogue"]["max_turns"]))
+		tbl.add_row("Regex Filters", str(len(cfg.get("regex_filters", []))))
+		tbl.add_row("Templates", ", ".join(cfg["templates"].keys()))
 
-	c.print(tbl)
+		c.print(tbl)
+	
 	return cfg

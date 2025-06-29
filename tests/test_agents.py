@@ -6,12 +6,27 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import yaml
+from x_spanformer.agents import (
+    config_loader,
+    ollama_client,
+    prompts,
+    selfcrit,
+)
+from x_spanformer.agents.dialogue import DialogueManager
+from x_spanformer.agents.session import (
+    CritiqueSession,
+    ImproveSession,
+    JudgeSession,
+)
+
+# Mock the rich console to prevent printing during tests
+from rich.console import Console
+
+console = Console()
+console.print = lambda *args, **kwargs: None
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from x_spanformer.agents import (
-    config_loader, dialogue, ollama_client, prompts, selfcrit
-)
 
 
 class TestAgents(unittest.TestCase):
@@ -47,7 +62,7 @@ class TestAgents(unittest.TestCase):
         self.assertEqual(cfg["agent_name"], "test_agent")
 
     def test_dialogue_manager(self):
-        dm = dialogue.DialogueManager(max_turns=1)
+        dm = DialogueManager(max_turns=1)
         dm.add("user", "1")
         dm.add("assistant", "2")
         dm.add("user", "3")
@@ -62,8 +77,8 @@ class TestAgents(unittest.TestCase):
         self.assertEqual(result, "Hello World")
         mock_env.get_template.assert_called_with("test_template.j2")
 
-    @patch("x_spanformer.agents.ollama_client.AsyncClient")
-    def test_ollama_client_chat(self, mock_client):
+    @patch("x_spanformer.agents.ollima_client.AsyncClient")
+    def test_ollima_client_chat(self, mock_client):
         mock_response = {"message": {"content": "response"}}
         mock_client.return_value.chat = AsyncMock(return_value=mock_response)
         result = asyncio.run(

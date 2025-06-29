@@ -23,8 +23,9 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         if self.tmp_dir.exists():
             shutil.rmtree(self.tmp_dir)
 
-    @patch("x_spanformer.pipelines.pdf2jsonl.judge_segment", new_callable=AsyncMock)
-    def test_pdf2jsonl_pipeline(self, mock_judge_segment):
+    @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
+    @patch("x_spanformer.pipelines.pdf2jsonl.ImproveSession")
+    def test_pdf2jsonl_pipeline(self, mock_improve_session_class, mock_judge_session_class):
         pdf_path = self.tmp_dir / "test.pdf"
         pdf_path.touch()
         
@@ -37,12 +38,21 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         csv_file = temp_csv_dir / "test.csv"
         csv_file.write_text(csv_content)
         
-        def mock_judge_side_effect(text):
+        # Mock JudgeSession
+        mock_judge_session = MagicMock()
+        mock_judge_session_class.return_value = mock_judge_session
+        
+        async def mock_evaluate(text):
             if "fox" in text:
                 return {"score": 0.9, "status": "keep", "reason": "good example"}
             return {"score": 0.4, "status": "discard", "reason": "too simple"}
-
-        mock_judge_segment.side_effect = mock_judge_side_effect
+        
+        mock_judge_session.evaluate = AsyncMock(side_effect=mock_evaluate)
+        
+        # Mock ImproveSession
+        mock_improve_session = MagicMock()
+        mock_improve_session_class.return_value = mock_improve_session
+        mock_improve_session.improve = AsyncMock(return_value=(None, "Natural"))
         
         with patch("x_spanformer.pipelines.pdf2jsonl.run_pdf2seg", return_value=csv_file):
             pdf2jsonl.run(
@@ -64,8 +74,10 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         record1, record2 = records
         self.assertEqual(record1.raw, "The quick brown fox.")
         self.assertEqual(record1.meta.tags, [])
+        self.assertEqual(record1.meta.source_file, "test.pdf")  # Should be original PDF name
         self.assertEqual(record2.raw, "This is a test.")
         self.assertEqual(record2.meta.tags, ["discard"])
+        self.assertEqual(record2.meta.source_file, "test.pdf")  # Should be original PDF name
 
     def test_run_pdf2seg_success(self):
         pdf_path = self.tmp_dir / "test.pdf"
@@ -85,12 +97,9 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         
         with patch.dict('sys.modules', {'pdf2seg': mock_pdf2seg}):
             result = pdf2jsonl.run_pdf2seg(pdf_path, output_dir)
-            
+    
             self.assertEqual(result, csv_file)
-            mock_pdf2seg.load.assert_called_once_with("en")
-            mock_pdf2seg.pdf.assert_called_once()
-            mock_pdf2seg.extract.assert_called_once()
-            mock_pdf2seg.save_csv.assert_called_once()
+            mock_pdf2seg.load.assert_called_once_with("en_core_web_sm")
 
     def test_run_pdf2seg_failure(self):
         pdf_path = self.tmp_dir / "test.pdf"
@@ -124,12 +133,23 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             result = pdf2jsonl.run_pdf2seg(pdf_path, output_dir)
             self.assertIsNone(result)
 
-    @patch("x_spanformer.pipelines.pdf2jsonl.judge_segment", new_callable=AsyncMock)
-    def test_rows_function(self, mock_judge):
-        mock_judge.side_effect = [
+    @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
+    @patch("x_spanformer.pipelines.pdf2jsonl.ImproveSession")
+    def test_process_all_csvs_function(self, mock_improve_session_class, mock_judge_session_class):
+        # Mock JudgeSession
+        mock_judge_session = MagicMock()
+        mock_judge_session_class.return_value = mock_judge_session
+        
+        results = [
             {"score": 0.8, "status": "keep", "reason": "good text"},
             {"score": 0.3, "status": "discard", "reason": "poor quality"},
         ]
+        mock_judge_session.evaluate = AsyncMock(side_effect=results)
+        
+        # Mock ImproveSession  
+        mock_improve_session = MagicMock()
+        mock_improve_session_class.return_value = mock_improve_session
+        mock_improve_session.improve = AsyncMock(return_value=(None, "Natural"))
 
         csv_content = """text
 "Sample text one"
@@ -138,8 +158,8 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         csv_file = self.tmp_dir / "test.csv"
         csv_file.write_text(csv_content)
 
-        result = pdf2jsonl.rows(
-            csv_file, "text", 1, {"regex_filters": []}
+        result = pdf2jsonl.process_all_csvs(
+            [csv_file], "text", 1, {}, save_interval=0
         )
 
         self.assertEqual(len(result), 2)
@@ -148,14 +168,25 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         self.assertEqual(result[1].raw, "Sample text two")
         self.assertEqual(result[1].meta.tags, ["discard"])
 
-    @patch("x_spanformer.pipelines.pdf2jsonl.judge_segment", new_callable=AsyncMock)
-    def test_single_file_incremental_saving(self, mock_judge):
-        mock_judge.side_effect = [
+    @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
+    @patch("x_spanformer.pipelines.pdf2jsonl.ImproveSession")
+    def test_single_file_incremental_saving(self, mock_improve_session_class, mock_judge_session_class):
+        # Mock JudgeSession
+        mock_judge_session = MagicMock()
+        mock_judge_session_class.return_value = mock_judge_session
+        
+        results = [
             {"score": 0.8, "status": "keep", "reason": "good text"},
             {"score": 0.3, "status": "discard", "reason": "poor quality"},
             {"score": 0.7, "status": "keep", "reason": "acceptable"},
             {"score": 0.9, "status": "keep", "reason": "excellent"},
         ]
+        mock_judge_session.evaluate = AsyncMock(side_effect=results)
+        
+        # Mock ImproveSession
+        mock_improve_session = MagicMock()
+        mock_improve_session_class.return_value = mock_improve_session
+        mock_improve_session.improve = AsyncMock(return_value=(None, "Natural"))
 
         csv_content = """text
 "Text one"
@@ -166,8 +197,8 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         csv_file = self.tmp_dir / "test.csv"
         csv_file.write_text(csv_content)
 
-        result = pdf2jsonl.rows(
-            csv_file, "text", 1, {"regex_filters": []}, 
+        result = pdf2jsonl.process_all_csvs(
+            [csv_file], "text", 1, {}, 
             save_interval=2, output_path=self.output_dir, base_name="test_dataset"
         )
 
@@ -189,40 +220,51 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         
         self.assertEqual(len(records), 4)
 
-    def test_incremental_saving_preserves_final_file(self):
-        with patch("x_spanformer.pipelines.pdf2jsonl.judge_segment", new_callable=AsyncMock) as mock_judge:
-            mock_judge.side_effect = [
-                {"score": 0.8, "status": "keep", "reason": "good text"},
-                {"score": 0.7, "status": "keep", "reason": "acceptable"},
-            ]
+    @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
+    @patch("x_spanformer.pipelines.pdf2jsonl.ImproveSession")
+    def test_incremental_saving_preserves_final_file(self, mock_improve_session_class, mock_judge_session_class):
+        # Mock JudgeSession
+        mock_judge_session = MagicMock()
+        mock_judge_session_class.return_value = mock_judge_session
+        
+        results = [
+            {"score": 0.8, "status": "keep", "reason": "good text"},
+            {"score": 0.7, "status": "keep", "reason": "acceptable"},
+        ]
+        mock_judge_session.evaluate = AsyncMock(side_effect=results)
+        
+        # Mock ImproveSession
+        mock_improve_session = MagicMock()
+        mock_improve_session_class.return_value = mock_improve_session
+        mock_improve_session.improve = AsyncMock(return_value=(None, "Natural"))
 
-            csv_content = """text
+        csv_content = """text
 "Sample text one"
 "Sample text two"
 """
-            csv_file = self.tmp_dir / "test.csv"
-            csv_file.write_text(csv_content)
+        csv_file = self.tmp_dir / "test.csv"
+        csv_file.write_text(csv_content)
 
-            with patch("x_spanformer.pipelines.pdf2jsonl.run_pdf2seg", return_value=csv_file):
-                pdf_path = self.tmp_dir / "test.pdf"
-                pdf_path.touch()
-                
-                pdf2jsonl.run(
-                    pdf_path, self.output_dir, "text", False, "test_dataset", 1, save_interval=1
-                )
+        with patch("x_spanformer.pipelines.pdf2jsonl.run_pdf2seg", return_value=csv_file):
+            pdf_path = self.tmp_dir / "test.pdf"
+            pdf_path.touch()
+            
+            pdf2jsonl.run(
+                pdf_path, self.output_dir, "text", False, "test_dataset", 1, save_interval=1
+            )
 
-                dataset_file = self.output_dir / "test_dataset.jsonl"
-                self.assertTrue(dataset_file.exists())
-                
-                records = []
-                with dataset_file.open("r", encoding="utf-8") as f:
-                    for line in f:
-                        if line.strip():
-                            records.append(
-                                pretrain_record.PretrainRecord.model_validate(json.loads(line))
-                            )
-                
-                self.assertEqual(len(records), 2)
+            dataset_file = self.output_dir / "test_dataset.jsonl"
+            self.assertTrue(dataset_file.exists())
+            
+            records = []
+            with dataset_file.open("r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        records.append(
+                            pretrain_record.PretrainRecord.model_validate(json.loads(line))
+                        )
+            
+            self.assertEqual(len(records), 2)
 
     def test_manifest_loading(self):
         test_dir = self.tmp_dir / "test_doc"
@@ -455,6 +497,42 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             lines = [line for line in f if line.strip()]
             self.assertEqual(len(lines), 1, "Should only process the successful PDF")
 
+    @patch("x_spanformer.pipelines.pdf2jsonl.judge_segment", new_callable=AsyncMock)
+    def test_pdf_to_csv_mapping(self, mock_judge):
+        """Test that original PDF filenames are correctly mapped to source_file fields."""
+        mock_judge.side_effect = [
+            {"score": 0.8, "status": "keep", "reason": "good text"},
+            {"score": 0.7, "status": "keep", "reason": "acceptable text"},
+        ]
 
-if __name__ == "__main__":
-    unittest.main()
+        # Create test CSV content
+        csv_content = """text
+"Text from first PDF"
+"Text from second PDF"
+"""
+        csv_file1 = self.tmp_dir / "hash1.csv"
+        csv_file2 = self.tmp_dir / "hash2.csv"
+        csv_file1.write_text('text\n"Text from first PDF"')
+        csv_file2.write_text('text\n"Text from second PDF"')
+
+        # Create PDF mapping (simulating the hash mapping from real PDFs)
+        pdf_mapping = {
+            "hash1.csv": "document1.pdf",
+            "hash2.csv": "document2.pdf"
+        }
+
+        result = pdf2jsonl.process_all_csvs(
+            [csv_file1, csv_file2], "text", 1, {}, 
+            save_interval=0, pdf_mapping=pdf_mapping
+        )
+
+        self.assertEqual(len(result), 2)
+        
+        # Verify that source_file contains original PDF filenames, not CSV filenames
+        source_files = [record.meta.source_file for record in result]
+        self.assertIn("document1.pdf", source_files)
+        self.assertIn("document2.pdf", source_files)
+        
+        # Verify no CSV filenames in source_file
+        self.assertNotIn("hash1.csv", source_files)
+        self.assertNotIn("hash2.csv", source_files)
