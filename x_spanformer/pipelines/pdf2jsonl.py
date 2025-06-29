@@ -448,13 +448,43 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
         console.print(f"[yellow]Warning: Input directory is empty: {i}[/yellow]")
         # Allow continuing, as there might be existing CSVs to process
     
+    # First, discover all PDF files
     pdfs = []
     if i.is_dir():
         pdfs = sorted(list(i.glob("*.pdf")))
         if not pdfs:
             console.print(f"[yellow]No PDF files found in {i}[/yellow]")
+        else:
+            console.print(f"[blue]📋 Found {len(pdfs)} PDF files in input directory[/blue]")
+            
+            # Count total pages across all PDFs
+            total_pages = 0
+            unknown_count = 0
+            console.print(f"[cyan]📄 Counting pages in {len(pdfs)} PDF files...[/cyan]")
+            
+            for idx, pdf in enumerate(pdfs, 1):
+                page_count = count_pdf_pages(pdf)
+                if page_count > 0:
+                    total_pages += page_count
+                    console.print(f"[dim]  {idx:2d}. {pdf.name} ({page_count} pages)[/dim]")
+                else:
+                    unknown_count += 1
+                    console.print(f"[dim]  {idx:2d}. {pdf.name}[/dim]")
+            
+            if total_pages > 0:
+                if unknown_count > 0:
+                    console.print(f"[bold blue]📊 Total workload: {total_pages}+ pages across {len(pdfs)} PDF files ({unknown_count} PDFs with unknown page count)[/bold blue]")
+                else:
+                    console.print(f"[bold blue]📊 Total workload: {total_pages} pages across {len(pdfs)} PDF files[/bold blue]")
+            else:
+                console.print(f"[yellow]⚠ Could not determine page counts (PyPDF2 may not be installed)[/yellow]")
     elif i.is_file() and i.suffix.lower() == ".pdf":
         pdfs = [i]
+        page_count = count_pdf_pages(i)
+        if page_count > 0:
+            console.print(f"[blue]📋 Processing single PDF file: {i.name} ({page_count} pages)[/blue]")
+        else:
+            console.print(f"[blue]📋 Processing single PDF file: {i.name}[/blue]")
     else:
         console.print(f"[red]Error: Input must be a PDF file or a directory containing PDF files.[/red]")
         return
@@ -494,12 +524,31 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
     csvs = []
     pdf_mapping = {}
 
-    console.print(f"[bold blue]━━━ Processing {len(pdfs)} PDF files ━━━[/bold blue]")
+    console.print(f"[bold blue]━━━ Converting PDFs to CSV format ━━━[/bold blue]")
+    new_csvs_needed = 0
+    reusable_csvs = 0
+    
+    # First pass: check what needs to be generated
     for pdf in pdfs:
         expected_csv_name = f"{hash_name(pdf)}.csv"
         expected_csv_path = csv_dir / expected_csv_name
+        if not force and expected_csv_path.exists() and expected_csv_path.stat().st_size > 0:
+            reusable_csvs += 1
+        else:
+            new_csvs_needed += 1
+    
+    if reusable_csvs > 0:
+        console.print(f"[green]✔ Can reuse {reusable_csvs} existing CSV files[/green]")
+    if new_csvs_needed > 0:
+        console.print(f"[yellow]⚙ Need to generate {new_csvs_needed} new CSV files[/yellow]")
+    console.print()
 
-        console.print(f"[cyan]→ Processing: {pdf.name}[/cyan]")
+    # Second pass: actually process the PDFs
+    for idx, pdf in enumerate(pdfs, 1):
+        expected_csv_name = f"{hash_name(pdf)}.csv"
+        expected_csv_path = csv_dir / expected_csv_name
+
+        console.print(f"[cyan]→ Processing {idx}/{len(pdfs)}: {pdf.name}[/cyan]")
 
         # Check if CSV already exists for this PDF
         if not force and expected_csv_path.exists() and expected_csv_path.stat().st_size > 0:
@@ -521,7 +570,9 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
         console.print(f"[red]⚠ No CSV files generated from PDFs[/red]")
         return
 
-    console.print(f"[white]→ Processing {len(csvs)} CSV files together[/white]")
+    console.print()
+    console.print(f"[bold blue]━━━ Processing text segments to training data ━━━[/bold blue]")
+    console.print(f"[white]📊 Processing {len(csvs)} CSV files for text extraction and AI analysis[/white]")
 
     # Log the mapping for verification
     console.print("[dim]PDF → CSV mapping:[/dim]")
@@ -629,6 +680,21 @@ def split_long_text(text: str, max_length: int = 512) -> list[str]:
         return []
         
     return final_chunks
+
+
+def count_pdf_pages(pdf_path: Path) -> int:
+    """Count the number of pages in a PDF file using PyPDF2."""
+    try:
+        import PyPDF2
+        with pdf_path.open('rb') as file:
+            reader = PyPDF2.PdfReader(file)
+            return len(reader.pages)
+    except ImportError:
+        # PyPDF2 not available, return unknown count
+        return -1
+    except Exception as e:
+        # If there's any error reading the PDF, return unknown count silently
+        return -1
 
 
 def main():
