@@ -349,7 +349,7 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                     reasons.append(r["reason"])
                     stats[tag] += 1
 
-                    src_file = source_mapping[idx]
+                    src_file = expanded_source_mapping[idx]
 
                     improvement_note = f"Improvement iterations: {improvement_iterations}" if improvement_iterations > 0 else ""
                     combined_notes = f"{r.get('reason', '')} | {improvement_note}".strip(" |") if improvement_note else r.get('reason', '')
