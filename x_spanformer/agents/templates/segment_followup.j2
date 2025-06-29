@@ -3,6 +3,10 @@ Score: {{ prior_score }}
 Status: {{ prior_status }}
 Reason: {{ prior_reason }}
 
+Decision criteria:
+- Score >= {{ threshold }}: Status should be "keep"
+- Score < {{ threshold }}: Status should be "revise" if improvable, "discard" if not
+
 Please reconsider the same segment below, focusing on fluency and structure. Your revised judgment should follow the same format.
 
 Text:

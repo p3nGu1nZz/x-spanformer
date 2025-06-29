@@ -5,6 +5,10 @@ Evaluate segments based on:
 - Compositional value: Does it contain learnable patterns for span segmentation?
 - Training utility: Is it clean, coherent, and representative of target domains (code, natural language, or mixed)?
 
+Decision criteria:
+- Score ≥ {{ threshold }}: Status should be "keep" 
+- Score < {{ threshold }}: Status should be "revise" if improvable, "discard" if not
+
 Output format (exactly 3 lines):
 Score: (float 0.0-1.0, where 1.0 = excellent training data)
 Status: keep | revise | discard

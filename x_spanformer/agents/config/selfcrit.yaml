@@ -1,21 +1,41 @@
-agent_name: selfcrit
+agent_type: selfcrit
 
 model:
-  name: phi4-mini # Ollama model name
-  temperature: 0.2 # Controls output variance
-  max_context_tokens: 131072 # Model’s total memory window
-  max_turn_tokens: 4096 # Max allowed per message (Ollama constraint)
+  name: phi4-mini
+  temperature: 0.2
+  improve_temperature: 0.8
+  max_context_tokens: 131072
+  max_turn_tokens: 4096
+
+processor:
+  max_raw_length: 512
 
 dialogue:
-  max_turns: 12 # Max back-and-forth turns per segment evaluation
-  memory_limit: 24 # Max conversation history messages
-  trim_strategy: rolling # Options: rolling | cutoff | prioritization
+  max_turns: 12
+  memory_limit: 24
+  trim_strategy: rolling
 
-evaluation:
-  passes: 3 # Number of consensus votes per segment
-  max_retries: 3 # Retry threshold for model failures
-  format_enforcement: strict # Require line-structured output
-  enable_followups: true # Enable recursive re-evaluation on "revise"
+critique:
+  threshold: 0.69
+  discard_threshold: 0.25
+  passes: 3
+  max_retries: 3
+  format_enforcement: strict
+  enable_followups: true
+
+judge:
+  model_name: phi4-mini
+  temperature: 0.2
+  max_retries: 3
+  passes: 3
+  threshold: 0.69
+  discard_threshold: 0.25
+
+improver:
+  model_name: phi4-mini
+  temperature: 0.8
+  max_retries: 2
+  max_turns: 6
 
 regex_filters:
 - pattern: "\\b\\w{40,}\\b"
@@ -26,18 +46,17 @@ regex_filters:
 
 templates:
   system: selfcrit_system
-  score: segment_score
+  critique: segment_critique
   followup: segment_followup
   consensus_dispute: segment_consensus_dispute
-  format_hint: segment_format_hint
 
 format:
   expected_fields: [ score, status, reason ]
   strict_line_count: 3
-  parse_strategy: regex # Options: regex | json | lines
+  parse_strategy: regex
 
 logging:
-  verbosity: debug # Options: minimal | full | debug
+  verbosity: debug
   track_consensus: true
   return_all_passes: false
   log_queries: true

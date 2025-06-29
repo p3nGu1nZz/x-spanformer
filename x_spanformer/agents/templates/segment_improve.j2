@@ -5,6 +5,13 @@ Original text:
 {{ text }}
 ---
 
+{% if reason %}
+Previous evaluation feedback:
+{{ reason }}
+
+Please address the specific issues mentioned above while improving the text.
+{% endif %}
+
 First, classify the content type:
 - **Natural**: Prose, documentation, academic text, etc.
 - **Code**: Programming code, markup, configuration files, etc.  

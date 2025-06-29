@@ -39,9 +39,13 @@ class ImproveSession:
             raise
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))
-    async def improve(self, text: str) -> Tuple[Optional[str], Optional[str]]:
+    async def improve(self, text: str, reason: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
         """
         Improve text using AI.
+        
+        Args:
+            text: The text to improve
+            reason: Optional reason from previous evaluation explaining what needs improvement
         
         Returns:
             Tuple of (improved_text, content_type) where:
@@ -54,13 +58,13 @@ class ImproveSession:
             # Use DialogueManager for conversation management
             dialogue = DialogueManager(max_turns=3)
             
-            # Render the improvement prompt
-            prompt = self.template.render(text=text)
+            # Render the improvement prompt with optional reason
+            prompt = self.template.render(text=text, reason=reason)
             dialogue.add("user", prompt)
             
             # Get model configuration
-            model_name = self.cfg["model"]["name"]
-            temperature = self.cfg["model"].get("temperature", 0.3)
+            model_name = self.cfg["improver"]["model_name"]
+            temperature = self.cfg["improver"]["temperature"]
             
             c.print(f"[dim]🔧 Calling improvement model: {model_name}[/dim]")
             

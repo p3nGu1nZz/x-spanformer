@@ -5,6 +5,10 @@ Consider:
 - Is it clean and well-formed for training purposes?
 - Does it represent valuable patterns for learning span composition?
 
+Decision criteria:
+- Score ≥ {{ threshold }}: Status should be "keep" 
+- Score < {{ threshold }}: Status should be "revise" if improvable, "discard" if not
+
 Text segment:
 ---
 {{ text }}

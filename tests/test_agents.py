@@ -38,9 +38,11 @@ class TestAgents(unittest.TestCase):
         self.templates_dir = self.test_dir / "templates"
         self.templates_dir.mkdir(exist_ok=True)
         self.dummy_config = {
-            "agent_name": "test_agent",
+            "agent_type": "test_agent",
             "model": {"name": "test_model", "temperature": 0.1},
-            "evaluation": {"passes": 1, "max_retries": 1},
+            "critique": {"passes": 1, "max_retries": 1, "discard_threshold": 0.25},
+            "judge": {"model_name": "test_model", "temperature": 0.1},
+            "improver": {"model_name": "test_model", "temperature": 0.8},
             "dialogue": {"max_turns": 2},
             "regex_filters": [{"pattern": "badword"}],
             "templates": {"system": "system_prompt", "score": "score_prompt"},
@@ -59,7 +61,7 @@ class TestAgents(unittest.TestCase):
     def test_config_loader(self, mock_path):
         mock_path.return_value.parent.__truediv__.return_value = self.config_dir
         cfg = config_loader.load_selfcrit_config("test.yaml")
-        self.assertEqual(cfg["agent_name"], "test_agent")
+        self.assertEqual(cfg["agent_type"], "test_agent")
 
     def test_dialogue_manager(self):
         dm = DialogueManager(max_turns=1)

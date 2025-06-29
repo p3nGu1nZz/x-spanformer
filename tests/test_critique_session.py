@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from x_spanformer.agents.critique_session import CritiqueSession
+from x_spanformer.agents.session.critique_session import CritiqueSession
 
 
 class TestCritiqueSession(unittest.TestCase):
@@ -10,14 +10,14 @@ class TestCritiqueSession(unittest.TestCase):
         # No setup needed as CritiqueSession is stateless in these tests
         pass
 
-    @patch("x_spanformer.agents.critique_session.load_selfcrit_config")
-    @patch("x_spanformer.agents.critique_session.chat", new_callable=AsyncMock)
+    @patch("x_spanformer.agents.session.critique_session.load_selfcrit_config")
+    @patch("x_spanformer.agents.session.critique_session.chat", new_callable=AsyncMock)
     def test_run_session_early_exit(self, mock_chat, mock_load_config):
         # Test that the session exits early if the model returns a decisive status
         mock_load_config.return_value = {
             "templates": {"system": "system prompt", "score": "score prompt"},
-            "evaluation": {"passes": 1},
-            "model": {"name": "test_model", "temperature": 0.5},
+            "critique": {"passes": 1},
+            "judge": {"model_name": "test_model", "temperature": 0.5},
             "dialogue": {"max_turns": 3},
         }
         mock_chat.side_effect = [

@@ -31,7 +31,7 @@ class JudgeSession:
         if not quiet and not config:
             c.print(f"[bold green]⚖️ JudgeSession initialized[/] with config: [yellow]{config_name}[/yellow]")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))  # TODO: Use cfg["judge"]["max_retries"] 
     async def evaluate(self, text: str) -> dict:
         """Evaluate a text segment for training data suitability."""
         c.print(f"[white]⚖️ Judging text[/] (len={len(text)}): [dim]{text[:80]}{'…' if len(text) > 80 else ''}")
@@ -42,15 +42,15 @@ class JudgeSession:
                 c.print(f"[red]❌ Regex filter triggered:[/] pattern=[dim]{rx.pattern}[/] — auto-discarded")
                 return {"score": 0.1, "status": "discard", "reason": "regex filter triggered"}
 
-        passes = self.cfg["evaluation"]["passes"]
-        model = self.cfg["model"]["name"]
-        temp = self.cfg["model"]["temperature"]
+        passes = self.cfg["judge"]["passes"]
+        model = self.cfg["judge"]["model_name"]
+        temp = self.cfg["judge"]["temperature"]
         max_turns = self.cfg["dialogue"]["max_turns"]
 
         results = []
         for i in range(passes):
             dm = DialogueManager(system_prompt=self.system, max_turns=max_turns)
-            dm.add("user", render_prompt(self.cfg["templates"]["score"], text=text))
+            dm.add("user", render_prompt(self.cfg["templates"]["critique"], text=text))
             c.print(f"[cyan]• Judge Pass {i+1}/{passes}[/] — model=[magenta]{model}[/], T={temp}")
 
             reply = await chat(model=model, conversation=dm.as_messages(), temperature=temp)
@@ -65,7 +65,16 @@ class JudgeSession:
                 return parsed
 
         c.print(f"[yellow]⚖️ No decisive judge agreement — applying consensus resolution[/]")
-        return self.resolve(results)
+        result = self.resolve(results)
+        
+        # Apply discard threshold after consensus - use judge's own threshold
+        discard_threshold = self.cfg.get("judge", {}).get("discard_threshold", 0.25)
+        if result["score"] < discard_threshold:
+            c.print(f"[red]🗑️ Judge override: Score {result['score']:.3f} below discard threshold {discard_threshold:.3f} — status changed to discard[/red]")
+            result["status"] = "discard"
+            result["reason"] = f"judge threshold: score {result['score']:.3f} < {discard_threshold:.3f}"
+        
+        return result
 
     def parse(self, text: str) -> dict:
         """Parse LLM response into structured judgment."""
@@ -73,9 +82,17 @@ class JudgeSession:
         if not m:
             c.print(Panel.fit(f"[bold yellow]⚠ Could not parse judge output:[/]\n[dim]{text.strip()[:160]}", title="Judge Parse Failure", border_style="yellow"))
             return {"score": 0.5, "status": "revise", "reason": "unparseable"}
+        
+        # Normalize status to expected values
+        status = m["status"].strip().lower()
+        if status in ["revision", "revision needed", "revisit"]:
+            status = "revise"
+        elif status not in ["keep", "revise", "discard"]:
+            status = "revise"  # Default fallback
+            
         return {
             "score": float(m["score"]),
-            "status": m["status"].strip().lower(),
+            "status": status,
             "reason": m["reason"].strip()
         }
 
