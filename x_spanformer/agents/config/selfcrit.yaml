@@ -35,7 +35,7 @@ improver:
   model_name: phi4-mini
   temperature: 0.8
   max_retries: 2
-  max_turns: 6
+  max_turns: 3
 
 regex_filters:
 - pattern: "\\b\\w{40,}\\b"
@@ -49,6 +49,7 @@ templates:
   critique: segment_critique
   followup: segment_followup
   consensus_dispute: segment_consensus_dispute
+  improve: segment_improve
 
 format:
   expected_fields: [ score, status, reason ]

@@ -14,14 +14,18 @@ c = Console()
 class ImproveSession:
     """Session for improving text segments using AI."""
     
-    def __init__(self, config: Optional[Dict] = None, config_name="selfcrit.yaml", template_name="segment_improve.j2", quiet=False):
+    def __init__(self, config: Optional[Dict] = None, config_name="selfcrit.yaml", quiet=False):
         if config:
             self.cfg = config
         else:
             self.cfg = load_selfcrit_config(config_name, quiet=quiet)
-        self.template = self._load_template(template_name)
+        
+        # Get template name from config
+        template_name = self.cfg.get("templates", {}).get("improve", "segment_improve")
+        template_filename = f"{template_name}.j2"
+        self.template = self._load_template(template_filename)
         if not quiet and not config:
-            c.print(f"[bold blue]🔧 ImproveSession initialized[/] with config: [yellow]{config_name}[/yellow]")
+            c.print(f"[bold blue]🔧 ImproveSession initialized[/] with config: [yellow]{config_name}[/yellow], template: [cyan]{template_filename}[/cyan]")
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))
     def _load_template(self, template_name: str) -> jinja2.Template:

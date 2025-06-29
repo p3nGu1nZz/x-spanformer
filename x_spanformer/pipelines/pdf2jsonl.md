@@ -7,9 +7,10 @@ This pipeline processes PDF files by first converting them to CSV using the `pdf
 The pipeline follows this workflow:
 1. **PDF Discovery**: Find PDF files in the input directory (or process a single PDF file)
 2. **Text Extraction**: Use `pdf2seg` package to extract text segments into CSV format
-3. **SelfCrit Evaluation**: Process each text segment through SelfCrit evaluation using configured LLM
-4. **JSONL Generation**: Output structured records using `PretrainRecord` schema with metadata
-5. **Incremental Saving**: Support progressive saving to prevent data loss during processing
+3. **Resume Check**: Load existing dataset records to skip already processed segments
+4. **SelfCrit Evaluation**: Process each text segment through SelfCrit evaluation using configured LLM
+5. **JSONL Generation**: Output structured records using `PretrainRecord` schema with metadata
+6. **Incremental Saving**: Support progressive saving to prevent data loss during processing
 
 ## Usage
 
@@ -27,8 +28,9 @@ python pdf2jsonl.py -i ./data/pdfs/ -o ./out/ --pretty --workers 4
 | `-f`, `--field`  | Column name to extract text spans from (default: `text`)   | `raw_text`                                   |
 | `--pretty`       | Also write `.json` with pretty-formatted indentation       | `--pretty`                                   |
 | `-n`, `--name`   | Base output filename (no extension)                        | `xspan-segments`                             |
-| `--workers`      | Number of concurrent critique jobs (default: `1`)          | `--workers 8`                                |
+| `--workers`      | Number of concurrent critique jobs (default: `4`)          | `--workers 8`                                |
 | `--save-interval`| Save dataset incrementally after every N segments          | `--save-interval 10`                        |
+| `--force`        | Force regeneration of all cached data                      | `--force`                                    |
 
 ---
 
@@ -38,11 +40,14 @@ python pdf2jsonl.py -i ./data/pdfs/ -o ./out/ --pretty --workers 4
 - `dataset.json`: optional pretty version for inspection  
 - Each record contains:
   - `raw`: The original text segment from PDF
+  - `improved`: AI-improved version of the text (if available)
+  - `type`: Content type classification (Natural, Code, Mixed)
   - `id`: Globally unique record identifier (auto-generated)
-  - `meta`: Metadata object with the following optional fields:
-    - `tags`: List of strings (e.g., `["keep"]`, `["discard"]`, `["revise"]`)
+  - `meta`: Metadata object with the following fields:
+    - `status`: Processing status (`"keep"`, `"revise"`, `"discard"`)
+    - `tags`: List of strings (mirrors status for non-keep records)
     - `doc_language`: ISO language code (e.g., `"en"`, `"ja"`)
-    - `extracted_by`: Tool identifier (e.g., `"pdf2seg v1.0"`)
+    - `extracted_by`: Tool identifier (e.g., `"pdf2seg"`)
     - `confidence`: Float score from SelfCrit evaluation (0.0-1.0)
     - `source_file`: Original PDF filename
     - `notes`: SelfCrit reasoning/explanation
@@ -54,11 +59,14 @@ python pdf2jsonl.py -i ./data/pdfs/ -o ./out/ --pretty --workers 4
 ```json
 {
   "raw": "The mitochondria is the powerhouse of the cell.",
+  "improved": null,
+  "type": "Natural",
   "id": {"id": "3d3e1e3e-8f6b-4a9a-9fc6-efedc5f805a8"},
   "meta": {
+    "status": "keep",
     "tags": [],
     "doc_language": "en", 
-    "extracted_by": "pdf2seg (manifest v1)",
+    "extracted_by": "pdf2seg",
     "confidence": 0.94,
     "source_file": "biology-text.pdf",
     "notes": "clear structure, fluent segment"
@@ -71,10 +79,26 @@ python pdf2jsonl.py -i ./data/pdfs/ -o ./out/ --pretty --workers 4
 ### 🔄 Workflow Details
 
 1. **PDF Processing**: Uses `pdf2seg` package to convert PDFs to structured CSV with text spans
-2. **SelfCrit Evaluation**: Each text segment is evaluated by LLM for training suitability
-3. **Schema Compliance**: All records follow `PretrainRecord` schema with proper metadata
-4. **Language Detection**: Automatic language detection using `langid` package
-5. **Incremental Saving**: Prevents data loss during long processing runs
+2. **Resume Support**: Automatically detects existing dataset files and skips already processed segments
+3. **Text Splitting**: Automatically splits long text segments to fit model context limits
+4. **SelfCrit Evaluation**: Each text segment is evaluated by LLM for training suitability
+5. **Improvement Attempts**: Low-scoring segments are automatically improved using AI
+6. **Schema Compliance**: All records follow `PretrainRecord` schema with proper metadata
+7. **Language Detection**: Automatic language detection using `langid` package
+8. **Incremental Saving**: Prevents data loss during long processing runs
+
+### 🔄 Resume Functionality
+
+The pipeline now supports **automatic resume** from interruptions:
+
+- **Detection**: Automatically finds existing `dataset.jsonl` files in the output directory
+- **Loading**: Reads all existing records and creates a skip list based on processed text segments
+- **Filtering**: Only processes new segments that haven't been evaluated yet
+- **Seamless**: No configuration needed - resume happens automatically
+
+This means you can safely cancel a long-running job and restart it later without losing progress or duplicating work.
+
+---
 
 ### 📡 Dependencies
 
@@ -173,7 +197,7 @@ Example configuration output:
 Model: llama3.2:3b @ T=0.7
 Voting: 3 passes | Retry: 2
 Regex filters: 5
-Templates: segment_judge, quality_check
+Templates: segment_critique, segment_improve, segment_followup, segment_consensus_dispute
 ```
 
 ## Error Handling

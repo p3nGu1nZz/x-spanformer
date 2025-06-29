@@ -2,6 +2,7 @@ from typing import Optional, List
 from pydantic import BaseModel, Field, ConfigDict
 
 class RecordMeta(BaseModel):
+    status: Optional[str] = Field(default="keep", description="Processing status: 'keep', 'revise', 'discard'")
     tags: List[str] = Field(default_factory=list, description="Arbitrary tags (e.g. domain, quality, source)")
     doc_language: Optional[str] = Field(None, description="ISO language code (e.g. 'en', 'ja')")
     extracted_by: Optional[str] = Field(None, description="Name of the tool or pipeline that produced this segment")
@@ -12,6 +13,7 @@ class RecordMeta(BaseModel):
     model_config = ConfigDict(
         json_schema_extra = {
             "example": {
+                "status": "keep",
                 "tags": ["math", "multilingual", "noisy"],
                 "doc_language": "en",
                 "extracted_by": "pdf2seg v0.3.1",

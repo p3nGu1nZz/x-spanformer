@@ -12,6 +12,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Optional
 import re
+from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -22,7 +23,8 @@ from x_spanformer.agents.agent_utils import (
     display_summary_panel,
     display_telemetry_panel,
 )
-from x_spanformer.agents.session import JudgeSession, ImproveSession
+from x_spanformer.agents.session.judge_session import JudgeSession
+from x_spanformer.agents.session.improve_session import ImproveSession
 from x_spanformer.schema.metadata import RecordMeta
 from x_spanformer.schema.pretrain_record import PretrainRecord
 
@@ -120,7 +122,7 @@ def manifest(p: Path):
     return p.name, "unknown"
 
 
-def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_interval: int = 10, output_path: Optional[Path] = None, base_name: str = "dataset", pdf_mapping: Optional[dict[str, str]] = None) -> list[PretrainRecord]:
+def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_interval: int = 10, output_path: Optional[Path] = None, base_name: str = "dataset", pdf_mapping: Optional[dict[str, str]] = None, existing_records: Optional[list[PretrainRecord]] = None) -> list[PretrainRecord]:
     if not csv_files:
         console.print(f"[red]⚠ No CSV files provided[/red]")
         return []
@@ -206,8 +208,10 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         stats = Counter()
         all_processed_recs = []
         recs, reasons = [], []
-        processed_count = 0
-        valid_records_count = 0  # Count only records with status "keep"
+        # Initialize counters, including already-processed records if resuming
+        processed_count = len(existing_records) if existing_records else 0
+        # Count existing valid records (status "keep") toward valid count
+        valid_records_count = sum(1 for r in existing_records if r.meta.status == "keep") if existing_records else 0
 
         # Initialize sessions once, sharing the same config
         agent_config = load_selfcrit_config()
@@ -222,7 +226,6 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         for i, (text, source_file) in enumerate(zip(spans, source_mapping)):
             if len(text) > max_raw_length:
                 text_chunks = split_long_text(text, max_raw_length)
-                # console.print(f"[dim]✂️ Split long text ({len(text)} chars) into {len(text_chunks)} chunks[/dim]")
             else:
                 text_chunks = [text]
             
@@ -230,8 +233,30 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                 expanded_spans.append(chunk)
                 expanded_source_mapping.append(source_file)
 
+        if existing_records:
+            processed_raws = {rec.raw for rec in existing_records}
+            if processed_raws:
+                unprocessed_spans = []
+                unprocessed_source_mapping = []
+                for text, source in zip(expanded_spans, expanded_source_mapping):
+                    if text not in processed_raws:
+                        unprocessed_spans.append(text)
+                        unprocessed_source_mapping.append(source)
+
+                if len(unprocessed_spans) < len(expanded_spans):
+                    skipped_count = len(expanded_spans) - len(unprocessed_spans)
+                    console.print(f"[cyan]🔄 Resuming: Skipped {skipped_count} already processed segments. Total processed so far: {processed_count}[/cyan]")
+                    expanded_spans = unprocessed_spans
+                    expanded_source_mapping = unprocessed_source_mapping
+                else:
+                    console.print("[yellow]No matching segments found in existing records. Processing all from scratch.[/yellow]")
+
+        if not expanded_spans:
+            console.print("[green]✔ All segments have already been processed. Nothing to do.[/green]")
+            return []
+
         if len(expanded_spans) != len(spans):
-            console.print(f"[cyan]📐 Text splitting: {len(spans)} → {len(expanded_spans)} segments (max length: {max_raw_length} chars)[/cyan]")
+            console.print(f"[cyan]📐 Text splitting: {len(spans)} → {len(expanded_spans)} segments to process (max length: {max_raw_length} chars)[/cyan]")
 
         # Update references to use expanded spans
         nonlocal total_segment_count
@@ -320,26 +345,11 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                     if best_improved_text and best_improved_text != t:
                         improved_text = best_improved_text
                         content_type = best_content_type
-                        
-                        # Ensure improved text also respects max_raw_length limit
-                        if len(best_improved_text) > max_raw_length:
-                            console.print(f"[yellow]⚠ Improved text ({len(best_improved_text)} chars) exceeds max_raw_length ({max_raw_length}), truncating to fit[/yellow]")
-                            # Truncate at a sentence boundary if possible, or at max_raw_length
-                            truncated_chunks = split_long_text(best_improved_text, max_raw_length)
-                            final_text = truncated_chunks[0]  # Use first chunk that fits the limit
-                            improved_text = final_text  # Update improved_text to match final_text
-                        else:
-                            final_text = best_improved_text
-                        
+                        final_text = best_improved_text
                         r = best_result
                     else:
-                        # No improvement was made, use original text but check if it needs truncation
-                        if len(t) > max_raw_length:
-                            console.print(f"[yellow]⚠ Original text ({len(t)} chars) exceeds max_raw_length ({max_raw_length}), truncating to fit[/yellow]")
-                            truncated_chunks = split_long_text(t, max_raw_length)
-                            final_text = truncated_chunks[0]
-                        else:
-                            final_text = t
+                        # No improvement was made, use original text
+                        final_text = t
 
                     if improved_text and improved_text != t:
                         console.print(f"[green]📝 Final result: Using improved text (after {improvement_iterations} attempts)[/green]")
@@ -348,6 +358,7 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                         console.print(f"[blue]📝 Final result: Using original text (tried {improvement_iterations} improvements)[/blue]")
 
                     return idx, r, improved_text, content_type, final_text, improvement_iterations, t
+                    
             except Exception as e:
                 # Escape potential Rich markup in error messages
                 error_msg = str(e).replace('[', '\\[').replace(']', '\\]')
@@ -382,6 +393,7 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                             doc_language=langid.classify(final_text)[0],
                             extracted_by="pdf2seg",
                             confidence=r.get("score"),
+                            status=tag,
                             tags=[tag] if tag != "keep" else [],
                             notes=combined_notes
                         )
@@ -428,17 +440,25 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
     console.print("[bold cyan]═══ X-Spanformer PDF2JSONL Pipeline ═══[/bold cyan]")
     console.print("[green]✔ Initializing agents and processing pipeline[/green]")
 
-    if not i.exists() or not any(i.iterdir()):
-        console.print(f"[red]⚠ No PDFs found in {i}[/red]")
+    if not i.exists():
+        console.print(f"[red]Error: Input path does not exist: {i}[/red]")
         return
 
-    if not i.is_file():
-        pdfs = list(i.glob("*.pdf"))
-        console.print(f"[bold magenta]Found {len(pdfs)} PDF files:[/bold magenta]")
-        for x in pdfs:
-            console.print(f"[cyan]• {x.name}[/cyan]")
+    if not i.is_file() and not any(i.iterdir()):
+        console.print(f"[yellow]Warning: Input directory is empty: {i}[/yellow]")
+        # Allow continuing, as there might be existing CSVs to process
+    
+    pdfs = []
+    if i.is_dir():
+        pdfs = sorted(list(i.glob("*.pdf")))
+        if not pdfs:
+            console.print(f"[yellow]No PDF files found in {i}[/yellow]")
+    elif i.is_file() and i.suffix.lower() == ".pdf":
+        pdfs = [i]
     else:
-        console.print(f"[bold magenta]Processing single PDF file: {i.name}[/bold magenta]")
+        console.print(f"[red]Error: Input must be a PDF file or a directory containing PDF files.[/red]")
+        return
+
     console.print()
 
     base = n.strip().removesuffix(".json").removesuffix(".jsonl") or "dataset"
@@ -503,20 +523,31 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
 
     console.print(f"[white]→ Processing {len(csvs)} CSV files together[/white]")
 
-    # Check if dataset file already exists
-    dataset_file = o / f"{base}.jsonl"
-    if dataset_file.exists():
-        console.print(f"[yellow]⚠ Existing dataset file found: {dataset_file.name}[/yellow]")
-        console.print(f"[yellow]  Incremental saves will append to existing file[/yellow]")
-    else:
-        console.print(f"[cyan]📝 Will create new dataset file: {dataset_file.name}[/cyan]")
-
     # Log the mapping for verification
     console.print("[dim]PDF → CSV mapping:[/dim]")
     for csv_name, pdf_name in pdf_mapping.items():
         console.print(f"[dim]  {csv_name} ← {pdf_name}[/dim]")
+    
+    # Check if dataset file already exists
+    dataset_file = o / f"{base}.jsonl"
+    existing_records = []
+    if dataset_file.exists():
+        console.print(f"[yellow]⚠ Existing dataset file found: {dataset_file.name}[/yellow]")
+        try:
+            with dataset_file.open("r", encoding="utf-8") as file_handle:
+                for line in file_handle:
+                    if line.strip():
+                        existing_records.append(PretrainRecord.model_validate_json(line))
+            if existing_records:
+                console.print(f"[cyan]✔ Loaded {len(existing_records)} records. Will skip processing for these.[/cyan]")
+        except (json.JSONDecodeError, ValidationError) as e:
+            console.print(f"[red]⚠ Could not parse existing dataset file: {e}. Starting fresh.[/red]")
+            existing_records = []
+    else:
+        console.print(f"[cyan]📝 Will create new dataset file: {dataset_file.name}[/cyan]")
+
     console.print()
-    allr = process_all_csvs(csvs, f, w, {}, save_interval, o, base, pdf_mapping)
+    allr = process_all_csvs(csvs, f, w, {}, save_interval, o, base, pdf_mapping, existing_records=existing_records)
 
     if not allr:
         console.print(f"[red]⚠ No valid records found across all CSVs[/red]")
@@ -528,7 +559,7 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
     ratio = round(kept / total * 100, 2) if total > 0 else 0
 
     console.print("[bold green]═══ Final Summary ═══[/bold green]")
-    console.print(f"[white]Total records processed:[/white] {total}")
+    console.print(f"[white]Total records processed this session:[/white] {total}")
     console.print(f"[green]Kept:[/green] {kept} [cyan]({ratio}%)[/cyan]")
     console.print(f"[yellow]Revised/Discarded:[/yellow] {total - kept}")
     console.print()
