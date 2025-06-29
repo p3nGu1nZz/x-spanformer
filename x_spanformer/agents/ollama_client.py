@@ -21,7 +21,7 @@ async def chat(
 	for i, msg in enumerate(messages):
 		role_color = "yellow" if msg["role"] == "system" else "cyan" if msg["role"] == "user" else "green"
 		c.print(f"[{role_color}]Message {i+1} ({msg['role']}):[/{role_color}]")
-		c.print(f"[white]{msg['content'][:80]}[/white]")
+		c.print(f"[white]{(msg['content'][:77] + '...') if len(msg['content']) > 80 else msg['content']}[/white]")
 		c.print()
 
 	response = await client.chat(
@@ -32,7 +32,7 @@ async def chat(
 	content = response["message"]["content"]
 	
 	c.print(f"[bold green]Response from {model}:[/bold green]")
-	c.print(f"[white]{content[:80]}[/white]")
+	c.print(f"[white]{(content[:77] + '...') if len(content) > 80 else content}[/white]")
 	c.print()
 	
 	return content

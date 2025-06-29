@@ -11,11 +11,7 @@ import langid
 from collections import Counter
 from pathlib import Path
 from typing import Optional
-
-try:
-    import spacy
-except ImportError:
-    raise ImportError("spaCy is required for text splitting. Please install spaCy: pip install spacy")
+import re
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -163,7 +159,7 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
 
     console.print(f"[green]Processing {len(spans)} text segments from {len(source_files)} CSV files[/green]")
     if save_interval > 0 and output_path:
-        console.print(f"[cyan]Incremental saving enabled: every {save_interval} valid records (status='keep') to {output_path}[/cyan]")
+        console.print(f"[cyan]Incremental saving enabled: every {save_interval} processed records to {output_path}[/cyan]")
     console.print()
 
     # Initialize timing metrics
@@ -191,9 +187,9 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                 writer.write(json.dumps(record.model_dump(), ensure_ascii=False) + "\n")
 
         records_saved_this_session += len(records)
-        save_count = (valid_count + save_interval - 1) // save_interval if save_interval > 0 else 1
+        save_count = (total_processed + save_interval - 1) // save_interval if save_interval > 0 else 1
 
-        console.print(f"[blue]💾 Saved {len(records)} records to {dataset_file.name} (triggered by {valid_count} valid records)[/blue]")
+        console.print(f"[blue]💾 Saved {len(records)} records to {dataset_file.name} (after {total_processed} processed, {valid_count} valid)[/blue]")
 
         # Display telemetry panel
         display_telemetry_panel(
@@ -224,7 +220,12 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         expanded_source_mapping = []
 
         for i, (text, source_file) in enumerate(zip(spans, source_mapping)):
-            text_chunks = split_long_text(text, max_raw_length)
+            if len(text) > max_raw_length:
+                text_chunks = split_long_text(text, max_raw_length)
+                # console.print(f"[dim]✂️ Split long text ({len(text)} chars) into {len(text_chunks)} chunks[/dim]")
+            else:
+                text_chunks = [text]
+            
             for chunk in text_chunks:
                 expanded_spans.append(chunk)
                 expanded_source_mapping.append(source_file)
@@ -236,7 +237,7 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         nonlocal total_segment_count
         total_segment_count = len(expanded_spans)
         nonlocal estimated_total_saves
-        estimated_total_saves = max(1, (total_segment_count // 2 + save_interval - 1) // save_interval) if save_interval > 0 else 1  # Rough estimate assuming ~50% valid
+        estimated_total_saves = max(1, (total_segment_count + save_interval - 1) // save_interval) if save_interval > 0 else 1  # Based on total processed segments
 
         async def score_and_improve(idx: int, t: str, source_file: str):
             try:
@@ -319,8 +320,26 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                     if best_improved_text and best_improved_text != t:
                         improved_text = best_improved_text
                         content_type = best_content_type
-                        final_text = best_improved_text
+                        
+                        # Ensure improved text also respects max_raw_length limit
+                        if len(best_improved_text) > max_raw_length:
+                            console.print(f"[yellow]⚠ Improved text ({len(best_improved_text)} chars) exceeds max_raw_length ({max_raw_length}), truncating to fit[/yellow]")
+                            # Truncate at a sentence boundary if possible, or at max_raw_length
+                            truncated_chunks = split_long_text(best_improved_text, max_raw_length)
+                            final_text = truncated_chunks[0]  # Use first chunk that fits the limit
+                            improved_text = final_text  # Update improved_text to match final_text
+                        else:
+                            final_text = best_improved_text
+                        
                         r = best_result
+                    else:
+                        # No improvement was made, use original text but check if it needs truncation
+                        if len(t) > max_raw_length:
+                            console.print(f"[yellow]⚠ Original text ({len(t)} chars) exceeds max_raw_length ({max_raw_length}), truncating to fit[/yellow]")
+                            truncated_chunks = split_long_text(t, max_raw_length)
+                            final_text = truncated_chunks[0]
+                        else:
+                            final_text = t
 
                     if improved_text and improved_text != t:
                         console.print(f"[green]📝 Final result: Using improved text (after {improvement_iterations} attempts)[/green]")
@@ -342,9 +361,9 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         tasks = [score_and_improve(i, text, expanded_source_mapping[i]) for i, text in enumerate(expanded_spans)]
 
         try:
-            for f in asyncio.as_completed(tasks):
+            for task in tasks:
                 try:
-                    idx, r, improved_text, content_type, final_text, improvement_iterations, original_text = await f
+                    idx, r, improved_text, content_type, final_text, improvement_iterations, original_text = await task
                     tag = r["status"]
                     reasons.append(r["reason"])
                     stats[tag] += 1
@@ -375,7 +394,8 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                     if tag == "keep":
                         valid_records_count += 1
 
-                    if save_interval > 0 and output_path and valid_records_count % save_interval == 0 and len(recs) > 0:
+                    # Trigger incremental save based on total processed count
+                    if save_interval > 0 and output_path and processed_count % save_interval == 0:
                         save_incremental(recs, valid_records_count, processed_count)
                         recs.clear()
 
@@ -387,7 +407,9 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         except asyncio.CancelledError:
             console.print("[yellow]Processing cancelled.[/yellow]")
         finally:
-            if save_interval > 0 and output_path and recs:
+            # If incremental saving is enabled, all records are already saved.
+            # This final save is only for when incremental saving is disabled.
+            if save_interval <= 0 and output_path and recs:
                 save_incremental(recs, valid_records_count, processed_count, force=True)
                 recs.clear()
 
@@ -501,24 +523,20 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
         return
 
     total = len(allr)
-    kept = sum(1 for r in allr if not r.meta.tags)
-    ratio = round(kept / total * 100, 2)
+    # Filter for records with status "keep"
+    kept = sum(1 for r in allr if r.meta.status == "keep")
+    ratio = round(kept / total * 100, 2) if total > 0 else 0
 
     console.print("[bold green]═══ Final Summary ═══[/bold green]")
-    console.print(f"[white]Total records:[/white] {total}")
+    console.print(f"[white]Total records processed:[/white] {total}")
     console.print(f"[green]Kept:[/green] {kept} [cyan]({ratio}%)[/cyan]")
-    console.print(f"[yellow]Discarded:[/yellow] {total - kept}")
+    console.print(f"[yellow]Revised/Discarded:[/yellow] {total - kept}")
     console.print()
 
-    o.mkdir(parents=True, exist_ok=True)
-    j1, j2 = o / f"{base}.jsonl", o / f"{base}.json"
-
-    with j1.open("w", encoding="utf-8") as writer:
-        for x in allr:
-            writer.write(json.dumps(x.model_dump(), ensure_ascii=False) + "\n")
-    console.print(f"[green]✔ Wrote {total} entries → {j1.name}[/green]")
-
+    # The final save is now handled by the incremental saver.
+    # We can optionally write a pretty-printed JSON for inspection.
     if pretty:
+        j2 = o / f"{base}.json"
         with j2.open("w", encoding="utf-8") as writer:
             json.dump([x.model_dump() for x in allr], writer, ensure_ascii=False, indent=2)
         console.print(f"[cyan]• Pretty JSON → {j2.name}[/cyan]")
@@ -526,72 +544,76 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
 
 def split_long_text(text: str, max_length: int = 512) -> list[str]:
     """
-    Split long text into smaller chunks using spaCy sentence boundaries.
-
-    Args:
-        text: The text to potentially split
-        max_length: Maximum length per chunk
-
-    Returns:
-        List of text chunks (single item if no splitting needed)
+    Split text that exceeds max_length into smaller chunks, ensuring no chunk is longer than max_length.
+    It prioritizes splitting at sentence boundaries, then word boundaries, and finally at the character level
+    for very long, unbroken strings of text.
     """
     if len(text) <= max_length:
         return [text]
 
-    try:
-        # Load spaCy model (try small models first)
-        nlp = None
-        for model_name in ["en_core_web_sm", "en_core_web_md", "en_core_web_lg"]:
-            try:
-                nlp = spacy.load(model_name)
-                break
-            except OSError:
-                continue
-
-        if nlp is None:
-            raise OSError("No spaCy English model found. Please install one: python -m spacy download en_core_web_sm")
-
-        doc = nlp(text)
-        chunks = []
-        current_chunk = ""
-
-        for sent in doc.sents:
-            sent_text = sent.text.strip()
-            if not sent_text:
-                continue
-
-            # If adding this sentence would exceed max_length, save current chunk
-            if current_chunk and len(current_chunk) + len(sent_text) + 1 > max_length:
-                chunks.append(current_chunk.strip())
-                current_chunk = sent_text
-            else:
-                if current_chunk:
-                    current_chunk += " " + sent_text
+    # Use a simple regex for sentence splitting to avoid heavy dependencies like spaCy
+    # This regex looks for sentence-ending punctuation followed by a space or the end of the string.
+    sentences = re.split(r'(?<=[.!?])\\s+', text)
+    
+    chunks = []
+    
+    for sent in sentences:
+        if not sent.strip():
+            continue
+            
+        if len(sent) <= max_length:
+            chunks.append(sent)
+        else:
+            # The sentence itself is too long, so we need to split it further.
+            # First, try splitting by words.
+            words = sent.split()
+            current_chunk = ""
+            for word in words:
+                if len(current_chunk) + len(word) + 1 > max_length:
+                    if current_chunk:
+                        chunks.append(current_chunk)
+                    current_chunk = word
                 else:
-                    current_chunk = sent_text
+                    if current_chunk:
+                        current_chunk += " " + word
+                    else:
+                        current_chunk = word
+            
+            if current_chunk:
+                chunks.append(current_chunk)
 
-        # Add final chunk
-        if current_chunk.strip():
-            chunks.append(current_chunk.strip())
+    # Final check: If any chunk is still too long (e.g., a very long word or token),
+    # we must split it at the character level.
+    final_chunks = []
+    for chunk in chunks:
+        if len(chunk) > max_length:
+            for i in range(0, len(chunk), max_length):
+                final_chunks.append(chunk[i:i+max_length])
+        else:
+            final_chunks.append(chunk)
+            
+    # If, after all that, we have no chunks, it means the original text was probably just whitespace.
+    # Return an empty list in that case.
+    if not final_chunks and not text.strip():
+        return []
+        
+    return final_chunks
 
-        if len(chunks) > 1:
-            console.print(f"[cyan]✂️ Split long text ({len(text)} chars) into {len(chunks)} chunks[/cyan]")
 
-        return chunks if chunks else [text]
+def main():
+    parser = argparse.ArgumentParser(description="X-Spanformer PDF2JSONL Pipeline")
+    parser.add_argument("-i", "--input", type=Path, required=True, help="Input directory of PDF files or a single PDF file")
+    parser.add_argument("-o", "--output", type=Path, required=True, help="Output directory for results")
+    parser.add_argument("-f", "--field", type=str, default="text", help="Field name in CSV to process")
+    parser.add_argument("-p", "--pretty", action="store_true", help="Output pretty JSON file")
+    parser.add_argument("-n", "--name", type=str, default="dataset", help="Base name for output files")
+    parser.add_argument("-w", "--workers", type=int, default=4, help="Number of concurrent workers")
+    parser.add_argument("--save-interval", type=int, default=10, help="Save progress every N records (0 to disable)")
+    parser.add_argument("--force", action="store_true", help="Force regeneration of all cached data")
+    args = parser.parse_args()
 
-    except Exception as e:
-        raise RuntimeError(f"Error in spaCy text splitting: {e}. Ensure spaCy and an English model are properly installed.")
+    run(args.input, args.output, args.field, args.pretty, args.name, args.workers, args.save_interval, args.force)
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("-i", "--input", type=Path, required=True)
-    p.add_argument("-o", "--output", type=Path, required=True)
-    p.add_argument("-f", "--field", type=str, default="text")
-    p.add_argument("--pretty", action="store_true")
-    p.add_argument("-n", "--name", type=str, default="dataset")
-    p.add_argument("--workers", type=int, default=1)
-    p.add_argument("--save-interval", type=int, default=10, help="Save dataset incrementally after every N segments (0 to disable)")
-    p.add_argument("--force", action="store_true", help="Force regeneration of all CSV files, ignoring existing ones")
-    a = p.parse_args()
-    run(a.input, a.output, a.field, a.pretty, a.name, a.workers, a.save_interval, a.force)
+    main()
