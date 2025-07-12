@@ -40,8 +40,15 @@ class TestAgents(unittest.TestCase):
         self.dummy_config = {
             "agent_type": "test_agent",
             "model": {"name": "test_model", "temperature": 0.1},
-            "critique": {"passes": 1, "max_retries": 1, "discard_threshold": 0.25},
-            "judge": {"model_name": "test_model", "temperature": 0.1},
+            "critique": {"passes": 1, "max_retries": 1, "discard_threshold": 0.25, "threshold": 0.7},
+            "judge": {
+                "model_name": "test_model", 
+                "temperature": 0.1, 
+                "passes": 3, 
+                "threshold": 0.7, 
+                "discard_threshold": 0.25,
+                "max_retries": 3
+            },
             "improver": {"model_name": "test_model", "temperature": 0.8},
             "dialogue": {"max_turns": 2},
             "regex_filters": [{"pattern": "badword"}],
@@ -79,8 +86,8 @@ class TestAgents(unittest.TestCase):
         self.assertEqual(result, "Hello World")
         mock_env.get_template.assert_called_with("test_template.j2")
 
-    @patch("x_spanformer.agents.ollima_client.AsyncClient")
-    def test_ollima_client_chat(self, mock_client):
+    @patch("x_spanformer.agents.ollama_client.AsyncClient")
+    def test_ollama_client_chat(self, mock_client):
         mock_response = {"message": {"content": "response"}}
         mock_client.return_value.chat = AsyncMock(return_value=mock_response)
         result = asyncio.run(
@@ -88,9 +95,12 @@ class TestAgents(unittest.TestCase):
         )
         self.assertEqual(result, "response")
 
+    @patch("x_spanformer.agents.selfcrit.cfg")
     @patch("x_spanformer.agents.selfcrit.chat", new_callable=AsyncMock)
     @patch("x_spanformer.agents.selfcrit.RE_FLAGGED", [re.compile("bad")])
-    def test_judge_segment(self, mock_chat):
+    def test_judge_segment(self, mock_chat, mock_cfg):
+        mock_cfg.__getitem__ = lambda _, key: self.dummy_config[key]
+        mock_cfg.get = lambda key, default=None: self.dummy_config.get(key, default)
         mock_chat.return_value = "Score: 0.9\nStatus: keep\nReason: ok"
         result = asyncio.run(selfcrit.judge_segment("good text"))
         self.assertEqual(result["status"], "keep")

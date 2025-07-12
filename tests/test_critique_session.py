@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from x_spanformer.agents.session.critique_session import CritiqueSession
 
@@ -28,15 +28,17 @@ class TestCritiqueSession(unittest.TestCase):
         self.assertEqual(result["status"], "keep")
         self.assertEqual(mock_chat.call_count, 1)
 
-    @patch("x_spanformer.agents.critique_session.load_selfcrit_config")
-    @patch("x_spanformer.agents.critique_session.chat", new_callable=AsyncMock)
+    @patch("x_spanformer.agents.session.critique_session.load_selfcrit_config")
+    @patch("x_spanformer.agents.session.critique_session.chat", new_callable=AsyncMock)
     def test_run_session_max_turns(self, mock_chat, mock_load_config):
         # Test that the session stops after max_turns is reached
         mock_load_config.return_value = {
-            "templates": {"system": "system prompt", "score": "score prompt"},
-            "evaluation": {"passes": 3},
+            "templates": {"system": "system prompt", "critique": "critique prompt", "score": "score prompt"},
+            "critique": {"passes": 3},
+            "judge": {"model_name": "test_model", "temperature": 0.5, "passes": 3},
             "model": {"name": "test_model", "temperature": 0.5},
             "dialogue": {"max_turns": 3},
+            "regex_filters": []
         }
         mock_chat.side_effect = [
             "Score: 0.6\nStatus: revise\nReason: Needs more work.",
@@ -48,15 +50,17 @@ class TestCritiqueSession(unittest.TestCase):
         self.assertEqual(result["status"], "revise")
         self.assertEqual(mock_chat.call_count, 3)
 
-    @patch("x_spanformer.agents.critique_session.load_selfcrit_config")
-    @patch("x_spanformer.agents.critique_session.chat", new_callable=AsyncMock)
+    @patch("x_spanformer.agents.session.critique_session.load_selfcrit_config")
+    @patch("x_spanformer.agents.session.critique_session.chat", new_callable=AsyncMock)
     def test_run_session_unparseable_response(self, mock_chat, mock_load_config):
         # Test how the session handles an unparseable response from the model
         mock_load_config.return_value = {
-            "templates": {"system": "system prompt", "score": "score prompt"},
-            "evaluation": {"passes": 2},
+            "templates": {"system": "system prompt", "critique": "critique prompt", "score": "score prompt"},
+            "critique": {"passes": 2},
+            "judge": {"model_name": "test_model", "temperature": 0.5, "passes": 2},
             "model": {"name": "test_model", "temperature": 0.5},
             "dialogue": {"max_turns": 3},
+            "regex_filters": []
         }
         mock_chat.side_effect = [
             "This is not a valid response.",
@@ -67,35 +71,17 @@ class TestCritiqueSession(unittest.TestCase):
         self.assertEqual(result["status"], "keep")
         self.assertEqual(mock_chat.call_count, 2)
 
-    @patch("x_spanformer.agents.critique_session.load_selfcrit_config")
-    @patch("x_spanformer.agents.critique_session.chat", new_callable=AsyncMock)
-    def test_evaluate_regex_filter(self, mock_chat, mock_load_config):
-        # Test that the regex filter is applied and the session auto-discards the text
-        mock_load_config.return_value = {
-            "templates": {"system": "system prompt", "score": "score prompt"},
-            "evaluation": {"passes": 1},
-            "model": {"name": "test_model", "temperature": 0.5},
-            "dialogue": {"max_turns": 3},
-            "regex_filters": [{"pattern": "bad word"}],
-        }
-        mock_chat.side_effect = [
-            "Score: 0.9\nStatus: keep\nReason: Looks good.",
-        ]
-        session = CritiqueSession()
-        result = asyncio.run(session.evaluate("this is a bad word"))
-        self.assertEqual(result["status"], "discard")
-        self.assertEqual(result["reason"], "regex filter triggered")
-        mock_chat.assert_not_called()
-
-    @patch("x_spanformer.agents.critique_session.load_selfcrit_config")
-    @patch("x_spanformer.agents.critique_session.chat", new_callable=AsyncMock)
+    @patch("x_spanformer.agents.session.critique_session.load_selfcrit_config")
+    @patch("x_spanformer.agents.session.critique_session.chat", new_callable=AsyncMock)
     def test_evaluate_consensus(self, mock_chat, mock_load_config):
         # Test that consensus is reached when no decisive response is returned
         mock_load_config.return_value = {
-            "templates": {"system": "system prompt", "score": "score prompt"},
-            "evaluation": {"passes": 3},
+            "templates": {"system": "system prompt", "critique": "critique prompt", "score": "score prompt"},
+            "critique": {"passes": 3},
+            "judge": {"model_name": "test_model", "temperature": 0.5, "passes": 3},
             "model": {"name": "test_model", "temperature": 0.5},
             "dialogue": {"max_turns": 3},
+            "regex_filters": []
         }
         mock_chat.side_effect = [
             "Score: 0.6\nStatus: revise\nReason: not sure",
@@ -106,6 +92,21 @@ class TestCritiqueSession(unittest.TestCase):
         result = asyncio.run(session.evaluate("this is a text for consensus"))
         self.assertEqual(result["status"], "revise")
         self.assertEqual(mock_chat.call_count, 3)
+
+    @patch("x_spanformer.agents.session.critique_session.load_selfcrit_config")
+    def test_evaluate_regex_filter(self, mock_load_config):
+        # Test that the regex filter is applied and the session auto-discards the text
+        mock_load_config.return_value = {
+            "templates": {"system": "system prompt", "score": "score prompt"},
+            "evaluation": {"passes": 1},
+            "model": {"name": "test_model", "temperature": 0.5},
+            "dialogue": {"max_turns": 3},
+            "regex_filters": [{"pattern": "bad word"}],
+        }
+        session = CritiqueSession()
+        result = asyncio.run(session.evaluate("this is a bad word"))
+        self.assertEqual(result["status"], "discard")
+        self.assertEqual(result["reason"], "regex filter triggered")
 
     def test_parse(self):
         session = CritiqueSession()

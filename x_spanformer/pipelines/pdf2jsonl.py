@@ -105,6 +105,9 @@ def run_pdf2seg(pdf_file: Path, output_dir: Path, force_regenerate: bool = False
                 console.print(f"[yellow]⚠ Could not remove temp file {png_file}: {e}[/yellow]")
 
     if csv_file.exists():
+        # Add the original PDF name to the JSON metadata file
+        add_pdf_name_to_json_metadata(csv_file, pdf_file)
+        
         console.print(f"[green]✔ CSV ready: {csv_file.name}[/green]")
         return csv_file
     else:
@@ -122,7 +125,7 @@ def manifest(p: Path):
     return p.name, "unknown"
 
 
-def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_interval: int = 10, output_path: Optional[Path] = None, base_name: str = "dataset", pdf_mapping: Optional[dict[str, str]] = None, existing_records: Optional[list[PretrainRecord]] = None) -> list[PretrainRecord]:
+def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_interval: int = 1, output_path: Optional[Path] = None, base_name: str = "dataset", pdf_mapping: Optional[dict[str, str]] = None, existing_records: Optional[list[PretrainRecord]] = None) -> list[PretrainRecord]:
     if not csv_files:
         console.print(f"[red]⚠ No CSV files provided[/red]")
         return []
@@ -160,8 +163,10 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         return []
 
     console.print(f"[green]Processing {len(spans)} text segments from {len(source_files)} CSV files[/green]")
-    if save_interval > 0 and output_path:
-        console.print(f"[cyan]Incremental saving enabled: every {save_interval} processed records to {output_path}[/cyan]")
+    if save_interval > 0:
+        console.print(f"[cyan]💾 Incremental saving enabled: saving after every {save_interval} record(s) to {output_path}[/cyan]")
+    else:
+        console.print("[yellow]💾 Incremental saving disabled. Results will be processed in memory.[/yellow]")
     console.print()
 
     # Initialize timing metrics
@@ -171,8 +176,8 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
     records_saved_this_session = 0
     total_segment_count = len(spans)  # Initialize with original count, will be updated after splitting
 
-    def save_incremental(records: list[PretrainRecord], valid_count: int, total_processed: int, force: bool = False):
-        """Save records incrementally to prevent data loss"""
+    def save_chunk(records: list[PretrainRecord]):
+        """Save a chunk of records incrementally to prevent data loss"""
         nonlocal records_saved_this_session
 
         if not output_path or not records:
@@ -180,36 +185,25 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
 
         output_path.mkdir(parents=True, exist_ok=True)
         dataset_file = output_path / f"{base_name}.jsonl"
-
-        # For the first save, check if we should start fresh or append
-        mode = "a" if dataset_file.exists() else "w"
+        mode = "a"  # Always append
 
         with dataset_file.open(mode, encoding="utf-8") as writer:
             for record in records:
                 writer.write(json.dumps(record.model_dump(), ensure_ascii=False) + "\n")
 
-        records_saved_this_session += len(records)
-        save_count = (total_processed + save_interval - 1) // save_interval if save_interval > 0 else 1
+        num_saved = len(records)
+        records_saved_this_session += num_saved
 
-        console.print(f"[blue]💾 Saved {len(records)} records to {dataset_file.name} (after {total_processed} processed, {valid_count} valid)[/blue]")
-
-        # Display telemetry panel
-        display_telemetry_panel(
-            processed_count=total_processed,
-            total_count=total_segment_count,
-            start_time=start_time,
-            save_count=save_count,
-            estimated_total_saves=estimated_total_saves,
-            records_saved_this_session=records_saved_this_session
-        )
+        console.print(f"[blue]💾 Saved {num_saved} record(s) to {dataset_file.name} (total this session: {records_saved_this_session})[/blue]")
 
     async def process():
         sem = asyncio.Semaphore(w)
         stats = Counter()
         all_processed_recs = []
+        records_to_save = []
         recs, reasons = [], []
         # Initialize counters, including already-processed records if resuming
-        processed_count = len(existing_records) if existing_records else 0
+        processed_count_total = len(existing_records) if existing_records else 0
         # Count existing valid records (status "keep") toward valid count
         valid_records_count = sum(1 for r in existing_records if r.meta.status == "keep") if existing_records else 0
 
@@ -245,7 +239,7 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
 
                 if len(unprocessed_spans) < len(expanded_spans):
                     skipped_count = len(expanded_spans) - len(unprocessed_spans)
-                    console.print(f"[cyan]🔄 Resuming: Skipped {skipped_count} already processed segments. Total processed so far: {processed_count}[/cyan]")
+                    console.print(f"[cyan]🔄 Resuming: Skipped {skipped_count} already processed segments. Total processed so far: {processed_count_total}[/cyan]")
                     expanded_spans = unprocessed_spans
                     expanded_source_mapping = unprocessed_source_mapping
                 else:
@@ -262,7 +256,7 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         nonlocal total_segment_count
         total_segment_count = len(expanded_spans)
         nonlocal estimated_total_saves
-        estimated_total_saves = max(1, (total_segment_count + save_interval - 1) // save_interval) if save_interval > 0 else 1  # Based on total processed segments
+        estimated_total_saves = total_segment_count # Each segment is a potential save
 
         async def score_and_improve(idx: int, t: str, source_file: str):
             try:
@@ -271,8 +265,12 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                     console.print(f"[dim]Source: {source_file} | Text ({len(t)} chars):[/dim] {t}")
                     console.print()
 
+                    # Collect all judge responses for logging
+                    all_judge_responses = []
+
                     # Use JudgeSession to evaluate the text
                     r = await judge_session.evaluate(t)
+                    all_judge_responses.append(r)
 
                     console.print(f"[bold green]Initial Response:[/bold green]")
                     console.print(f"[white]{json.dumps(r, indent=2)}[/white]")
@@ -286,6 +284,11 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                         console.print(f"[red]🗑️ Score {current_score:.3f} below discard threshold {discard_threshold:.3f}, marking as discard[/red]")
                         r["status"] = "discard"
                         r["reason"] = f"score {current_score:.3f} below discard threshold {discard_threshold:.3f}"
+                        
+                        # Save AI processing log even for discarded segments
+                        if output_path:
+                            save_ai_processing_log(output_path, source_file, str(idx), t, None, None, all_judge_responses, 0)
+                        
                         return idx, r, None, None, t, 0, t
 
                     improved_text = None
@@ -314,6 +317,7 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                         if temp_improved and temp_improved != current_text:
                             console.print(f"[yellow] Evaluating improved text...[/yellow]")
                             r_improved = await judge_session.evaluate(temp_improved)
+                            all_judge_responses.append(r_improved)
                             improved_score = r_improved.get("score", 0)
 
                             console.print(f"[bold green]Improvement #{improvement_iterations} Response:[/bold green]")
@@ -347,15 +351,17 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                         content_type = best_content_type
                         final_text = best_improved_text
                         r = best_result
-                    else:
-                        # No improvement was made, use original text
-                        final_text = t
-
-                    if improved_text and improved_text != t:
                         console.print(f"[green]📝 Final result: Using improved text (after {improvement_iterations} attempts)[/green]")
                     else:
+                        # No improvement was made, use original text
                         improved_text = None
+                        content_type = None
+                        final_text = t
                         console.print(f"[blue]📝 Final result: Using original text (tried {improvement_iterations} improvements)[/blue]")
+
+                    # Save AI processing log for this segment
+                    if output_path:
+                        save_ai_processing_log(output_path, source_file, str(idx), t, improved_text, content_type, all_judge_responses, improvement_iterations)
 
                     return idx, r, improved_text, content_type, final_text, improvement_iterations, t
                     
@@ -372,7 +378,7 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         tasks = [score_and_improve(i, text, expanded_source_mapping[i]) for i, text in enumerate(expanded_spans)]
 
         try:
-            for task in tasks:
+            for i, task in enumerate(asyncio.as_completed(tasks)):
                 try:
                     idx, r, improved_text, content_type, final_text, improvement_iterations, original_text = await task
                     tag = r["status"]
@@ -385,12 +391,12 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                     combined_notes = f"{r.get('reason', '')} | {improvement_note}".strip(" |") if improvement_note else r.get('reason', '')
 
                     record = PretrainRecord(
-                        raw=final_text,
+                        raw=original_text,  # Always use original text for raw field
                         improved=improved_text if improved_text and improved_text != original_text else None,
                         type=content_type,
                         meta=RecordMeta(
                             source_file=src_file,
-                            doc_language=langid.classify(final_text)[0],
+                            doc_language=langid.classify(final_text)[0],  # Use final_text for language detection
                             extracted_by="pdf2seg",
                             confidence=r.get("score"),
                             status=tag,
@@ -398,18 +404,32 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                             notes=combined_notes
                         )
                     )
-                    recs.append(record)
+                    
                     all_processed_recs.append(record)
-                    processed_count += 1
+                    processed_count_total += 1
+                    processed_this_session = len(all_processed_recs)
 
-                    # Only count valid records (status "keep") toward save interval
+                    if save_interval > 0:
+                        records_to_save.append(record)
+                        if len(records_to_save) >= save_interval:
+                            save_chunk(records_to_save)
+                            records_to_save.clear()
+
+                    # Display telemetry periodically
+                    telemetry_interval = 10
+                    if processed_this_session % telemetry_interval == 0 or processed_this_session == total_segment_count:
+                        display_telemetry_panel(
+                            processed_count=processed_count_total,
+                            total_count=total_segment_count + (len(existing_records) if existing_records else 0),
+                            start_time=start_time,
+                            save_count=records_saved_this_session,
+                            estimated_total_saves=total_segment_count // save_interval if save_interval > 0 else 0,
+                            records_saved_this_session=records_saved_this_session
+                        )
+
+                    # Only count valid records (status "keep") toward valid count
                     if tag == "keep":
                         valid_records_count += 1
-
-                    # Trigger incremental save based on total processed count
-                    if save_interval > 0 and output_path and processed_count % save_interval == 0:
-                        save_incremental(recs, valid_records_count, processed_count)
-                        recs.clear()
 
                 except Exception as e:
                     # Escape potential Rich markup in error messages
@@ -419,11 +439,11 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         except asyncio.CancelledError:
             console.print("[yellow]Processing cancelled.[/yellow]")
         finally:
-            # If incremental saving is enabled, all records are already saved.
-            # This final save is only for when incremental saving is disabled.
-            if save_interval <= 0 and output_path and recs:
-                save_incremental(recs, valid_records_count, processed_count, force=True)
-                recs.clear()
+            # Save any remaining records in the buffer
+            if save_interval > 0 and records_to_save:
+                console.print(f"[blue]Finalizing... saving {len(records_to_save)} remaining records.[/blue]")
+                save_chunk(records_to_save)
+                records_to_save.clear()
 
         return all_processed_recs, stats, reasons
 
@@ -436,9 +456,13 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         return []
 
 
-def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: int = 10, force: bool = False):
+def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: int = 1, force: bool = False):
     console.print("[bold cyan]═══ X-Spanformer PDF2JSONL Pipeline ═══[/bold cyan]")
     console.print("[green]✔ Initializing agents and processing pipeline[/green]")
+
+    if save_interval < 0:
+        console.print(f"[red]Error: --save-interval cannot be negative. Use 0 to disable incremental saving.[/red]")
+        return
 
     if not i.exists():
         console.print(f"[red]Error: Input path does not exist: {i}[/red]")
@@ -477,7 +501,7 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
                 else:
                     console.print(f"[bold blue]📊 Total workload: {total_pages} pages across {len(pdfs)} PDF files[/bold blue]")
             else:
-                console.print(f"[yellow]⚠ Could not determine page counts (PyPDF2 may not be installed)[/yellow]")
+                console.print(f"[yellow]⚠ Could not determine page counts (pypdf may not be installed)[/yellow]")
     elif i.is_file() and i.suffix.lower() == ".pdf":
         pdfs = [i]
         page_count = count_pdf_pages(i)
@@ -683,14 +707,14 @@ def split_long_text(text: str, max_length: int = 512) -> list[str]:
 
 
 def count_pdf_pages(pdf_path: Path) -> int:
-    """Count the number of pages in a PDF file using PyPDF2."""
+    """Count the number of pages in a PDF file using pypdf."""
     try:
-        import PyPDF2
+        import pypdf
         with pdf_path.open('rb') as file:
-            reader = PyPDF2.PdfReader(file)
+            reader = pypdf.PdfReader(file)
             return len(reader.pages)
     except ImportError:
-        # PyPDF2 not available, return unknown count
+        # pypdf not available, return unknown count
         return -1
     except Exception as e:
         # If there's any error reading the PDF, return unknown count silently
@@ -705,7 +729,7 @@ def main():
     parser.add_argument("-p", "--pretty", action="store_true", help="Output pretty JSON file")
     parser.add_argument("-n", "--name", type=str, default="dataset", help="Base name for output files")
     parser.add_argument("-w", "--workers", type=int, default=4, help="Number of concurrent workers")
-    parser.add_argument("--save-interval", type=int, default=10, help="Save progress every N records (0 to disable)")
+    parser.add_argument("--save-interval", type=int, default=1, help="Save progress every N records. Default is 1 (save every record). Use 0 to disable incremental saving.")
     parser.add_argument("--force", action="store_true", help="Force regeneration of all cached data")
     args = parser.parse_args()
 
@@ -714,3 +738,79 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def save_ai_processing_log(output_dir: Path, source_file: str, segment_id: str, 
+                          original_text: str, improved_text: Optional[str], content_type: Optional[str],
+                          judge_responses: list, improvement_iterations: int):
+    """Save detailed AI processing logs for a segment."""
+    # Create ai directory structure
+    hash_str = hash_name(Path(source_file))
+    ai_dir = output_dir / "ai" / hash_str
+    ai_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create log filename
+    log_filename = f"{hash_str}_{segment_id}.txt"
+    log_path = ai_dir / log_filename
+    
+    # Build log content
+    log_content = []
+    log_content.append(f"AI Processing Log for Segment: {segment_id}")
+    log_content.append(f"Source File: {source_file}")
+    log_content.append(f"Hash: {hash_str}")
+    log_content.append(f"Timestamp: {datetime.now().isoformat()}")
+    log_content.append("=" * 80)
+    log_content.append("")
+    
+    log_content.append("ORIGINAL TEXT:")
+    log_content.append("-" * 40)
+    log_content.append(original_text)
+    log_content.append("")
+    
+    log_content.append("JUDGE RESPONSES:")
+    log_content.append("-" * 40)
+    for i, response in enumerate(judge_responses):
+        log_content.append(f"Response {i + 1}:")
+        log_content.append(json.dumps(response, indent=2))
+        log_content.append("")
+    
+    if improved_text and improved_text != original_text:
+        log_content.append("IMPROVED TEXT:")
+        log_content.append("-" * 40)
+        log_content.append(improved_text)
+        log_content.append("")
+        log_content.append(f"Content Type: {content_type or 'Unknown'}")
+        log_content.append("")
+    
+    log_content.append(f"Improvement Iterations: {improvement_iterations}")
+    log_content.append("")
+    
+    # Write to file
+    with log_path.open("w", encoding="utf-8") as f:
+        f.write("\n".join(log_content))
+
+
+
+def add_pdf_name_to_json_metadata(csv_file: Path, pdf_file: Path):
+    """Add the original PDF name to the JSON metadata file immediately after creation."""
+    try:
+        # Find the corresponding JSON file
+        hash_str = hash_name(pdf_file)
+        json_dir = csv_file.parent / hash_str
+        json_file = json_dir / f"{hash_str}.json"
+        
+        if json_file.exists():
+            # Read existing JSON data
+            with json_file.open("r", encoding="utf-8") as f:
+                metadata = json.load(f)
+            
+            # Add original PDF filename if not already present
+            if "original_pdf" not in metadata:
+                metadata["original_pdf"] = pdf_file.name
+                
+                # Write back updated JSON
+                with json_file.open("w", encoding="utf-8") as f:
+                    json.dump(metadata, f, indent=2, ensure_ascii=False)
+                
+                console.print(f"[green]✔ Added PDF name to {json_file.name}: {pdf_file.name}[/green]")
+    except Exception as e:
+        console.print(f"[yellow]⚠ Could not update JSON metadata: {e}[/yellow]")
