@@ -59,7 +59,7 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
                 i=pdf_path, o=self.output_dir, f="text", pretty=True, n="test_dataset", w=1, save_interval=1
             )
         
-        output_file = self.output_dir / "test_dataset.jsonl"
+        output_file = self.output_dir / "jsonl" / "test_dataset.jsonl"
         self.assertTrue(output_file.exists())
         records = []
         with output_file.open("r", encoding="utf-8") as f:
@@ -213,7 +213,7 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
 
         self.assertEqual(len(result), 4)
 
-        dataset_file = self.output_dir / "test_dataset.jsonl"
+        dataset_file = self.output_dir / "jsonl" / "test_dataset.jsonl"
         self.assertTrue(dataset_file.exists())
         
         temp_files = list(self.output_dir.glob("test_dataset_temp_*.jsonl"))
@@ -262,7 +262,7 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
                 pdf_path, self.output_dir, "text", False, "test_dataset", 1, save_interval=1
             )
 
-            dataset_file = self.output_dir / "test_dataset.jsonl"
+            dataset_file = self.output_dir / "jsonl" / "test_dataset.jsonl"
             self.assertTrue(dataset_file.exists())
             
             records = []
@@ -363,7 +363,7 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
                 with patch("x_spanformer.pipelines.pdf2jsonl.run_pdf2seg", side_effect=mock_pdf2seg):
                     pdf2jsonl.run(pdf_dir, self.output_dir, "text", False, "test_dataset", 1, save_interval=1)
 
-        output_file = self.output_dir / "test_dataset.jsonl"
+        output_file = self.output_dir / "jsonl" / "test_dataset.jsonl"
         self.assertTrue(output_file.exists())
         
         records = []
@@ -400,7 +400,7 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
                 
                 pdf2jsonl.run(pdf_file, self.output_dir, "text", False, "single_dataset", 1, save_interval=1)
         
-        output_file = self.output_dir / "single_dataset.jsonl"
+        output_file = self.output_dir / "jsonl" / "single_dataset.jsonl"
         self.assertTrue(output_file.exists())
         
         with output_file.open("r", encoding="utf-8") as f:
@@ -441,8 +441,8 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         with patch("x_spanformer.pipelines.pdf2jsonl.run_pdf2seg", return_value=generated_csv):
             pdf2jsonl.run(pdf_path, self.output_dir, "text", True, "final_dataset", 1, save_interval=1)
         
-        jsonl_file = self.output_dir / "final_dataset.jsonl"
-        json_file = self.output_dir / "final_dataset.json"
+        jsonl_file = self.output_dir / "jsonl" / "final_dataset.jsonl"
+        json_file = self.output_dir / "jsonl" / "final_dataset.json"
         
         self.assertTrue(jsonl_file.exists(), "JSONL output file should exist")
         self.assertTrue(json_file.exists(), "Pretty JSON output file should exist")
@@ -501,7 +501,7 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         with patch("x_spanformer.pipelines.pdf2jsonl.run_pdf2seg", side_effect=mock_pdf2seg_mixed):
             pdf2jsonl.run(pdf_dir, self.output_dir, "text", False, "mixed_dataset", 1, save_interval=1)
         
-        output_file = self.output_dir / "mixed_dataset.jsonl"
+        output_file = self.output_dir / "jsonl" / "mixed_dataset.jsonl"
         self.assertTrue(output_file.exists())
         
         with output_file.open("r", encoding="utf-8") as f:

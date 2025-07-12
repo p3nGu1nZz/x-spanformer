@@ -34,6 +34,71 @@ def hash_name(p: Path) -> str:
     return hashlib.sha256(p.name.encode()).hexdigest()[:8]
 
 
+def save_ai_processing_log(output_dir: Path, source_file: str, segment_id: str, 
+                          original_text: str, improved_text: Optional[str], content_type: Optional[str],
+                          judge_responses: list, improvement_iterations: int):
+    """Save detailed AI processing logs for a segment."""
+    # Create jsonl directory structure with hash-based subdirectories
+    hash_str = hash_name(Path(source_file))
+    jsonl_dir = output_dir / "jsonl" / hash_str
+    jsonl_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create conversation log filename
+    log_filename = f"{hash_str}_{segment_id}.json"
+    log_path = jsonl_dir / log_filename
+    
+    # Build comprehensive conversation log as JSON
+    conversation_log = {
+        "metadata": {
+            "segment_id": segment_id,
+            "source_file": source_file,
+            "source_hash": hash_str,
+            "timestamp": datetime.now().isoformat(),
+            "improvement_iterations": improvement_iterations
+        },
+        "original_text": original_text,
+        "improved_text": improved_text if improved_text and improved_text != original_text else None,
+        "content_type": content_type,
+        "judge_responses": judge_responses,
+        "processing_summary": {
+            "total_judge_calls": len(judge_responses),
+            "improvement_attempts": improvement_iterations,
+            "final_status": judge_responses[-1].get("status") if judge_responses else "unknown",
+            "final_score": judge_responses[-1].get("score") if judge_responses else 0.0
+        }
+    }
+    
+    # Write to JSON file for easy loading into other systems
+    with log_path.open("w", encoding="utf-8") as f:
+        json.dump(conversation_log, f, indent=2, ensure_ascii=False)
+
+
+def add_pdf_name_to_json_metadata(csv_file: Path, pdf_file: Path):
+    """Add the original PDF name to the JSON metadata file immediately after creation."""
+    try:
+        # Find the corresponding JSON file
+        hash_str = hash_name(pdf_file)
+        json_dir = csv_file.parent / hash_str
+        json_file = json_dir / f"{hash_str}.json"
+        
+        if json_file.exists():
+            # Read existing JSON data
+            with json_file.open("r", encoding="utf-8") as f:
+                metadata = json.load(f)
+            
+            # Add original PDF filename if not already present
+            if "original_pdf" not in metadata:
+                metadata["original_pdf"] = pdf_file.name
+                
+                # Write back updated JSON
+                with json_file.open("w", encoding="utf-8") as f:
+                    json.dump(metadata, f, indent=2, ensure_ascii=False)
+                
+                console.print(f"[green]✔ Added PDF name to {json_file.name}: {pdf_file.name}[/green]")
+    except Exception as e:
+        console.print(f"[yellow]⚠ Could not update JSON metadata: {e}[/yellow]")
+
+
 def run_pdf2seg(pdf_file: Path, output_dir: Path, force_regenerate: bool = False) -> Optional[Path]:
     """Run pdf2seg on a PDF file to generate CSV output."""
 
@@ -183,8 +248,10 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         if not output_path or not records:
             return
 
-        output_path.mkdir(parents=True, exist_ok=True)
-        dataset_file = output_path / f"{base_name}.jsonl"
+        # Create jsonl directory for dataset files
+        jsonl_dir = output_path / "jsonl"
+        jsonl_dir.mkdir(parents=True, exist_ok=True)
+        dataset_file = jsonl_dir / f"{base_name}.jsonl"
         mode = "a"  # Always append
 
         with dataset_file.open(mode, encoding="utf-8") as writer:
@@ -603,8 +670,9 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
     for csv_name, pdf_name in pdf_mapping.items():
         console.print(f"[dim]  {csv_name} ← {pdf_name}[/dim]")
     
-    # Check if dataset file already exists
-    dataset_file = o / f"{base}.jsonl"
+    # Check if dataset file already exists in jsonl directory
+    jsonl_dir = o / "jsonl"
+    dataset_file = jsonl_dir / f"{base}.jsonl"
     existing_records = []
     if dataset_file.exists():
         console.print(f"[yellow]⚠ Existing dataset file found: {dataset_file.name}[/yellow]")
@@ -642,7 +710,8 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
     # The final save is now handled by the incremental saver.
     # We can optionally write a pretty-printed JSON for inspection.
     if pretty:
-        j2 = o / f"{base}.json"
+        jsonl_dir = o / "jsonl"
+        j2 = jsonl_dir / f"{base}.json"
         with j2.open("w", encoding="utf-8") as writer:
             json.dump([x.model_dump() for x in allr], writer, ensure_ascii=False, indent=2)
         console.print(f"[cyan]• Pretty JSON → {j2.name}[/cyan]")
@@ -738,79 +807,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-def save_ai_processing_log(output_dir: Path, source_file: str, segment_id: str, 
-                          original_text: str, improved_text: Optional[str], content_type: Optional[str],
-                          judge_responses: list, improvement_iterations: int):
-    """Save detailed AI processing logs for a segment."""
-    # Create ai directory structure
-    hash_str = hash_name(Path(source_file))
-    ai_dir = output_dir / "ai" / hash_str
-    ai_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create log filename
-    log_filename = f"{hash_str}_{segment_id}.txt"
-    log_path = ai_dir / log_filename
-    
-    # Build log content
-    log_content = []
-    log_content.append(f"AI Processing Log for Segment: {segment_id}")
-    log_content.append(f"Source File: {source_file}")
-    log_content.append(f"Hash: {hash_str}")
-    log_content.append(f"Timestamp: {datetime.now().isoformat()}")
-    log_content.append("=" * 80)
-    log_content.append("")
-    
-    log_content.append("ORIGINAL TEXT:")
-    log_content.append("-" * 40)
-    log_content.append(original_text)
-    log_content.append("")
-    
-    log_content.append("JUDGE RESPONSES:")
-    log_content.append("-" * 40)
-    for i, response in enumerate(judge_responses):
-        log_content.append(f"Response {i + 1}:")
-        log_content.append(json.dumps(response, indent=2))
-        log_content.append("")
-    
-    if improved_text and improved_text != original_text:
-        log_content.append("IMPROVED TEXT:")
-        log_content.append("-" * 40)
-        log_content.append(improved_text)
-        log_content.append("")
-        log_content.append(f"Content Type: {content_type or 'Unknown'}")
-        log_content.append("")
-    
-    log_content.append(f"Improvement Iterations: {improvement_iterations}")
-    log_content.append("")
-    
-    # Write to file
-    with log_path.open("w", encoding="utf-8") as f:
-        f.write("\n".join(log_content))
-
-
-
-def add_pdf_name_to_json_metadata(csv_file: Path, pdf_file: Path):
-    """Add the original PDF name to the JSON metadata file immediately after creation."""
-    try:
-        # Find the corresponding JSON file
-        hash_str = hash_name(pdf_file)
-        json_dir = csv_file.parent / hash_str
-        json_file = json_dir / f"{hash_str}.json"
-        
-        if json_file.exists():
-            # Read existing JSON data
-            with json_file.open("r", encoding="utf-8") as f:
-                metadata = json.load(f)
-            
-            # Add original PDF filename if not already present
-            if "original_pdf" not in metadata:
-                metadata["original_pdf"] = pdf_file.name
-                
-                # Write back updated JSON
-                with json_file.open("w", encoding="utf-8") as f:
-                    json.dump(metadata, f, indent=2, ensure_ascii=False)
-                
-                console.print(f"[green]✔ Added PDF name to {json_file.name}: {pdf_file.name}[/green]")
-    except Exception as e:
-        console.print(f"[yellow]⚠ Could not update JSON metadata: {e}[/yellow]")
