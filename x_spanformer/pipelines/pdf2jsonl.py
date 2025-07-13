@@ -386,89 +386,125 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                         "reason": f"processing error: {str(e)}"
                     }, None
         
-        # Create tasks for all segments
-        tasks = [
-            judge_segment(i, text, expanded_source_mapping[i]) 
-            for i, text in enumerate(expanded_spans)
-        ]
+        # Group segments by source file to process documents sequentially
+        segments_by_source = {}
+        for i, (text, source_file) in enumerate(zip(expanded_spans, expanded_source_mapping)):
+            if source_file not in segments_by_source:
+                segments_by_source[source_file] = []
+            segments_by_source[source_file].append((i, text))
         
-        # Process all segments concurrently with progress tracking
-        results = []
-        completed_count = 0
+        console.print(f"[cyan]📋 Processing {len(segments_by_source)} documents sequentially, with concurrent judge evaluation within each document[/cyan]")
         
-        for task in asyncio.as_completed(tasks):
-            idx, r, log_data = await task
-            results.append((idx, r, log_data))
-            completed_count += 1
-            
-            # Process this result immediately for incremental saving
-            tag = r["status"]
-            reasons.append(r["reason"])
-            stats[tag] += 1
-
-            # Handle AI processing log 
-            if log_data and output_path:
-                save_ai_processing_log(
-                    output_path,
-                    log_data["source_file"],
-                    str(idx),
-                    log_data["text"],
-                    log_data["judge_responses"],
-                    r
-                )
-
-            src_file = expanded_source_mapping[idx]
-            original_text = expanded_spans[idx]
-
-            record = PretrainRecord(
-                raw=original_text,
-                type=r.get("type", "natural"),
-                meta=RecordMeta(
-                    source_file=src_file,
-                    doc_language="en",
-                    extracted_by="pdf2seg",
-                    confidence=r.get("score"),
-                    status=tag,
-                    tags=[tag] if tag != "keep" else [],
-                    notes=r.get('reason', '')
-                )
-            )
-            
-            all_processed_recs.append(record)
-            processed_count_total += 1
-
-            # Incremental saving - save immediately after each record
-            if save_interval > 0:
-                records_to_save.append(record)
-                if len(records_to_save) >= save_interval:
-                    save_chunk(records_to_save)
-                    records_to_save.clear()
-
-            # Only count valid records (status "keep") toward valid count
-            if tag == "keep":
-                valid_records_count += 1
-            
-            # Display individual judgment result for every segment (but in compact format)
-            if log_data:
-                display_judgment_result(
-                    idx=idx,
-                    text=log_data["text"], 
-                    status=r["status"],
-                    score=r["score"],
-                    reason=r["reason"],
-                    content_type=r.get("type", "natural"),
-                    total_count=len(tasks)
-                )
-            
-            # Show progress summary every 10 completed or at end
-            if completed_count % 10 == 0 or completed_count == len(tasks):
-                keep_count = sum(1 for _, result, _ in results if result["status"] == "keep")
-                discard_count = completed_count - keep_count
-                console.print(f"[bright_blue]📊 Progress Summary: {completed_count}/{len(tasks)} | [green]✅ Keep: {keep_count}[/green] | [red]❌ Discard: {discard_count}[/red][/bright_blue]")
-                console.print()
+        # Process each document sequentially
+        overall_completed_count = 0
+        overall_keep_count = 0  # Track total kept records across all documents
+        results = []  # Track all results for final return
         
-        # Sort results by original index to maintain order (for final return)
-        results.sort(key=lambda x: x[0])
+        for doc_idx, (source_file, segments_list) in enumerate(segments_by_source.items(), 1):
+            console.print(f"[bold yellow]📄 Processing Document {doc_idx}/{len(segments_by_source)}: {source_file}[/bold yellow]")
+            console.print(f"[dim]   {len(segments_list)} segments in this document[/dim]")
+            
+            # Create tasks for this document only
+            doc_tasks = [
+                judge_segment(original_idx, text, source_file) 
+                for original_idx, text in segments_list
+            ]
+            
+            # Process this document's segments concurrently
+            doc_results = []
+            doc_completed_count = 0
+            
+            for task in asyncio.as_completed(doc_tasks):
+                idx, r, log_data = await task
+                doc_results.append((idx, r, log_data))
+                doc_completed_count += 1
+                overall_completed_count += 1
+                
+                # Process this result immediately for incremental saving
+                tag = r["status"]
+                reasons.append(r["reason"])
+                stats[tag] += 1
+
+                # Handle AI processing log 
+                if log_data and output_path:
+                    save_ai_processing_log(
+                        output_path,
+                        log_data["source_file"],
+                        str(idx),
+                        log_data["text"],
+                        log_data["judge_responses"],
+                        r
+                    )
+
+                src_file = expanded_source_mapping[idx]
+                original_text = expanded_spans[idx]
+
+                record = PretrainRecord(
+                    raw=original_text,
+                    type=r.get("type", "natural"),
+                    meta=RecordMeta(
+                        source_file=src_file,
+                        doc_language="en",
+                        extracted_by="pdf2seg",
+                        confidence=r.get("score"),
+                        status=tag,
+                        tags=[tag] if tag != "keep" else [],
+                        notes=r.get('reason', '')
+                    )
+                )
+                
+                all_processed_recs.append(record)
+                processed_count_total += 1
+
+                # Incremental saving - save immediately after each record
+                if save_interval > 0:
+                    records_to_save.append(record)
+                    if len(records_to_save) >= save_interval:
+                        save_chunk(records_to_save)
+                        records_to_save.clear()
+
+                # Only count valid records (status "keep") toward valid count
+                if tag == "keep":
+                    valid_records_count += 1
+                    overall_keep_count += 1  # Track overall kept records
+                
+                # Display individual judgment result for every segment
+                if log_data:
+                    display_judgment_result(
+                        idx=overall_completed_count - 1,  # Use sequential progress counter (0-based)
+                        text=log_data["text"], 
+                        status=r["status"],
+                        score=r["score"],
+                        reason=r["reason"],
+                        content_type=r.get("type", "natural"),
+                        total_count=len(expanded_spans)
+                    )
+                
+                # Show progress summary every 10 completed or at end of document
+                if doc_completed_count % 10 == 0 or doc_completed_count == len(doc_tasks):
+                    keep_count = sum(1 for _, result, _ in doc_results if result["status"] == "keep")
+                    discard_count = doc_completed_count - keep_count
+                    console.print(f"[bright_blue]📊 Document Progress: {doc_completed_count}/{len(doc_tasks)} | [green]✅ Keep: {keep_count}[/green] | [red]❌ Discard: {discard_count}[/red] | Overall: {overall_completed_count}/{len(expanded_spans)}[/bright_blue]")
+                    console.print()
+                    
+                    # Display telemetry panel after progress summary
+                    if overall_completed_count > 0:  # Only show if we have processed some records
+                        display_telemetry_panel(
+                            processed_count=overall_completed_count,
+                            total_count=len(expanded_spans),
+                            start_time=start_time,
+                            save_count=records_saved_this_session,  # Actual saved records (only keeps)
+                            estimated_total_saves=overall_keep_count,  # Current estimated saves based on keep rate
+                            records_saved_this_session=records_saved_this_session,
+                            keep_count=overall_keep_count
+                        )
+            
+            # Sort this document's results by original index to maintain order within document
+            doc_results.sort(key=lambda x: x[0])
+            results.extend(doc_results)
+            
+            console.print(f"[green]✅ Completed Document {doc_idx}/{len(segments_by_source)}: {source_file}[/green]")
+            console.print()
         
         # Save any remaining records in the buffer
         if save_interval > 0 and records_to_save:

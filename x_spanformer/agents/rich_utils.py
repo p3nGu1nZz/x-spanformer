@@ -39,6 +39,7 @@ def display_telemetry_panel(
     save_count: int,
     estimated_total_saves: int,
     records_saved_this_session: int,
+    keep_count: int | None = None,
 ):
     """Display a comprehensive telemetry panel in magenta."""
     current_time = time.time()
@@ -78,6 +79,15 @@ def display_telemetry_panel(
         f"{processed_count:,} / {total_count:,}",
         f"({progress_percentage:.1f}%)",
     )
+    
+    # Show breakdown of keeps vs discards if available
+    if keep_count is not None:
+        discard_count = processed_count - keep_count
+        table.add_row(
+            "✅ Keep/❌ Discard",
+            f"{keep_count:,} / {discard_count:,}",
+            f"({keep_count/processed_count*100:.1f}% / {discard_count/processed_count*100:.1f}%)" if processed_count > 0 else "",
+        )
     table.add_row(
         "⚡ Processing Rate",
         f"{processing_rate:.1f} segments/min",
