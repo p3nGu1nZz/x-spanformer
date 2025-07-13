@@ -21,6 +21,6 @@ def render_prompt(template_name: str, **kwargs) -> str:
     c.print(f"[dim]Rendering template: {template_name}.j2[/dim]")
     return tmpl.render(**kwargs)
 
-def get_system_prompt(template_name: str = "selfcrit_system", **kwargs) -> str:
+def get_system_prompt(template_name: str = "judge_system", **kwargs) -> str:
     c.print(f"[dim]Using system prompt: {template_name}.j2[/dim]")
     return render_prompt(template_name, **kwargs)

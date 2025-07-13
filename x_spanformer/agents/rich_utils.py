@@ -124,9 +124,9 @@ def display_summary_panel(name: str, stats: Counter, reasons: list[str]):
     table.add_column("Status", style="bold", width=15)
     table.add_column("Count", style="white")
 
-    for k in ("keep", "revise", "discard"):
+    for k in ("keep", "discard"):
         count = stats.get(k, 0)
-        color = {"keep": "green", "revise": "yellow", "discard": "red"}[k]
+        color = {"keep": "green", "discard": "red"}[k]
         table.add_row(f"[{color}]{k.capitalize()}", f"{count:,}")
 
     top_reasons = Counter(reasons).most_common(5)

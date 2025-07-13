@@ -17,14 +17,13 @@ from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
-from x_spanformer.agents.config_loader import load_selfcrit_config
+from x_spanformer.agents.config_loader import load_judge_config
 from x_spanformer.agents.agent_utils import (
     console,
     display_summary_panel,
     display_telemetry_panel,
 )
-from x_spanformer.agents.selfcrit import process_segment_cycle
-
+from x_spanformer.agents.session.judge_session import JudgeSession
 from x_spanformer.schema.metadata import RecordMeta
 from x_spanformer.schema.pretrain_record import PretrainRecord
 
@@ -32,6 +31,67 @@ from x_spanformer.schema.pretrain_record import PretrainRecord
 def hash_name(p: Path) -> str:
     """Generate a hash for a given path's name."""
     return hashlib.sha256(p.name.encode()).hexdigest()[:8]
+
+
+def save_ai_processing_log(output_dir: Path, source_file: str, segment_id: str, 
+                          original_text: str, judge_responses: list, consensus_result: dict):
+    """Save detailed AI processing logs for a segment."""
+    # Create jsonl directory structure with hash-based subdirectories
+    hash_str = hash_name(Path(source_file))
+    jsonl_dir = output_dir / "jsonl" / hash_str
+    jsonl_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create conversation log filename
+    log_filename = f"{hash_str}_{segment_id}.json"
+    log_path = jsonl_dir / log_filename
+    
+    # Build comprehensive conversation log as JSON
+    conversation_log = {
+        "metadata": {
+            "segment_id": segment_id,
+            "source_file": source_file,
+            "source_hash": hash_str,
+            "timestamp": datetime.now().isoformat()
+        },
+        "original_text": original_text,
+        "content_type": consensus_result.get("type", "natural"),
+        "judge_responses": judge_responses,
+        "processing_summary": {
+            "total_judge_calls": len(judge_responses),
+            "final_status": consensus_result.get("status", "discard"),
+            "final_score": consensus_result.get("score", 0.0)
+        }
+    }
+    
+    # Write to JSON file for easy loading into other systems
+    with log_path.open("w", encoding="utf-8") as f:
+        json.dump(conversation_log, f, indent=2, ensure_ascii=False)
+
+
+def add_pdf_name_to_json_metadata(csv_file: Path, pdf_file: Path):
+    """Add the original PDF name to the JSON metadata file immediately after creation."""
+    try:
+        # Find the corresponding JSON file
+        hash_str = hash_name(pdf_file)
+        json_dir = csv_file.parent / hash_str
+        json_file = json_dir / f"{hash_str}.json"
+        
+        if json_file.exists():
+            # Read existing JSON data
+            with json_file.open("r", encoding="utf-8") as f:
+                metadata = json.load(f)
+            
+            # Add original PDF filename if not already present
+            if "original_pdf" not in metadata:
+                metadata["original_pdf"] = pdf_file.name
+                
+                # Write back updated JSON
+                with json_file.open("w", encoding="utf-8") as f:
+                    json.dump(metadata, f, indent=2, ensure_ascii=False)
+                
+                console.print(f"[green]✔ Added PDF name to {json_file.name}: {pdf_file.name}[/green]")
+    except Exception as e:
+        console.print(f"[yellow]⚠ Could not update JSON metadata: {e}[/yellow]")
 
 
 def run_pdf2seg(pdf_file: Path, output_dir: Path, force_regenerate: bool = False) -> Optional[Path]:
@@ -174,7 +234,6 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
     # Note: We can't predict how many valid records we'll have, so estimated_total_saves will be updated after text splitting
     estimated_total_saves = 1  # Placeholder, will be updated after text splitting
     records_saved_this_session = 0
-    records_discarded_this_session = 0
     total_segment_count = len(spans)  # Initialize with original count, will be updated after splitting
 
     def save_chunk(records: list[PretrainRecord]):
@@ -184,38 +243,26 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         if not output_path or not records:
             return
 
-        output_path.mkdir(parents=True, exist_ok=True)
-        dataset_file = output_path / f"{base_name}.jsonl"
+        # Only save "keep" records to the main dataset - "discard" should not be in final training data
+        filtered_records = [record for record in records if record.meta.status == "keep"]
+        
+        if not filtered_records:
+            return  # Nothing to save after filtering
+
+        # Create jsonl directory for dataset files
+        jsonl_dir = output_path / "jsonl"
+        jsonl_dir.mkdir(parents=True, exist_ok=True)
+        dataset_file = jsonl_dir / f"{base_name}.jsonl"
         mode = "a"  # Always append
 
         with dataset_file.open(mode, encoding="utf-8") as writer:
-            for record in records:
+            for record in filtered_records:
                 writer.write(json.dumps(record.model_dump(), ensure_ascii=False) + "\n")
 
-        num_saved = len(records)
+        num_saved = len(filtered_records)
         records_saved_this_session += num_saved
 
-        console.print(f"[blue]💾 Saved {num_saved} record(s) to {dataset_file.name} (total this session: {records_saved_this_session})[/blue]")
-
-    def save_discard_chunk(records: list[PretrainRecord]):
-        """Save discarded records to discard.jsonl file"""
-        nonlocal records_discarded_this_session
-
-        if not output_path or not records:
-            return
-
-        output_path.mkdir(parents=True, exist_ok=True)
-        discard_file = output_path / "discard.jsonl"
-        mode = "a"  # Always append
-
-        with discard_file.open(mode, encoding="utf-8") as writer:
-            for record in records:
-                writer.write(json.dumps(record.model_dump(), ensure_ascii=False) + "\n")
-
-        num_discarded = len(records)
-        records_discarded_this_session += num_discarded
-
-        console.print(f"[red]🗑️ Saved {num_discarded} discarded record(s) to {discard_file.name} (total this session: {records_discarded_this_session})[/red]")
+        console.print(f"[blue]💾 Saved {num_saved} record(s) to {dataset_file.name} (total this session: {records_saved_this_session}) [dim](filtered from {len(records)} total)[/dim][/blue]")
 
     async def process():
         sem = asyncio.Semaphore(w)
@@ -228,62 +275,115 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         # Count existing valid records (status "keep") toward valid count
         valid_records_count = sum(1 for r in existing_records if r.meta.status == "keep") if existing_records else 0
 
-        # Initialize once, sharing the same config  
-        max_raw_length = cfg.get("processor", {}).get("max_raw_length", 512)
-        discard_threshold = cfg.get("critique", {}).get("discard_threshold", 0.25)
-        improvement_threshold = cfg.get("critique", {}).get("threshold", 0.8)
+        # Initialize sessions once, sharing the same config
+        agent_config = load_judge_config()
+        judge_session = JudgeSession(config=agent_config, quiet=True)
+
         # Pre-process spans to split long texts
-        discard_threshold = cfg.get("critique", {}).get("discard_threshold", 0.25)
-        improvement_threshold = cfg.get("critique", {}).get("threshold", 0.8)
-        
-        async def score_and_improve(idx: int, t: str, source_file: str):
+        max_raw_length = agent_config.get("processor", {}).get("max_raw_length", 512)
+        expanded_spans = []
+        expanded_source_mapping = []
+
+        for i, (text, source_file) in enumerate(zip(spans, source_mapping)):
+            if len(text) > max_raw_length:
+                text_chunks = split_long_text(text, max_raw_length)
+            else:
+                text_chunks = [text]
+            
+            for chunk in text_chunks:
+                expanded_spans.append(chunk)
+                expanded_source_mapping.append(source_file)
+
+        if existing_records:
+            processed_raws = {rec.raw for rec in existing_records}
+            if processed_raws:
+                unprocessed_spans = []
+                unprocessed_source_mapping = []
+                for text, source in zip(expanded_spans, expanded_source_mapping):
+                    if text not in processed_raws:
+                        unprocessed_spans.append(text)
+                        unprocessed_source_mapping.append(source)
+
+                if len(unprocessed_spans) < len(expanded_spans):
+                    skipped_count = len(expanded_spans) - len(unprocessed_spans)
+                    console.print(f"[cyan]🔄 Resuming: Skipped {skipped_count} already processed segments. Total processed so far: {processed_count_total}[/cyan]")
+                    expanded_spans = unprocessed_spans
+                    expanded_source_mapping = unprocessed_source_mapping
+                else:
+                    console.print("[yellow]No matching segments found in existing records. Processing all from scratch.[/yellow]")
+
+        if not expanded_spans:
+            console.print("[green]✔ All segments have already been processed. Nothing to do.[/green]")
+            return []
+
+        if len(expanded_spans) != len(spans):
+            console.print(f"[cyan]📐 Text splitting: {len(spans)} → {len(expanded_spans)} segments to process (max length: {max_raw_length} chars)[/cyan]")
+
+        # Update references to use expanded spans
+        nonlocal total_segment_count
+        total_segment_count = len(expanded_spans)
+        nonlocal estimated_total_saves
+        estimated_total_saves = total_segment_count # Each segment is a potential save
+
+        async def judge_segment(idx: int, t: str, source_file: str):
             try:
-                console.print(f"[bold blue]━━━ Processing segment {idx + 1} ━━━[/bold blue]")
-                console.print(f"[dim]Source: {source_file} | Text ({len(t)} chars):[/dim] {t}")
-                console.print()
+                async with sem:
+                    console.print(f"[bold blue]━━━ Processing segment {idx + 1}/{total_segment_count} ━━━[/bold blue]")
+                    console.print(f"[dim]Source: {source_file} | Text ({len(t)} chars):[/dim] {t}")
+                    console.print()
 
-                # Use the SelfCritAgent system for complete processing
-                result = await process_segment_cycle(t, max_cycles=6)
-                
-                # Extract final results
-                final_text = result.get("final_text", t)
-                improvement_iterations = result.get("cycles_completed", 0)
-                
-                # Determine if improvement was made
-                improved_text = final_text if final_text != t else None
-                
-                # Get content type from judge result (Natural, Code, or Mixed)
-                content_type = result.get("type", "Natural")  # Use judge's classification
-                
-                # Create detailed conversation log that includes full processing history
-                detailed_conversation_log = result.get("conversation_history", [])
-                
-                # If no conversation history returned, create basic log entry
-                if not detailed_conversation_log:
-                    detailed_conversation_log = [{
-                        "step": "selfcrit_cycle",
-                        "input_text": t,
-                        "final_text": final_text,
-                        "cycles_completed": improvement_iterations,
-                        "model": cfg.get("model", {}).get("name", "unknown"),
-                        "result": result,
-                        "judge_evaluations": result.get("judge_history", []),
-                        "improvement_history": result.get("improvement_history", []),
-                        "consensus_details": result.get("consensus_details", {}),
-                        "threshold_checks": {
-                            "improvement_threshold": cfg.get("critique", {}).get("threshold", 0.8),
-                            "discard_threshold": cfg.get("critique", {}).get("discard_threshold", 0.25),
-                            "final_score": result.get("score", 0),
-                            "triggered_improvement": improvement_iterations > 0
-                        }
-                    }]
+                    # Get number of judges from config
+                    num_judges = agent_config.get("judge", {}).get("judges", 5)
+                    console.print(f"[cyan]⚖️ Convening {num_judges} judges for consensus evaluation...[/cyan]")
+                    
+                    # Create concurrent judge evaluation tasks
+                    judge_tasks = []
+                    for judge_num in range(1, num_judges + 1):
+                        task = judge_session.evaluate(t)
+                        judge_tasks.append(task)
+                    
+                    # Execute all judge evaluations concurrently
+                    judge_responses = await asyncio.gather(*judge_tasks)
+                    scores = [r.get("score", 0) for r in judge_responses]
+                    
+                    # Display individual judge results
+                    for i, r in enumerate(judge_responses, 1):
+                        console.print(f"[dim]Judge {i}: score={r.get('score', 0):.2f}, status={r.get('status', 'unknown')}, type={r.get('type', 'natural')}[/dim]")
 
-                # Save AI processing log for this segment
-                if output_path:
-                    save_ai_processing_log(output_path, source_file, str(idx), t, improved_text, content_type, [result], improvement_iterations, detailed_conversation_log, result)
+                    # Calculate consensus score and type
+                    consensus_score = sum(scores) / len(scores)
+                    threshold = agent_config.get("judge", {}).get("threshold", 0.69)
+                    
+                    # Get consensus content type
+                    content_types = [r.get("type", "natural") for r in judge_responses]
+                    consensus_type = max(set(content_types), key=content_types.count)
+                    
+                    # Determine final status based on consensus score
+                    if consensus_score >= threshold:
+                        final_status = "keep"
+                        console.print(f"[green]✔ KEEP: consensus score {consensus_score:.3f} >= threshold {threshold} ({num_judges} judges, type: {consensus_type})[/green]")
+                    else:
+                        final_status = "discard"
+                        console.print(f"[red]✗ DISCARD: consensus score {consensus_score:.3f} < threshold {threshold} ({num_judges} judges, type: {consensus_type})[/red]")
 
-                return idx, result, improved_text, content_type, final_text, improvement_iterations, t
-                
+                    # Combine all judge reasons
+                    all_reasons = [r.get("reason", "") for r in judge_responses]
+                    combined_reason = " / ".join(all_reasons)
+
+                    # Create final consensus result
+                    consensus_result = {
+                        "score": consensus_score,
+                        "status": final_status,
+                        "type": consensus_type,
+                        "reason": combined_reason
+                    }
+
+                    # Save AI processing log for this segment
+                    if output_path:
+                        save_ai_processing_log(output_path, source_file, str(idx), t, judge_responses, consensus_result)
+
+                    return idx, consensus_result, None, None, t, 0, t
+                    
             except Exception as e:
                 # Escape potential Rich markup in error messages
                 error_msg = str(e).replace('[', '\\[').replace(']', '\\]')
@@ -292,173 +392,74 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                 safe_text = t[:100].replace('[', '\\[').replace(']', '\\]')
                 console.print(f"[dim]Text was:[/dim] {safe_text}...")
                 console.print()
-                return idx, {"score": 0.5, "status": "revise", "reason": "processing error"}, None, None, t, 0, t
+                return idx, {"score": 0.0, "status": "discard", "reason": "processing error"}, None, None, t, 0, t
 
-        # Process files sequentially to maintain order
-        for csv_file in csv_files:
-            try:
-                df = pd.read_csv(csv_file)
-                if col in df.columns:
-                    original_pdf_name = pdf_mapping.get(csv_file.name, csv_file.name)
-                    console.print(f"[cyan]� Processing {csv_file.name} (original: {original_pdf_name})[/cyan]")
-                    
-                    file_spans = df[col].dropna().astype(str).str.strip().tolist()
-                    
-                    # Pre-process spans to split long texts for this file
-                    expanded_file_spans = []
-                    
-                    for text in file_spans:
-                        if len(text) > max_raw_length:
-                            text_chunks = split_long_text(text, max_raw_length)
-                        else:
-                            text_chunks = [text]
-                        
-                        for chunk in text_chunks:
-                            expanded_file_spans.append(chunk)
-                    
-                    console.print(f"[dim]  → {len(file_spans)} segments → {len(expanded_file_spans)} after splitting[/dim]")
-                    
-                    # Skip already processed segments
-                    if existing_records:
-                        processed_raws = {rec.raw for rec in existing_records}
-                        unprocessed_file_spans = [text for text in expanded_file_spans if text not in processed_raws]
-                        
-                        if len(unprocessed_file_spans) < len(expanded_file_spans):
-                            skipped_count = len(expanded_file_spans) - len(unprocessed_file_spans)
-                            console.print(f"[cyan]🔄 Skipped {skipped_count} already processed segments from {csv_file.name}[/cyan]")
-                            expanded_file_spans = unprocessed_file_spans
-                    
-                    console.print(f"[green]✔ Ready to process {len(expanded_file_spans)} segments from {csv_file.name}[/green]")
-                    console.print()
+        tasks = [judge_segment(i, text, expanded_source_mapping[i]) for i, text in enumerate(expanded_spans)]
 
-                    # Process this file's segments with controlled concurrency
-                    semaphore = asyncio.Semaphore(w)  # Use worker count for concurrency within each file
+        try:
+            # Process tasks in sequential order to maintain segment ordering
+            for i, task in enumerate(tasks):
+                try:
+                    idx, r, _, _, final_text, _, original_text = await task
+                    tag = r["status"]
+                    reasons.append(r["reason"])
+                    stats[tag] += 1
+
+                    src_file = expanded_source_mapping[idx]
+
+                    record = PretrainRecord(
+                        raw=original_text,  # Always use original text for raw field
+                        type=r.get("type", "natural"),  # Use content type from judge consensus
+                        meta=RecordMeta(
+                            source_file=src_file,
+                            doc_language=langid.classify(original_text)[0],  # Use original text for language detection
+                            extracted_by="pdf2seg",
+                            confidence=r.get("score"),
+                            status=tag,
+                            tags=[tag] if tag != "keep" else [],
+                            notes=r.get('reason', '')
+                        )
+                    )
                     
-                    async def process_segment_with_semaphore(local_idx, text):
-                        async with semaphore:
-                            global_idx = processed_count_total + len(all_processed_recs) + local_idx
-                            result = await score_and_improve(global_idx, text, original_pdf_name)
-                            return local_idx, result
-                    
-                    # Create tasks for concurrent processing within this file
-                    tasks = [process_segment_with_semaphore(local_idx, text) 
-                            for local_idx, text in enumerate(expanded_file_spans)]
-                    
-                    # Process segments concurrently but maintain results order
-                    segment_results = await asyncio.gather(*tasks, return_exceptions=True)
-                    
-                    # Process results in order to maintain deterministic output
-                    for local_idx, result_tuple in enumerate(segment_results):
-                        try:
-                            if isinstance(result_tuple, Exception):
-                                console.print(f"[red]Error processing segment {local_idx + 1}: {result_tuple}[/red]")
-                                continue
-                            
-                            if result_tuple is None:
-                                continue
-                            
-                            # Ensure we can unpack the outer tuple (local_idx, score_and_improve_result)
-                            if not isinstance(result_tuple, tuple) or len(result_tuple) != 2:
-                                console.print(f"[red]Unexpected result format for segment {local_idx + 1}[/red]")
-                                continue
-                                
-                            result_local_idx, result = result_tuple
-                            # result is the return value from score_and_improve which should be a tuple
-                            if result:
-                                idx, r, improved_text, content_type, final_text, improvement_iterations, original_text = result
-                                
-                                # Handle discarded records - save them to discard.jsonl but not main dataset
-                                if r.get("score", 0) < discard_threshold or r.get("status") == "discard":
-                                    console.print(f"[red]🗑️ Segment discarded (score: {r.get('score', 0):.3f})[/red]")
-                                    
-                                    # Still create a record for the discarded segment
-                                    tag = "discard"
-                                    improvement_note = f"Improvement iterations: {improvement_iterations}" if improvement_iterations > 0 else ""
-                                    combined_notes = f"{r.get('reason', '')} | {improvement_note}".strip(" |") if improvement_note else r.get('reason', '')
+                    all_processed_recs.append(record)
+                    processed_count_total += 1
+                    processed_this_session = len(all_processed_recs)
 
-                                    discard_record = PretrainRecord(
-                                        raw=original_text,
-                                        improved=improved_text if improved_text and improved_text != original_text else None,
-                                        type=content_type,
-                                        meta=RecordMeta(
-                                            source_file=original_pdf_name,
-                                            doc_language=langid.classify(final_text)[0],
-                                            extracted_by="pdf2seg",
-                                            confidence=r.get("score"),
-                                            status=tag,
-                                            tags=[tag],
-                                            notes=combined_notes
-                                        )
-                                    )
-                                    
-                                    # Save discarded record immediately
-                                    save_discard_chunk([discard_record])
-                                    console.print()
-                                    continue
-                                
-                                tag = r["status"]
-                                stats[tag] += 1
-                                reasons.append(r["reason"])
+                    if save_interval > 0:
+                        records_to_save.append(record)
+                        if len(records_to_save) >= save_interval:
+                            save_chunk(records_to_save)
+                            records_to_save.clear()
 
-                                improvement_note = f"Improvement iterations: {improvement_iterations}" if improvement_iterations > 0 else ""
-                                combined_notes = f"{r.get('reason', '')} | {improvement_note}".strip(" |") if improvement_note else r.get('reason', '')
+                    # Display telemetry periodically
+                    telemetry_interval = 10
+                    if processed_this_session % telemetry_interval == 0 or processed_this_session == total_segment_count:
+                        display_telemetry_panel(
+                            processed_count=processed_count_total,
+                            total_count=total_segment_count + (len(existing_records) if existing_records else 0),
+                            start_time=start_time,
+                            save_count=records_saved_this_session,
+                            estimated_total_saves=total_segment_count // save_interval if save_interval > 0 else 0,
+                            records_saved_this_session=records_saved_this_session
+                        )
 
-                                record = PretrainRecord(
-                                    raw=original_text,
-                                    improved=improved_text if improved_text and improved_text != original_text else None,
-                                    type=content_type,
-                                    meta=RecordMeta(
-                                        source_file=original_pdf_name,
-                                        doc_language=langid.classify(final_text)[0],
-                                        extracted_by="pdf2seg",
-                                        confidence=r.get("score"),
-                                        status=tag,
-                                        tags=[tag] if tag != "keep" else [],
-                                        notes=combined_notes
-                                    )
-                                )
-                                
-                                all_processed_recs.append(record)
+                    # Only count valid records (status "keep") toward valid count
+                    if tag == "keep":
+                        valid_records_count += 1
 
-                                # Only save records with status "keep" to the main dataset
-                                if tag == "keep":
-                                    if save_interval > 0:
-                                        # For immediate saving (save_interval=1), save each record right away
-                                        # For batch saving (save_interval>1), accumulate and save when batch is full
-                                        if save_interval == 1:
-                                            save_chunk([record])
-                                        else:
-                                            records_to_save.append(record)
-                                            if len(records_to_save) >= save_interval:
-                                                save_chunk(records_to_save)
-                                                records_to_save.clear()
-                                    else:
-                                        # save_interval = 0 means no incremental saving, accumulate all
-                                        records_to_save.append(record)
+                except Exception as e:
+                    # Escape potential Rich markup in error messages
+                    error_msg = str(e).replace('[', '\\[').replace(']', '\\]')
+                    console.print(f"[red]Error processing a segment result:[/red] {error_msg}")
 
-                                    # Count valid records (status "keep") toward valid count
-                                    valid_records_count += 1
-                                elif tag == "revise":
-                                    # Save revised records to a separate file for analysis
-                                    save_discard_chunk([record])
-                                    console.print(f"[yellow]📝 Revised record saved to discard.jsonl (score: {r.get('score', 0):.3f})[/yellow]")
-                                    
-                        except Exception as e:
-                            error_msg = str(e).replace('[', '\\[').replace(']', '\\]')
-                            console.print(f"[red]Error processing segment {local_idx + 1}:[/red] {error_msg}")
-                            console.print()
-                    
-                    console.print(f"[green]✔ Completed processing {csv_file.name}[/green]")
-                    console.print()
-                else:
-                    console.print(f"[red]⚠ Missing '{col}' column in {csv_file.name}[/red]")
-            except Exception as e:
-                console.print(f"[red]⚠ Error reading {csv_file.name}: {e}[/red]")
-
-        # Save any remaining records that weren't saved yet
-        if records_to_save:
-            save_chunk(records_to_save)
-            records_to_save.clear()
+        except asyncio.CancelledError:
+            console.print("[yellow]Processing cancelled.[/yellow]")
+        finally:
+            # Save any remaining records in the buffer
+            if save_interval > 0 and records_to_save:
+                console.print(f"[blue]Finalizing... saving {len(records_to_save)} remaining records.[/blue]")
+                save_chunk(records_to_save)
+                records_to_save.clear()
 
         return all_processed_recs, stats, reasons
 
@@ -487,11 +488,8 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
         console.print(f"[yellow]Warning: Input directory is empty: {i}[/yellow]")
         # Allow continuing, as there might be existing CSVs to process
     
-    # Discover input files (PDFs or CSVs)
+    # First, discover all PDF files
     pdfs = []
-    csv_direct_mode = False
-    direct_csv_file = None
-    
     if i.is_dir():
         pdfs = sorted(list(i.glob("*.pdf")))
         if not pdfs:
@@ -519,7 +517,7 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
                 else:
                     console.print(f"[bold blue]📊 Total workload: {total_pages} pages across {len(pdfs)} PDF files[/bold blue]")
             else:
-                console.print(f"[yellow]⚠ Could not determine page counts (PyPDF2 may not be installed)[/yellow]")
+                console.print(f"[yellow]⚠ Could not determine page counts (pypdf may not be installed)[/yellow]")
     elif i.is_file() and i.suffix.lower() == ".pdf":
         pdfs = [i]
         page_count = count_pdf_pages(i)
@@ -527,14 +525,8 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
             console.print(f"[blue]📋 Processing single PDF file: {i.name} ({page_count} pages)[/blue]")
         else:
             console.print(f"[blue]📋 Processing single PDF file: {i.name}[/blue]")
-    elif i.is_file() and i.suffix.lower() == ".csv":
-        # Direct CSV processing mode
-        csv_direct_mode = True
-        direct_csv_file = i
-        console.print(f"[blue]📋 Processing single CSV file directly: {i.name}[/blue]")
-        console.print(f"[cyan]🚀 CSV Direct Mode: Skipping PDF2SEG conversion[/cyan]")
     else:
-        console.print(f"[red]Error: Input must be a PDF file, CSV file, or a directory containing PDF files.[/red]")
+        console.print(f"[red]Error: Input must be a PDF file or a directory containing PDF files.[/red]")
         return
 
     console.print()
@@ -572,103 +564,75 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
     csvs = []
     pdf_mapping = {}
 
-    # Handle direct CSV mode (when input is a single CSV file)
-    if csv_direct_mode and direct_csv_file:
-        console.print(f"[bold blue]━━━ Direct CSV Processing Mode ━━━[/bold blue]")
-        console.print(f"[cyan]📁 Using provided CSV file: {direct_csv_file.name}[/cyan]")
-        
-        # Check if the CSV file exists and has content
-        if not direct_csv_file.exists():
-            console.print(f"[red]Error: CSV file does not exist: {direct_csv_file}[/red]")
-            return
-        
-        file_size = direct_csv_file.stat().st_size
-        if file_size == 0:
-            console.print(f"[red]Error: CSV file is empty: {direct_csv_file}[/red]")
-            return
-        
-        console.print(f"[green]✔ CSV file found with {file_size} bytes[/green]")
-        
-        # Check if the specified field exists in the CSV
-        try:
-            import pandas as pd
-            df_check = pd.read_csv(direct_csv_file)
-            if f not in df_check.columns:
-                console.print(f"[red]Error: Field '{f}' not found in CSV. Available columns: {list(df_check.columns)}[/red]")
-                return
-            console.print(f"[green]✔ Found field '{f}' with {len(df_check)} rows in CSV[/green]")
-        except Exception as e:
-            console.print(f"[red]Error reading CSV file: {e}[/red]")
-            return
-        
-        csvs = [direct_csv_file]
-        # For direct CSV mode, use the CSV filename as the source
-        pdf_mapping[direct_csv_file.name] = direct_csv_file.name.replace('.csv', '_direct.csv')
-        console.print(f"[cyan]🚀 Ready to process {len(df_check)} text segments from CSV[/cyan]")
-        console.print()
-    else:
-        # Standard PDF processing mode
-        console.print(f"[bold blue]━━━ Converting PDFs to CSV format ━━━[/bold blue]")
-        new_csvs_needed = 0
-        reusable_csvs = 0
-        
-        # First pass: check what needs to be generated
-        for pdf in pdfs:
-            expected_csv_name = f"{hash_name(pdf)}.csv"
-            expected_csv_path = csv_dir / expected_csv_name
-            if not force and expected_csv_path.exists() and expected_csv_path.stat().st_size > 0:
-                reusable_csvs += 1
+    console.print(f"[bold blue]━━━ Converting PDFs to CSV format ━━━[/bold blue]")
+    new_csvs_needed = 0
+    reusable_csvs = 0
+    
+    # First pass: check what needs to be generated
+    for pdf in pdfs:
+        expected_csv_name = f"{hash_name(pdf)}.csv"
+        expected_csv_path = csv_dir / expected_csv_name
+        if not force and expected_csv_path.exists() and expected_csv_path.stat().st_size > 0:
+            reusable_csvs += 1
+        else:
+            new_csvs_needed += 1
+    
+    if reusable_csvs > 0:
+        console.print(f"[green]✔ Can reuse {reusable_csvs} existing CSV files[/green]")
+    if new_csvs_needed > 0:
+        console.print(f"[yellow]⚙ Need to generate {new_csvs_needed} new CSV files[/yellow]")
+    console.print()
+
+    # Second pass: actually process the PDFs
+    for idx, pdf in enumerate(pdfs, 1):
+        expected_csv_name = f"{hash_name(pdf)}.csv"
+        expected_csv_path = csv_dir / expected_csv_name
+
+        console.print(f"[cyan]→ Processing {idx}/{len(pdfs)}: {pdf.name}[/cyan]")
+
+        # Check if CSV already exists for this PDF
+        if not force and expected_csv_path.exists() and expected_csv_path.stat().st_size > 0:
+            console.print(f"[green]✔ Found existing CSV: {expected_csv_name}[/green]")
+            csvs.append(expected_csv_path)
+            pdf_mapping[expected_csv_name] = pdf.name
+            console.print(f"[green]✔ Reusing {expected_csv_name} → {pdf.name}[/green]")
+        else:
+            console.print(f"[yellow]⚙ Generating CSV for {pdf.name}...[/yellow]")
+            csv_file = run_pdf2seg(pdf, csv_dir, force_regenerate=force)
+            if csv_file and csv_file.exists():
+                csvs.append(csv_file)
+                pdf_mapping[csv_file.name] = pdf.name
+                console.print(f"[green]✔ Generated {csv_file.name} → {pdf.name}[/green]")
             else:
-                new_csvs_needed += 1
-        
-        if reusable_csvs > 0:
-            console.print(f"[green]✔ Can reuse {reusable_csvs} existing CSV files[/green]")
-        if new_csvs_needed > 0:
-            console.print(f"[yellow]⚙ Need to generate {new_csvs_needed} new CSV files[/yellow]")
-        console.print()
+                console.print(f"[red]✗ Failed to generate CSV for {pdf.name}[/red]")
 
-        # Second pass: actually process the PDFs
-        for idx, pdf in enumerate(pdfs, 1):
-            expected_csv_name = f"{hash_name(pdf)}.csv"
-            expected_csv_path = csv_dir / expected_csv_name
-
-            console.print(f"[cyan]→ Processing {idx}/{len(pdfs)}: {pdf.name}[/cyan]")
-
-            # Check if CSV already exists for this PDF
-            if not force and expected_csv_path.exists() and expected_csv_path.stat().st_size > 0:
-                console.print(f"[green]✔ Found existing CSV: {expected_csv_name}[/green]")
-                csvs.append(expected_csv_path)
-                pdf_mapping[expected_csv_name] = pdf.name
-                console.print(f"[green]✔ Reusing {expected_csv_name} → {pdf.name}[/green]")
-            else:
-                console.print(f"[yellow]⚙ Generating CSV for {pdf.name}...[/yellow]")
-                csv_file = run_pdf2seg(pdf, csv_dir, force_regenerate=force)
-                if csv_file and csv_file.exists():
-                    csvs.append(csv_file)
-                    pdf_mapping[csv_file.name] = pdf.name
-                    console.print(f"[green]✔ Generated {csv_file.name} → {pdf.name}[/green]")
-                else:
-                    console.print(f"[red]✗ Failed to generate CSV for {pdf.name}[/red]")
-
-        if not csvs:
-            console.print(f"[red]⚠ No CSV files generated from PDFs[/red]")
-            return
+    if not csvs:
+        console.print(f"[red]⚠ No CSV files generated from PDFs[/red]")
+        return
 
     console.print()
     console.print(f"[bold blue]━━━ Processing text segments to training data ━━━[/bold blue]")
     console.print(f"[white]📊 Processing {len(csvs)} CSV files for text extraction and AI analysis[/white]")
 
     # Log the mapping for verification
-    if not csv_direct_mode:
-        console.print("[dim]PDF → CSV mapping:[/dim]")
-        for csv_name, pdf_name in pdf_mapping.items():
-            console.print(f"[dim]  {csv_name} ← {pdf_name}[/dim]")
-    elif direct_csv_file:
-        console.print(f"[dim]Direct CSV mode: {direct_csv_file.name}[/dim]")
+    console.print("[dim]PDF → CSV mapping:[/dim]")
+    for csv_name, pdf_name in pdf_mapping.items():
+        console.print(f"[dim]  {csv_name} ← {pdf_name}[/dim]")
     
-    # Check if dataset file already exists
-    dataset_file = o / f"{base}.jsonl"
+    # Check if dataset file already exists in jsonl directory
+    jsonl_dir = o / "jsonl"
+    dataset_file = jsonl_dir / f"{base}.jsonl"
     existing_records = []
+    
+    # Clear existing dataset file if force mode is enabled
+    if force and dataset_file.exists():
+        console.print(f"[red]🔄 Force mode: Removing existing dataset file: {dataset_file.name}[/red]")
+        try:
+            dataset_file.unlink()
+            console.print(f"[dim]  Removed: {dataset_file.name}[/dim]")
+        except OSError:
+            pass
+    
     if dataset_file.exists():
         console.print(f"[yellow]⚠ Existing dataset file found: {dataset_file.name}[/yellow]")
         try:
@@ -685,9 +649,7 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
         console.print(f"[cyan]📝 Will create new dataset file: {dataset_file.name}[/cyan]")
 
     console.print()
-    # Load the agent config for processing
-    agent_config = load_selfcrit_config()
-    allr = process_all_csvs(csvs, f, w, agent_config, save_interval, o, base, pdf_mapping, existing_records=existing_records)
+    allr = process_all_csvs(csvs, f, w, {}, save_interval, o, base, pdf_mapping, existing_records=existing_records)
 
     if not allr:
         console.print(f"[red]⚠ No valid records found across all CSVs[/red]")
@@ -701,13 +663,15 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
     console.print("[bold green]═══ Final Summary ═══[/bold green]")
     console.print(f"[white]Total records processed this session:[/white] {total}")
     console.print(f"[green]Kept:[/green] {kept} [cyan]({ratio}%)[/cyan]")
-    console.print(f"[yellow]Revised/Discarded:[/yellow] {total - kept}")
+    console.print(f"[yellow]Discarded:[/yellow] {total - kept}")
     console.print()
 
     # The final save is now handled by the incremental saver.
     # We can optionally write a pretty-printed JSON for inspection.
     if pretty:
-        j2 = o / f"{base}.json"
+        jsonl_dir = o / "jsonl"
+        jsonl_dir.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
+        j2 = jsonl_dir / f"{base}.json"
         with j2.open("w", encoding="utf-8") as writer:
             json.dump([x.model_dump() for x in allr], writer, ensure_ascii=False, indent=2)
         console.print(f"[cyan]• Pretty JSON → {j2.name}[/cyan]")
@@ -772,14 +736,14 @@ def split_long_text(text: str, max_length: int = 512) -> list[str]:
 
 
 def count_pdf_pages(pdf_path: Path) -> int:
-    """Count the number of pages in a PDF file using PyPDF2."""
+    """Count the number of pages in a PDF file using pypdf."""
     try:
         import pypdf
         with pdf_path.open('rb') as file:
             reader = pypdf.PdfReader(file)
             return len(reader.pages)
     except ImportError:
-        # PyPDF2 not available, return unknown count
+        # pypdf not available, return unknown count
         return -1
     except Exception as e:
         # If there's any error reading the PDF, return unknown count silently
@@ -788,92 +752,17 @@ def count_pdf_pages(pdf_path: Path) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="X-Spanformer PDF2JSONL Pipeline")
-    parser.add_argument("-i", "--input", type=Path, required=True, help="Input: PDF file, CSV file, or directory containing PDF files")
+    parser.add_argument("-i", "--input", type=Path, required=True, help="Input directory of PDF files or a single PDF file")
     parser.add_argument("-o", "--output", type=Path, required=True, help="Output directory for results")
     parser.add_argument("-f", "--field", type=str, default="text", help="Field name in CSV to process")
     parser.add_argument("-p", "--pretty", action="store_true", help="Output pretty JSON file")
     parser.add_argument("-n", "--name", type=str, default="dataset", help="Base name for output files")
-    parser.add_argument("-w", "--workers", type=int, default=1, help="Number of concurrent workers")
+    parser.add_argument("-w", "--workers", type=int, default=4, help="Number of concurrent workers")
     parser.add_argument("--save-interval", type=int, default=1, help="Save progress every N records. Default is 1 (save every record). Use 0 to disable incremental saving.")
     parser.add_argument("--force", action="store_true", help="Force regeneration of all cached data")
     args = parser.parse_args()
 
     run(args.input, args.output, args.field, args.pretty, args.name, args.workers, args.save_interval, args.force)
-
-
-def save_ai_processing_log(output_dir: Path, source_file: str, segment_id: str, 
-                          original_text: str, improved_text: Optional[str], content_type: Optional[str],
-                          judge_responses: list, improvement_iterations: int, detailed_conversation_log: Optional[list] = None, result_data: Optional[dict] = None):
-    """Save detailed AI processing logs for a segment as structured JSON with full conversation context."""
-    # Create jsonl directory structure for debug logs
-    hash_str = hash_name(Path(source_file))
-    jsonl_dir = output_dir / "jsonl" / hash_str
-    jsonl_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create log filename with padded segment ID (8 digits)
-    padded_segment_id = str(segment_id).zfill(8)
-    log_filename = f"{hash_str}_{padded_segment_id}.json"
-    log_path = jsonl_dir / log_filename
-    
-    # Build structured log data with enhanced conversation details
-    log_data = {
-        "metadata": {
-            "segment_id": segment_id,
-            "source_file": source_file,
-            "hash": hash_str,
-            "timestamp": datetime.now().isoformat(),
-            "improvement_iterations": improvement_iterations,
-            "version": "2.0"  # Version to track log format changes
-        },
-        "processing": {
-            "original_text": original_text,
-            "improved_text": improved_text if improved_text and improved_text != original_text else None,
-            "content_type": content_type,
-            "judge_responses": judge_responses,
-            "final_status": judge_responses[-1].get("status") if judge_responses else None,
-            "final_score": judge_responses[-1].get("score") if judge_responses else None,
-            "final_reason": judge_responses[-1].get("reason") if judge_responses else None
-        },
-        "conversation_log": detailed_conversation_log or [],
-        "debugging_info": {
-            "total_judge_calls": result_data.get("total_judge_calls", len(judge_responses)) if result_data else len(judge_responses),
-            "conversation_steps": len(detailed_conversation_log) if detailed_conversation_log else 0,
-            "processing_flow": [step.get("step", "unknown") for step in (detailed_conversation_log or [])],
-            "models_used": result_data.get("models_used", ["unknown"]) if result_data else ["unknown"],
-            "score_progression": result_data.get("score_progression", [resp.get("score") for resp in judge_responses if resp.get("score") is not None]) if result_data else [resp.get("score") for resp in judge_responses if resp.get("score") is not None],
-            "processing_time_seconds": result_data.get("processing_time_seconds", 0.0) if result_data else 0.0
-        }
-    }
-    
-    # Write to JSON file (pretty formatted for debugging)
-    with log_path.open("w", encoding="utf-8") as f:
-        json.dump(log_data, f, ensure_ascii=False, indent=2)
-
-
-def add_pdf_name_to_json_metadata(csv_file: Path, pdf_file: Path):
-    """Add the original PDF name to the JSON metadata file immediately after creation."""
-    try:
-        # Find the corresponding JSON file
-        hash_str = hash_name(pdf_file)
-        json_dir = csv_file.parent / hash_str
-        json_file = json_dir / f"{hash_str}.json"
-        
-        if json_file.exists():
-            # Read existing JSON data
-            with json_file.open("r", encoding="utf-8") as f:
-                metadata = json.load(f)
-            
-            # Add original PDF filename if not already present
-            if "original_pdf" not in metadata:
-                metadata["original_pdf"] = pdf_file.name
-                
-                # Write back updated JSON
-                with json_file.open("w", encoding="utf-8") as f:
-                    json.dump(metadata, f, indent=2, ensure_ascii=False)
-                
-                console.print(f"[green]✔ Added PDF name to {json_file.name}: {pdf_file.name}[/green]")
-    except Exception as e:
-        console.print(f"[yellow]⚠ Could not update JSON metadata: {e}[/yellow]")
 
 
 if __name__ == "__main__":

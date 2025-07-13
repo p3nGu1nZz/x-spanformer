@@ -1,0 +1,45 @@
+agent_type: judge
+
+model:
+  name: phi4-mini
+  temperature: 0.2
+  max_context_tokens: 131072
+  max_turn_tokens: 4096
+
+processor:
+  max_raw_length: 512
+
+dialogue:
+  max_turns: 12
+  memory_limit: 24
+  trim_strategy: rolling
+
+judge:
+  model_name: phi4-mini
+  temperature: 0.2
+  max_retries: 3
+  judges: 5
+  threshold: 0.69
+
+regex_filters:
+- pattern: "\\b\\w{40,}\\b"
+  reason: "long token, likely noise"
+
+- pattern: "\\S{25,}"
+  reason: "long unspaced word"
+
+templates:
+  system: judge_system
+  judge: segment_judge
+
+format:
+  expected_fields: [ score, status, reason ]
+  strict_line_count: 3
+  parse_strategy: regex
+
+logging:
+  verbosity: debug
+  track_consensus: true
+  return_all_passes: false
+  log_queries: true
+  log_responses: true

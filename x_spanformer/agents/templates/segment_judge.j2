@@ -4,15 +4,16 @@ Consider:
 - Does it have clear structural elements that can be segmented into meaningful spans?
 - Is it clean and well-formed for training purposes?
 - Does it represent valuable patterns for learning span composition?
-
-Content Type Classification:
-- **Code**: Programming language syntax, functions, variables, algorithms
-- **Natural**: Human language text, documentation, explanations
-- **Mixed**: Combination of code and natural language (e.g., code with comments, technical documentation with code examples)
+- What type of content is this?
 
 Decision criteria:
 - Score ≥ {{ threshold }}: Status should be "keep" 
-- Score < {{ threshold }}: Status should be "revise" if improvable, "discard" if not
+- Score < {{ threshold }}: Status should be "discard"
+
+Content types:
+- "natural": Natural language text (prose, articles, documentation)
+- "code": Programming code, markup, configuration files
+- "mixed": Combined natural language and code elements
 
 Text segment:
 ---
@@ -21,6 +22,6 @@ Text segment:
 
 Respond in exactly 4 lines:
 Score: 0.0-1.0
-Status: keep | revise | discard  
-Type: Natural | Code | Mixed
+Status: keep | discard
+Type: natural | code | mixed
 Reason: brief structural assessment
