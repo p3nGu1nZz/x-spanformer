@@ -32,7 +32,7 @@ class JudgeSession:
         if not quiet and not config:
             c.print(f"[bold green]⚖️ JudgeSession initialized[/] with config: [yellow]{config_name}[/yellow]")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))  # TODO: Use cfg["judge"]["max_retries"] 
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.05))  # Further reduced wait time to 0.05s for optimal performance
     async def evaluate(self, text: str) -> dict:
         """Evaluate a text segment for training data suitability with a single judge."""
         c.print(f"[white]⚖️ Judging text[/] (len={len(text)}): [dim]{text[:80]}{'…' if len(text) > 80 else ''}")

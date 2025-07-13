@@ -150,3 +150,50 @@ def display_summary_panel(name: str, stats: Counter, reasons: list[str]):
         expand=False,
     )
     console.print(panel)
+
+
+def display_judgment_result(
+    idx: int,
+    text: str,
+    status: str,
+    score: float,
+    reason: str,
+    content_type: str = "natural",
+    total_count: int | None = None
+):
+    """Display individual judgment result in a styled panel."""
+    # Truncate text for display
+    display_text = text[:80] + "..." if len(text) > 80 else text
+    
+    # Choose colors and icons based on status
+    if status == "keep":
+        border_color = "green"
+        status_icon = "✅"
+        status_style = "bold green"
+    else:
+        border_color = "red"
+        status_icon = "❌"
+        status_style = "bold red"
+    
+    # Create content table
+    table = Table(show_header=False, box=None, padding=0, expand=True)
+    table.add_column("Field", style="bold", min_width=12)
+    table.add_column("Value", style="white")
+    
+    progress_info = f"({idx + 1}/{total_count})" if total_count else f"#{idx + 1}"
+    table.add_row("📊 Progress", progress_info)
+    table.add_row("📝 Text", f'"{display_text}"')
+    table.add_row("⚖️ Score", f"{score:.2f}")
+    table.add_row("🏷️ Type", content_type)
+    table.add_row(f"{status_icon} Status", f"[{status_style}]{status.upper()}[/{status_style}]")
+    table.add_row("💭 Reason", reason[:100] + "..." if len(reason) > 100 else reason)
+    
+    panel = Panel(
+        table,
+        title=f"⚖️ [bold white]JUDGMENT COMPLETE[/bold white] ⚖️",
+        border_style=border_color,
+        expand=False,
+    )
+    
+    console.print(panel)
+    console.print()  # Add spacing after each judgment

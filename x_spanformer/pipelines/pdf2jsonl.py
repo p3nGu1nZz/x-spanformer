@@ -7,7 +7,6 @@ import sys
 import time
 from datetime import datetime, timedelta
 import pandas as pd
-import langid
 from collections import Counter
 from pathlib import Path
 from typing import Optional
@@ -18,10 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 from x_spanformer.agents.config_loader import load_judge_config
-from x_spanformer.agents.agent_utils import (
+from x_spanformer.agents.rich_utils import (
     console,
     display_summary_panel,
     display_telemetry_panel,
+    display_judgment_result,
 )
 from x_spanformer.agents.session.judge_session import JudgeSession
 from x_spanformer.schema.metadata import RecordMeta
@@ -193,6 +193,9 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
     if pdf_mapping is None:
         pdf_mapping = {}
 
+    # Ensure deterministic processing order
+    csv_files = sorted(csv_files)
+    
     all_dfs = []
     source_files = []
 
@@ -265,7 +268,6 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         console.print(f"[blue]💾 Saved {num_saved} record(s) to {dataset_file.name} (total this session: {records_saved_this_session}) [dim](filtered from {len(records)} total)[/dim][/blue]")
 
     async def process():
-        sem = asyncio.Semaphore(w)
         stats = Counter()
         all_processed_recs = []
         records_to_save = []
@@ -277,7 +279,6 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
 
         # Initialize sessions once, sharing the same config
         agent_config = load_judge_config()
-        judge_session = JudgeSession(config=agent_config, quiet=True)
 
         # Pre-process spans to split long texts
         max_raw_length = agent_config.get("processor", {}).get("max_raw_length", 512)
@@ -323,53 +324,47 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         nonlocal total_segment_count
         total_segment_count = len(expanded_spans)
         nonlocal estimated_total_saves
-        estimated_total_saves = total_segment_count # Each segment is a potential save
+        estimated_total_saves = total_segment_count
 
-        async def judge_segment(idx: int, t: str, source_file: str):
-            try:
-                async with sem:
-                    console.print(f"[bold blue]━━━ Processing segment {idx + 1}/{total_segment_count} ━━━[/bold blue]")
-                    console.print(f"[dim]Source: {source_file} | Text ({len(t)} chars):[/dim] {t}")
-                    console.print()
-
-                    # Get number of judges from config
-                    num_judges = agent_config.get("judge", {}).get("judges", 5)
-                    console.print(f"[cyan]⚖️ Convening {num_judges} judges for consensus evaluation...[/cyan]")
-                    
+        # Get judge configuration
+        num_judges = agent_config.get("judge", {}).get("judges", 5)
+        threshold = agent_config.get("judge", {}).get("threshold", 0.69)
+        
+        console.print(f"[bold magenta]🚀 Using {w} concurrent workers with {num_judges} judges each (total: {w * num_judges} concurrent evaluations)[/bold magenta]")
+        console.print(f"[yellow]💡 Ollama handles I/O concurrency efficiently - this should utilize your GPU well![/yellow]")
+        
+        # Initialize sessions once, sharing the same config
+        from x_spanformer.agents.session.judge_session import JudgeSession
+        sessions = [JudgeSession(config=agent_config, quiet=True) for _ in range(w)]
+        
+        # Use asyncio.Semaphore for concurrency control
+        semaphore = asyncio.Semaphore(w)
+        
+        async def judge_segment(idx, text, source_file):
+            async with semaphore:
+                try:
+                    session = sessions[idx % len(sessions)]
                     # Create concurrent judge evaluation tasks
-                    judge_tasks = []
-                    for judge_num in range(1, num_judges + 1):
-                        task = judge_session.evaluate(t)
-                        judge_tasks.append(task)
+                    judge_tasks = [session.evaluate(text) for _ in range(num_judges)]
                     
                     # Execute all judge evaluations concurrently
                     judge_responses = await asyncio.gather(*judge_tasks)
                     scores = [r.get("score", 0) for r in judge_responses]
                     
-                    # Display individual judge results
-                    for i, r in enumerate(judge_responses, 1):
-                        console.print(f"[dim]Judge {i}: score={r.get('score', 0):.2f}, status={r.get('status', 'unknown')}, type={r.get('type', 'natural')}[/dim]")
-
                     # Calculate consensus score and type
                     consensus_score = sum(scores) / len(scores)
-                    threshold = agent_config.get("judge", {}).get("threshold", 0.69)
                     
                     # Get consensus content type
                     content_types = [r.get("type", "natural") for r in judge_responses]
                     consensus_type = max(set(content_types), key=content_types.count)
                     
                     # Determine final status based on consensus score
-                    if consensus_score >= threshold:
-                        final_status = "keep"
-                        console.print(f"[green]✔ KEEP: consensus score {consensus_score:.3f} >= threshold {threshold} ({num_judges} judges, type: {consensus_type})[/green]")
-                    else:
-                        final_status = "discard"
-                        console.print(f"[red]✗ DISCARD: consensus score {consensus_score:.3f} < threshold {threshold} ({num_judges} judges, type: {consensus_type})[/red]")
-
+                    final_status = "keep" if consensus_score >= threshold else "discard"
+                    
                     # Combine all judge reasons
                     all_reasons = [r.get("reason", "") for r in judge_responses]
                     combined_reason = " / ".join(all_reasons)
-
+                    
                     # Create final consensus result
                     consensus_result = {
                         "score": consensus_score,
@@ -377,98 +372,125 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                         "type": consensus_type,
                         "reason": combined_reason
                     }
-
-                    # Save AI processing log for this segment
-                    if output_path:
-                        save_ai_processing_log(output_path, source_file, str(idx), t, judge_responses, consensus_result)
-
-                    return idx, consensus_result, None, None, t, 0, t
                     
-            except Exception as e:
-                # Escape potential Rich markup in error messages
-                error_msg = str(e).replace('[', '\\[').replace(']', '\\]')
-                console.print(f"[red]Error processing segment {idx + 1}:[/red] {error_msg}")
-                # Escape potential Rich markup in text preview
-                safe_text = t[:100].replace('[', '\\[').replace(']', '\\]')
-                console.print(f"[dim]Text was:[/dim] {safe_text}...")
-                console.print()
-                return idx, {"score": 0.0, "status": "discard", "reason": "processing error"}, None, None, t, 0, t
-
-        tasks = [judge_segment(i, text, expanded_source_mapping[i]) for i, text in enumerate(expanded_spans)]
-
-        try:
-            # Process tasks in sequential order to maintain segment ordering
-            for i, task in enumerate(tasks):
-                try:
-                    idx, r, _, _, final_text, _, original_text = await task
-                    tag = r["status"]
-                    reasons.append(r["reason"])
-                    stats[tag] += 1
-
-                    src_file = expanded_source_mapping[idx]
-
-                    record = PretrainRecord(
-                        raw=original_text,  # Always use original text for raw field
-                        type=r.get("type", "natural"),  # Use content type from judge consensus
-                        meta=RecordMeta(
-                            source_file=src_file,
-                            doc_language=langid.classify(original_text)[0],  # Use original text for language detection
-                            extracted_by="pdf2seg",
-                            confidence=r.get("score"),
-                            status=tag,
-                            tags=[tag] if tag != "keep" else [],
-                            notes=r.get('reason', '')
-                        )
-                    )
+                    return idx, consensus_result, {
+                        "text": text,
+                        "source_file": source_file,
+                        "judge_responses": judge_responses
+                    }
                     
-                    all_processed_recs.append(record)
-                    processed_count_total += 1
-                    processed_this_session = len(all_processed_recs)
-
-                    if save_interval > 0:
-                        records_to_save.append(record)
-                        if len(records_to_save) >= save_interval:
-                            save_chunk(records_to_save)
-                            records_to_save.clear()
-
-                    # Display telemetry periodically
-                    telemetry_interval = 10
-                    if processed_this_session % telemetry_interval == 0 or processed_this_session == total_segment_count:
-                        display_telemetry_panel(
-                            processed_count=processed_count_total,
-                            total_count=total_segment_count + (len(existing_records) if existing_records else 0),
-                            start_time=start_time,
-                            save_count=records_saved_this_session,
-                            estimated_total_saves=total_segment_count // save_interval if save_interval > 0 else 0,
-                            records_saved_this_session=records_saved_this_session
-                        )
-
-                    # Only count valid records (status "keep") toward valid count
-                    if tag == "keep":
-                        valid_records_count += 1
-
                 except Exception as e:
-                    # Escape potential Rich markup in error messages
-                    error_msg = str(e).replace('[', '\\[').replace(']', '\\]')
-                    console.print(f"[red]Error processing a segment result:[/red] {error_msg}")
+                    return idx, {
+                        "score": 0.0, 
+                        "status": "discard", 
+                        "reason": f"processing error: {str(e)}"
+                    }, None
+        
+        # Create tasks for all segments
+        tasks = [
+            judge_segment(i, text, expanded_source_mapping[i]) 
+            for i, text in enumerate(expanded_spans)
+        ]
+        
+        # Process all segments concurrently with progress tracking
+        results = []
+        completed_count = 0
+        
+        for task in asyncio.as_completed(tasks):
+            idx, r, log_data = await task
+            results.append((idx, r, log_data))
+            completed_count += 1
+            
+            # Display individual judgment result for every segment (but in compact format)
+            if log_data:
+                display_judgment_result(
+                    idx=idx,
+                    text=log_data["text"], 
+                    status=r["status"],
+                    score=r["score"],
+                    reason=r["reason"],
+                    content_type=r.get("type", "natural"),
+                    total_count=len(tasks)
+                )
+            
+            # Show progress summary every 10 completed or at end
+            if completed_count % 10 == 0 or completed_count == len(tasks):
+                keep_count = sum(1 for _, result, _ in results if result["status"] == "keep")
+                discard_count = completed_count - keep_count
+                console.print(f"[bright_blue]📊 Progress Summary: {completed_count}/{len(tasks)} | [green]✅ Keep: {keep_count}[/green] | [red]❌ Discard: {discard_count}[/red][/bright_blue]")
+                console.print()
+        
+        # Sort results by original index to maintain order
+        results.sort(key=lambda x: x[0])
+        
+        # Process results to create records
+        for idx, r, log_data in results:
+            tag = r["status"]
+            reasons.append(r["reason"])
+            stats[tag] += 1
 
-        except asyncio.CancelledError:
-            console.print("[yellow]Processing cancelled.[/yellow]")
-        finally:
-            # Save any remaining records in the buffer
-            if save_interval > 0 and records_to_save:
-                console.print(f"[blue]Finalizing... saving {len(records_to_save)} remaining records.[/blue]")
-                save_chunk(records_to_save)
-                records_to_save.clear()
+            # Handle AI processing log 
+            if log_data and output_path:
+                save_ai_processing_log(
+                    output_path,
+                    log_data["source_file"],
+                    str(idx),
+                    log_data["text"],
+                    log_data["judge_responses"],
+                    r
+                )
+
+            src_file = expanded_source_mapping[idx]
+            original_text = expanded_spans[idx]
+
+            record = PretrainRecord(
+                raw=original_text,
+                type=r.get("type", "natural"),
+                meta=RecordMeta(
+                    source_file=src_file,
+                    doc_language="en",
+                    extracted_by="pdf2seg",
+                    confidence=r.get("score"),
+                    status=tag,
+                    tags=[tag] if tag != "keep" else [],
+                    notes=r.get('reason', '')
+                )
+            )
+            
+            all_processed_recs.append(record)
+            processed_count_total += 1
+
+            if save_interval > 0:
+                records_to_save.append(record)
+                if len(records_to_save) >= save_interval:
+                    save_chunk(records_to_save)
+                    records_to_save.clear()
+
+            # Only count valid records (status "keep") toward valid count
+            if tag == "keep":
+                valid_records_count += 1
+
+        # Save any remaining records in the buffer
+        if save_interval > 0 and records_to_save:
+            console.print(f"[blue]Finalizing... saving {len(records_to_save)} remaining records.[/blue]")
+            save_chunk(records_to_save)
+            records_to_save.clear()
 
         return all_processed_recs, stats, reasons
 
     try:
-        all_recs, stats, reasons = asyncio.run(process())
+        result = asyncio.run(process())
+        if result is None:
+            console.print("[yellow]⚠ Processing returned no results[/yellow]")
+            return []
+        all_recs, stats, reasons = result
         display_summary_panel("Combined CSV files", stats, reasons)
         return all_recs
     except KeyboardInterrupt:
         console.print("\n[bold red]Interrupted by user. Exiting.[/bold red]")
+        return []
+    except Exception as e:
+        console.print(f"[red]❌ Processing error: {str(e)}[/red]")
         return []
 
 
@@ -547,7 +569,7 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
         console.print()
 
     # Check for existing CSV files that can be reused
-    existing_csvs = list(csv_dir.glob("*.csv"))
+    existing_csvs = sorted(list(csv_dir.glob("*.csv")))  # Sort for deterministic ordering
     existing_csv_map = {}
 
     if existing_csvs:
@@ -757,7 +779,7 @@ def main():
     parser.add_argument("-f", "--field", type=str, default="text", help="Field name in CSV to process")
     parser.add_argument("-p", "--pretty", action="store_true", help="Output pretty JSON file")
     parser.add_argument("-n", "--name", type=str, default="dataset", help="Base name for output files")
-    parser.add_argument("-w", "--workers", type=int, default=4, help="Number of concurrent workers")
+    parser.add_argument("-w", "--workers", type=int, default=1, help="Number of concurrent workers")
     parser.add_argument("--save-interval", type=int, default=1, help="Save progress every N records. Default is 1 (save every record). Use 0 to disable incremental saving.")
     parser.add_argument("--force", action="store_true", help="Force regeneration of all cached data")
     args = parser.parse_args()

@@ -17,12 +17,12 @@ async def chat(
 	client = AsyncClient()
 	messages: List[Message] = conversation  # conversation already includes system prompt from DialogueManager
 
+	# Reduced logging for better performance - only show essential info
 	c.print(f"[bold blue]Sending to {model} (T={temperature}):[/bold blue]")
 	for i, msg in enumerate(messages):
 		role_color = "yellow" if msg["role"] == "system" else "cyan" if msg["role"] == "user" else "green"
-		c.print(f"[{role_color}]Message {i+1} ({msg['role']}):[/{role_color}]")
-		c.print(f"[white]{(msg['content'][:77] + '...') if len(msg['content']) > 80 else msg['content']}[/white]")
-		c.print()
+		preview = (msg['content'][:60] + '...') if len(msg['content']) > 60 else msg['content']
+		c.print(f"[{role_color}]Message {i+1} ({msg['role']}):[/{role_color}] [dim]{preview}[/dim]")
 
 	response = await client.chat(
 		model=model,
@@ -31,8 +31,9 @@ async def chat(
 	)
 	content = response["message"]["content"]
 	
-	c.print(f"[bold green]Response from {model}:[/bold green]")
-	c.print(f"[white]{(content[:77] + '...') if len(content) > 80 else content}[/white]")
+	# Reduced response logging for performance
+	preview = (content[:60] + '...') if len(content) > 60 else content
+	c.print(f"[bold green]Response from {model}:[/bold green] [dim]{preview}[/dim]")
 	c.print()
 	
 	return content

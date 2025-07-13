@@ -331,8 +331,8 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         stats = Counter({"keep": 5, "discard": 3})
         reasons = ["good quality", "good quality", "poor format", "good quality"]
         
-        # Use the actual display function from agent_utils
-        from x_spanformer.agents.agent_utils import display_summary_panel
+        # Use the actual display function from rich_utils
+        from x_spanformer.agents.rich_utils import display_summary_panel
         display_summary_panel("test.csv", stats, reasons)
         
         sys.stdout = sys.__stdout__
