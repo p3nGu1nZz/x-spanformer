@@ -18,9 +18,9 @@ def render_prompt(template_name: str, **kwargs) -> str:
     except TemplateNotFound:
         # Fallback to direct string template if file not found
         tmpl = env.from_string(template_name)
-    c.print(f"[bold green]📄 Rendering:[/] [white]{template_name}.j2[/] with keys: {', '.join(kwargs.keys()) or '—'}")
+    c.print(f"[dim]Rendering template: {template_name}.j2[/dim]")
     return tmpl.render(**kwargs)
 
-def get_system_prompt(template_name: str = "selfcrit_system", **kwargs) -> str:
-    c.print(f"[bold cyan]🧠 Using system prompt:[/] [white]{template_name}.j2[/]")
+def get_system_prompt(template_name: str = "judge_system", **kwargs) -> str:
+    c.print(f"[dim]Using system prompt: {template_name}.j2[/dim]")
     return render_prompt(template_name, **kwargs)

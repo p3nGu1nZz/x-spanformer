@@ -6,12 +6,24 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import yaml
+from x_spanformer.agents import (
+    config_loader,
+    ollama_client,
+    prompts,
+)
+from x_spanformer.agents.dialogue import DialogueManager
+from x_spanformer.agents.session import (
+    JudgeSession,
+)
+
+# Mock the rich console to prevent printing during tests
+from rich.console import Console
+
+console = Console()
+console.print = lambda *args, **kwargs: None
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from x_spanformer.agents import (
-    config_loader, dialogue, ollama_client, prompts, selfcrit
-)
 
 
 class TestAgents(unittest.TestCase):
@@ -23,12 +35,19 @@ class TestAgents(unittest.TestCase):
         self.templates_dir = self.test_dir / "templates"
         self.templates_dir.mkdir(exist_ok=True)
         self.dummy_config = {
-            "agent_name": "test_agent",
+            "agent_type": "test_agent",
             "model": {"name": "test_model", "temperature": 0.1},
-            "evaluation": {"passes": 1, "max_retries": 1},
+            "judge": {
+                "model_name": "test_model", 
+                "temperature": 0.1, 
+                "judges": 5,  # Updated to match real config
+                "threshold": 0.7, 
+                "discard_threshold": 0.25,
+                "max_retries": 3
+            },
             "dialogue": {"max_turns": 2},
             "regex_filters": [{"pattern": "badword"}],
-            "templates": {"system": "system_prompt", "score": "score_prompt"},
+            "templates": {"system": "system_prompt", "judge": "judge_prompt"},
         }
         with (self.config_dir / "test.yaml").open("w") as f:
             yaml.dump(self.dummy_config, f)
@@ -43,11 +62,11 @@ class TestAgents(unittest.TestCase):
     @patch("x_spanformer.agents.config_loader.Path")
     def test_config_loader(self, mock_path):
         mock_path.return_value.parent.__truediv__.return_value = self.config_dir
-        cfg = config_loader.load_selfcrit_config("test.yaml")
-        self.assertEqual(cfg["agent_name"], "test_agent")
+        cfg = config_loader.load_judge_config("test.yaml")
+        self.assertEqual(cfg["agent_type"], "test_agent")
 
     def test_dialogue_manager(self):
-        dm = dialogue.DialogueManager(max_turns=1)
+        dm = DialogueManager(max_turns=1)
         dm.add("user", "1")
         dm.add("assistant", "2")
         dm.add("user", "3")
@@ -71,24 +90,30 @@ class TestAgents(unittest.TestCase):
         )
         self.assertEqual(result, "response")
 
-    @patch("x_spanformer.agents.selfcrit.chat", new_callable=AsyncMock)
-    @patch("x_spanformer.agents.selfcrit.RE_FLAGGED", [re.compile("bad")])
-    def test_judge_segment(self, mock_chat):
-        mock_chat.return_value = "Score: 0.9\nStatus: keep\nReason: ok"
-        result = asyncio.run(selfcrit.judge_segment("good text"))
-        self.assertEqual(result["status"], "keep")
+    # Legacy selfcrit tests - OBSOLETE (removed with simplification)
+    # The judge_segment functionality is now handled directly in the pipeline
+    # with a 5-judge consensus system
+    
+    # @patch("x_spanformer.agents.selfcrit.chat", new_callable=AsyncMock)
+    # @patch("x_spanformer.agents.selfcrit.RE_FLAGGED", [re.compile("bad")])
+    # def test_judge_segment(self, mock_chat, mock_cfg):
+    #     mock_cfg.__getitem__ = lambda _, key: self.dummy_config[key]
+    #     mock_cfg.get = lambda key, default=None: self.dummy_config.get(key, default)
+    #     mock_chat.return_value = "Score: 0.9\nStatus: keep\nReason: ok"
+    #     result = asyncio.run(selfcrit.judge_segment("good text"))
+    #     self.assertEqual(result["status"], "keep")
 
-        result = asyncio.run(selfcrit.judge_segment("bad text"))
-        self.assertEqual(result["status"], "discard")
-        self.assertEqual(result["reason"], "regex filter triggered")
+    #     result = asyncio.run(selfcrit.judge_segment("bad text"))
+    #     self.assertEqual(result["status"], "discard")
+    #     self.assertEqual(result["reason"], "regex filter triggered")
 
-    def test_selfcrit_parse_response(self):
-        parsed = selfcrit.parse_response(
-            "Score: 0.8\nStatus: keep\nReason: looks good"
-        )
-        self.assertEqual(parsed["score"], 0.8)
-        self.assertEqual(parsed["status"], "keep")
-        self.assertEqual(parsed["reason"], "looks good")
-        bad_raw = "invalid response"
-        parsed = selfcrit.parse_response(bad_raw)
-        self.assertEqual(parsed["status"], "revise")
+    # def test_selfcrit_parse_response(self):
+    #     parsed = selfcrit.parse_response(
+    #         "Score: 0.8\nStatus: keep\nReason: looks good"
+    #     )
+    #     self.assertEqual(parsed["score"], 0.8)
+    #     self.assertEqual(parsed["status"], "keep")
+    #     self.assertEqual(parsed["reason"], "looks good")
+    #     bad_raw = "invalid response"
+    #     parsed = selfcrit.parse_response(bad_raw)
+    #     self.assertEqual(parsed["status"], "revise")

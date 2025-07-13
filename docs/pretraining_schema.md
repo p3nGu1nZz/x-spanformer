@@ -3,7 +3,7 @@ We are building a tokenizer-free, span-aware encoder grounded in X-bar theory—
 Right now, We need help scaling up high-quality, interpretable training data for **Phase I span induction**.
 
 I'm looking for collaborators to help generate:
-- ✅ Single-token and multi-token span labels across `code`, `natural_language`, and `hybrid` domains
+- ✅ Single-token and multi-token span labels across `code`, `natural`, and `mixed` domains
 - ✅ Accurate `label`, `role`, and `text` fields aligned with each span
 - ✅ Clear structure with nested units (think: call_exprs inside function bodies)
 
@@ -37,7 +37,7 @@ This 3D heatmap illustrates the stacked span structure over a tokenized input se
 ```json
 {
   "input": ["The", " ", "quick", " ", "brown", " ", "fox", " ", "jumps", " ", "over", " ", "the", " ", "lazy", " ", "dog", "."],
-  "type": "natural_language",
+  "type": "natural",
   "span_labels": [
     {
       "span": [0, 0],
@@ -303,7 +303,7 @@ This schema lets X-Spanformer model the _structural spine_ of code—how parts r
 
 # ✍️ Natural Language Span Labels & Roles
 
-This label set supports training X-Spanformer on `type: "natural_language"` sequences. Each token is tagged with a `label` (like `noun`, `verb`, etc.) and a context-sensitive `role`—allowing the model to learn syntax, compositional structure, and X-bar-style phrase projection without a tokenizer.
+This label set supports training X-Spanformer on `type: "natural"` sequences. Each token is tagged with a `label` (like `noun`, `verb`, etc.) and a context-sensitive `role`—allowing the model to learn syntax, compositional structure, and X-bar-style phrase projection without a tokenizer.
 
 Here's how it's organized:
 
@@ -430,7 +430,7 @@ Here’s the whole structure:
 ```json
 {
   "input": [...],
-  "type": "code",  // or "natural_language" or "mixed"
+  "type": "code",  // or "natural" or "mixed"
   "span_labels": [
     { "span": [0, 0], "label": "keyword", "role": "loop type", "text": "for" },
     { "span": [3, 3], "label": "type", "role": "primitive", "text": "int" },
