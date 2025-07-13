@@ -8,6 +8,24 @@ from x_spanformer.agents.constants import DEFAULT_SYSTEM
 c = Console()
 Message = dict[str, str]
 
+async def check_ollama_connection(model: str = "llama3.2:1b") -> bool:
+	"""
+	Test if Ollama is running and accessible by attempting a simple chat request.
+	Returns True if connection is successful, False otherwise.
+	"""
+	try:
+		client = AsyncClient()
+		# Try a minimal test request
+		response = await client.chat(
+			model=model,
+			messages=[{"role": "user", "content": "test"}],
+			options={"temperature": 0.1}
+		)
+		return True
+	except Exception as e:
+		c.print(f"[red]❌ Ollama connection failed: {str(e)}[/red]")
+		return False
+
 async def chat(
 	model: str,
 	conversation: List[Message],

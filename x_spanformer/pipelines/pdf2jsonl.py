@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 from x_spanformer.agents.config_loader import load_judge_config
+from x_spanformer.agents.ollama_client import check_ollama_connection
 from x_spanformer.agents.rich_utils import (
     console,
     display_summary_panel,
@@ -246,26 +247,36 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         if not output_path or not records:
             return
 
-        # Only save "keep" records to the main dataset - "discard" should not be in final training data
-        filtered_records = [record for record in records if record.meta.status == "keep"]
+        # Separate records by status
+        keep_records = [record for record in records if record.meta.status == "keep"]
+        discard_records = [record for record in records if record.meta.status == "discard"]
         
-        if not filtered_records:
-            return  # Nothing to save after filtering
-
         # Create jsonl directory for dataset files
         jsonl_dir = output_path / "jsonl"
         jsonl_dir.mkdir(parents=True, exist_ok=True)
-        dataset_file = jsonl_dir / f"{base_name}.jsonl"
-        mode = "a"  # Always append
-
-        with dataset_file.open(mode, encoding="utf-8") as writer:
-            for record in filtered_records:
-                writer.write(json.dumps(record.model_dump(), ensure_ascii=False) + "\n")
-
-        num_saved = len(filtered_records)
-        records_saved_this_session += num_saved
-
-        console.print(f"[blue]💾 Saved {num_saved} record(s) to {dataset_file.name} (total this session: {records_saved_this_session}) [dim](filtered from {len(records)} total)[/dim][/blue]")
+        
+        saved_count = 0
+        
+        # Save "keep" records to main dataset file
+        if keep_records:
+            dataset_file = jsonl_dir / f"{base_name}.jsonl"
+            with dataset_file.open("a", encoding="utf-8") as writer:
+                for record in keep_records:
+                    writer.write(json.dumps(record.model_dump(), ensure_ascii=False) + "\n")
+            saved_count += len(keep_records)
+            console.print(f"[blue]💾 Saved {len(keep_records)} keep record(s) to {dataset_file.name}[/blue]")
+        
+        # Save "discard" records to discard file
+        if discard_records:
+            discard_file = jsonl_dir / "discard.jsonl"
+            with discard_file.open("a", encoding="utf-8") as writer:
+                for record in discard_records:
+                    writer.write(json.dumps(record.model_dump(), ensure_ascii=False) + "\n")
+            console.print(f"[blue]💾 Saved {len(discard_records)} discard record(s) to {discard_file.name}[/blue]")
+        
+        records_saved_this_session += saved_count
+        total_saved = len(keep_records) + len(discard_records)
+        console.print(f"[blue]💾 Total saved this chunk: {total_saved} records (session total: {records_saved_this_session} keeps)[/blue]")
 
     async def process():
         stats = Counter()
@@ -295,19 +306,34 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                 expanded_spans.append(chunk)
                 expanded_source_mapping.append(source_file)
 
+        # Save the total number of segments before filtering (for progress tracking)
+        total_segments_including_processed = len(expanded_spans)
+
         if existing_records:
             processed_raws = {rec.raw for rec in existing_records}
+            keep_raws = {rec.raw for rec in existing_records if rec.meta.status == "keep"}
+            discard_raws = {rec.raw for rec in existing_records if rec.meta.status == "discard"}
+            
             if processed_raws:
                 unprocessed_spans = []
                 unprocessed_source_mapping = []
+                skipped_keeps = 0
+                skipped_discards = 0
+                
                 for text, source in zip(expanded_spans, expanded_source_mapping):
                     if text not in processed_raws:
                         unprocessed_spans.append(text)
                         unprocessed_source_mapping.append(source)
+                    else:
+                        # Count what type of record we're skipping
+                        if text in keep_raws:
+                            skipped_keeps += 1
+                        elif text in discard_raws:
+                            skipped_discards += 1
 
                 if len(unprocessed_spans) < len(expanded_spans):
                     skipped_count = len(expanded_spans) - len(unprocessed_spans)
-                    console.print(f"[cyan]🔄 Resuming: Skipped {skipped_count} already processed segments. Total processed so far: {processed_count_total}[/cyan]")
+                    console.print(f"[cyan]🔄 Resuming: Skipped {skipped_count} already processed segments ({skipped_keeps} keeps + {skipped_discards} discards). Total processed so far: {processed_count_total}[/cyan]")
                     expanded_spans = unprocessed_spans
                     expanded_source_mapping = unprocessed_source_mapping
                 else:
@@ -320,9 +346,9 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         if len(expanded_spans) != len(spans):
             console.print(f"[cyan]📐 Text splitting: {len(spans)} → {len(expanded_spans)} segments to process (max length: {max_raw_length} chars)[/cyan]")
 
-        # Update references to use expanded spans
+        # Update references to use total segments including already processed
         nonlocal total_segment_count
-        total_segment_count = len(expanded_spans)
+        total_segment_count = total_segments_including_processed  # Use total including already processed
         nonlocal estimated_total_saves
         estimated_total_saves = total_segment_count
 
@@ -344,11 +370,14 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
             async with semaphore:
                 try:
                     session = sessions[idx % len(sessions)]
-                    # Create concurrent judge evaluation tasks
+                    # Create concurrent judge evaluation tasks with timeout
                     judge_tasks = [session.evaluate(text) for _ in range(num_judges)]
                     
-                    # Execute all judge evaluations concurrently
-                    judge_responses = await asyncio.gather(*judge_tasks)
+                    # Execute all judge evaluations concurrently with timeout
+                    judge_responses = await asyncio.wait_for(
+                        asyncio.gather(*judge_tasks), 
+                        timeout=60.0  # 60 second timeout per segment
+                    )
                     scores = [r.get("score", 0) for r in judge_responses]
                     
                     # Calculate consensus score and type
@@ -379,7 +408,15 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                         "judge_responses": judge_responses
                     }
                     
+                except asyncio.TimeoutError:
+                    console.print(f"[red]⏰ Timeout evaluating segment {idx}: {text[:50]}...[/red]")
+                    return idx, {
+                        "score": 0.0, 
+                        "status": "discard", 
+                        "reason": "evaluation timeout"
+                    }, None
                 except Exception as e:
+                    console.print(f"[red]❌ Error evaluating segment {idx}: {str(e)}[/red]")
                     return idx, {
                         "score": 0.0, 
                         "status": "discard", 
@@ -395,9 +432,16 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         
         console.print(f"[cyan]📋 Processing {len(segments_by_source)} documents sequentially, with concurrent judge evaluation within each document[/cyan]")
         
+        # Debug: Show first few segments to verify resume logic
+        if len(expanded_spans) < 20:
+            console.print(f"[dim]Debug: First few segments to process:[/dim]")
+            for i, text in enumerate(expanded_spans[:5]):
+                console.print(f"[dim]  {i+1}: {text[:60]}...[/dim]")
+        
         # Process each document sequentially
-        overall_completed_count = 0
-        overall_keep_count = 0  # Track total kept records across all documents
+        overall_completed_count = len(existing_records) if existing_records else 0  # Start from already processed count
+        overall_keep_count = valid_records_count  # Start from already kept records count
+        overall_discard_count = len(existing_records) - valid_records_count if existing_records else 0  # Start from already discarded records count
         results = []  # Track all results for final return
         
         for doc_idx, (source_file, segments_list) in enumerate(segments_by_source.items(), 1):
@@ -467,6 +511,8 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                 if tag == "keep":
                     valid_records_count += 1
                     overall_keep_count += 1  # Track overall kept records
+                elif tag == "discard":
+                    overall_discard_count += 1  # Track overall discarded records
                 
                 # Display individual judgment result for every segment
                 if log_data:
@@ -477,24 +523,28 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                         score=r["score"],
                         reason=r["reason"],
                         content_type=r.get("type", "natural"),
-                        total_count=len(expanded_spans)
+                        total_count=total_segment_count  # Use total including already processed
                     )
                 
                 # Show progress summary every 10 completed or at end of document
                 if doc_completed_count % 10 == 0 or doc_completed_count == len(doc_tasks):
                     keep_count = sum(1 for _, result, _ in doc_results if result["status"] == "keep")
                     discard_count = doc_completed_count - keep_count
-                    console.print(f"[bright_blue]📊 Document Progress: {doc_completed_count}/{len(doc_tasks)} | [green]✅ Keep: {keep_count}[/green] | [red]❌ Discard: {discard_count}[/red] | Overall: {overall_completed_count}/{len(expanded_spans)}[/bright_blue]")
+                    console.print(f"[bright_blue]📊 Document Progress: {doc_completed_count}/{len(doc_tasks)} | [green]✅ Keep: {keep_count}[/green] | [red]❌ Discard: {discard_count}[/red] | Overall: {overall_completed_count}/{total_segment_count}[/bright_blue]")
                     console.print()
                     
                     # Display telemetry panel after progress summary
                     if overall_completed_count > 0:  # Only show if we have processed some records
+                        # Calculate estimated total saves based on current keep rate
+                        current_keep_rate = overall_keep_count / overall_completed_count if overall_completed_count > 0 else 0.5
+                        estimated_total_keeps = int(total_segment_count * current_keep_rate)
+                        
                         display_telemetry_panel(
                             processed_count=overall_completed_count,
-                            total_count=len(expanded_spans),
+                            total_count=total_segment_count,  # Use total including already processed
                             start_time=start_time,
-                            save_count=records_saved_this_session,  # Actual saved records (only keeps)
-                            estimated_total_saves=overall_keep_count,  # Current estimated saves based on keep rate
+                            save_count=overall_keep_count,  # Total saved records (all keeps)
+                            estimated_total_saves=estimated_total_keeps,  # Estimated based on current keep rate
                             records_saved_this_session=records_saved_this_session,
                             keep_count=overall_keep_count
                         )
@@ -545,6 +595,33 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
     if not i.is_file() and not any(i.iterdir()):
         console.print(f"[yellow]Warning: Input directory is empty: {i}[/yellow]")
         # Allow continuing, as there might be existing CSVs to process
+    
+    # Check Ollama connection before starting any processing
+    async def test_ollama():
+        console.print("[cyan]🔍 Testing Ollama connection...[/cyan]")
+        agent_config = load_judge_config()
+        model = agent_config.get("judge", {}).get("model_name", "llama3.2:1b")
+        
+        if await check_ollama_connection(model):
+            console.print(f"[green]✅ Ollama is running and accessible (model: {model})[/green]")
+            return True
+        else:
+            console.print(f"[red]❌ Ollama connection failed![/red]")
+            console.print(f"[yellow]💡 Please ensure Ollama is running with: ollama serve[/yellow]")
+            console.print(f"[yellow]💡 And that the model '{model}' is available with: ollama pull {model}[/yellow]")
+            return False
+    
+    # Run the connection test
+    try:
+        if not asyncio.run(test_ollama()):
+            console.print(f"[red]🚫 Exiting due to Ollama connection failure. Please start Ollama and try again.[/red]")
+            return
+    except Exception as e:
+        console.print(f"[red]❌ Error testing Ollama connection: {str(e)}[/red]")
+        console.print(f"[red]🚫 Exiting due to connection test failure. Please check Ollama is running.[/red]")
+        return
+    
+    console.print()
     
     # First, discover all PDF files
     pdfs = []
@@ -677,19 +754,32 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
     for csv_name, pdf_name in pdf_mapping.items():
         console.print(f"[dim]  {csv_name} ← {pdf_name}[/dim]")
     
-    # Check if dataset file already exists in jsonl directory
+    # Check if dataset and discard files already exist in jsonl directory
     jsonl_dir = o / "jsonl"
     dataset_file = jsonl_dir / f"{base}.jsonl"
+    discard_file = jsonl_dir / "discard.jsonl"
     existing_records = []
     
-    # Clear existing dataset file if force mode is enabled
-    if force and dataset_file.exists():
-        console.print(f"[red]🔄 Force mode: Removing existing dataset file: {dataset_file.name}[/red]")
-        try:
-            dataset_file.unlink()
-            console.print(f"[dim]  Removed: {dataset_file.name}[/dim]")
-        except OSError:
-            pass
+    # Clear existing files if force mode is enabled
+    if force:
+        if dataset_file.exists():
+            console.print(f"[red]🔄 Force mode: Removing existing dataset file: {dataset_file.name}[/red]")
+            try:
+                dataset_file.unlink()
+                console.print(f"[dim]  Removed: {dataset_file.name}[/dim]")
+            except OSError:
+                pass
+        if discard_file.exists():
+            console.print(f"[red]🔄 Force mode: Removing existing discard file: {discard_file.name}[/red]")
+            try:
+                discard_file.unlink()
+                console.print(f"[dim]  Removed: {discard_file.name}[/dim]")
+            except OSError:
+                pass
+    
+    # Load existing records from both dataset.jsonl and discard.jsonl
+    keep_count = 0
+    discard_count = 0
     
     if dataset_file.exists():
         console.print(f"[yellow]⚠ Existing dataset file found: {dataset_file.name}[/yellow]")
@@ -698,13 +788,34 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
                 for line in file_handle:
                     if line.strip():
                         existing_records.append(PretrainRecord.model_validate_json(line))
-            if existing_records:
-                console.print(f"[cyan]✔ Loaded {len(existing_records)} records. Will skip processing for these.[/cyan]")
+                        keep_count += 1
+            console.print(f"[cyan]✔ Loaded {keep_count} keep records from {dataset_file.name}[/cyan]")
         except (json.JSONDecodeError, ValidationError) as e:
             console.print(f"[red]⚠ Could not parse existing dataset file: {e}. Starting fresh.[/red]")
             existing_records = []
+            keep_count = 0
     else:
         console.print(f"[cyan]📝 Will create new dataset file: {dataset_file.name}[/cyan]")
+    
+    if discard_file.exists():
+        console.print(f"[yellow]⚠ Existing discard file found: {discard_file.name}[/yellow]")
+        try:
+            with discard_file.open("r", encoding="utf-8") as file_handle:
+                for line in file_handle:
+                    if line.strip():
+                        existing_records.append(PretrainRecord.model_validate_json(line))
+                        discard_count += 1
+            console.print(f"[cyan]✔ Loaded {discard_count} discard records from {discard_file.name}[/cyan]")
+        except (json.JSONDecodeError, ValidationError) as e:
+            console.print(f"[red]⚠ Could not parse existing discard file: {e}. Ignoring discards.[/red]")
+    else:
+        console.print(f"[cyan]📝 Will create new discard file: {discard_file.name}[/cyan]")
+    
+    if existing_records:
+        total_existing = len(existing_records)
+        console.print(f"[cyan]� Resume mode: Found {total_existing} total existing records ({keep_count} keeps + {discard_count} discards). Will skip processing for these.[/cyan]")
+    else:
+        console.print(f"[cyan]🆕 Fresh start: No existing records found[/cyan]")
 
     console.print()
     allr = process_all_csvs(csvs, f, w, {}, save_interval, o, base, pdf_mapping, existing_records=existing_records)
