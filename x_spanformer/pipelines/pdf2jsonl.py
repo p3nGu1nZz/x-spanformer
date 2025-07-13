@@ -401,30 +401,7 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
             results.append((idx, r, log_data))
             completed_count += 1
             
-            # Display individual judgment result for every segment (but in compact format)
-            if log_data:
-                display_judgment_result(
-                    idx=idx,
-                    text=log_data["text"], 
-                    status=r["status"],
-                    score=r["score"],
-                    reason=r["reason"],
-                    content_type=r.get("type", "natural"),
-                    total_count=len(tasks)
-                )
-            
-            # Show progress summary every 10 completed or at end
-            if completed_count % 10 == 0 or completed_count == len(tasks):
-                keep_count = sum(1 for _, result, _ in results if result["status"] == "keep")
-                discard_count = completed_count - keep_count
-                console.print(f"[bright_blue]📊 Progress Summary: {completed_count}/{len(tasks)} | [green]✅ Keep: {keep_count}[/green] | [red]❌ Discard: {discard_count}[/red][/bright_blue]")
-                console.print()
-        
-        # Sort results by original index to maintain order
-        results.sort(key=lambda x: x[0])
-        
-        # Process results to create records
-        for idx, r, log_data in results:
+            # Process this result immediately for incremental saving
             tag = r["status"]
             reasons.append(r["reason"])
             stats[tag] += 1
@@ -460,6 +437,7 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
             all_processed_recs.append(record)
             processed_count_total += 1
 
+            # Incremental saving - save immediately after each record
             if save_interval > 0:
                 records_to_save.append(record)
                 if len(records_to_save) >= save_interval:
@@ -469,7 +447,29 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
             # Only count valid records (status "keep") toward valid count
             if tag == "keep":
                 valid_records_count += 1
-
+            
+            # Display individual judgment result for every segment (but in compact format)
+            if log_data:
+                display_judgment_result(
+                    idx=idx,
+                    text=log_data["text"], 
+                    status=r["status"],
+                    score=r["score"],
+                    reason=r["reason"],
+                    content_type=r.get("type", "natural"),
+                    total_count=len(tasks)
+                )
+            
+            # Show progress summary every 10 completed or at end
+            if completed_count % 10 == 0 or completed_count == len(tasks):
+                keep_count = sum(1 for _, result, _ in results if result["status"] == "keep")
+                discard_count = completed_count - keep_count
+                console.print(f"[bright_blue]📊 Progress Summary: {completed_count}/{len(tasks)} | [green]✅ Keep: {keep_count}[/green] | [red]❌ Discard: {discard_count}[/red][/bright_blue]")
+                console.print()
+        
+        # Sort results by original index to maintain order (for final return)
+        results.sort(key=lambda x: x[0])
+        
         # Save any remaining records in the buffer
         if save_interval > 0 and records_to_save:
             console.print(f"[blue]Finalizing... saving {len(records_to_save)} remaining records.[/blue]")
