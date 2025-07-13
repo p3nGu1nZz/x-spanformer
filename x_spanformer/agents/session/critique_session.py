@@ -11,7 +11,7 @@ from x_spanformer.agents.agent_utils import console, rich_log
 
 class CritiqueSession:
     def __init__(self, config_name="selfcrit.yaml"):
-        self.cfg = load_selfcrit_config(config_name)
+        self.cfg = load_selfcrit_config(config_name, quiet=True)
         self.system = render_prompt(self.cfg["templates"]["system"])
         self.regex_filters = [
             re.compile(rx["pattern"]) for rx in self.cfg.get("regex_filters", [])

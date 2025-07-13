@@ -3,11 +3,13 @@ Two different evaluators gave conflicting ratings for this span.
 Response A:
 Score: {{ score_a }}
 Status: {{ status_a }}
+Type: {{ type_a }}
 Reason: {{ reason_a }}
 
 Response B:
 Score: {{ score_b }}
 Status: {{ status_b }}
+Type: {{ type_b }}
 Reason: {{ reason_b }}
 
 Decision criteria:
@@ -17,4 +19,5 @@ Decision criteria:
 Given the disagreement, please offer a final, decisive judgment that reconciles these perspectives. Format exactly as:
 Score: ...
 Status: ...
+Type: Natural | Code | Mixed
 Reason: ...

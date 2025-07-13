@@ -18,13 +18,14 @@ class JudgeSession:
         if config:
             self.cfg = config
         else:
-            self.cfg = load_selfcrit_config(config_name, quiet=quiet)
+            self.cfg = load_selfcrit_config(config_name, quiet=True)
 
         self.system = render_prompt(self.cfg["templates"]["system"])
         self.regex_filters = [re.compile(rx["pattern"]) for rx in self.cfg.get("regex_filters", [])]
         self.pattern = re.compile(
             r"(\*\*score:\*\*|score:)\s*(?P<score>[0-9.]+)\s*"
             r"(\*\*status:\*\*|status:)\s*(?P<status>\w+)\s*"
+            r"(\*\*type:\*\*|type:)\s*(?P<type>\w+)\s*"
             r"(\*\*reason:\*\*|reason:)\s*(?P<reason>.+)",
             re.IGNORECASE | re.DOTALL
         )
@@ -81,7 +82,7 @@ class JudgeSession:
         m = self.pattern.search(text)
         if not m:
             c.print(Panel.fit(f"[bold yellow]⚠ Could not parse judge output:[/]\n[dim]{text.strip()[:160]}", title="Judge Parse Failure", border_style="yellow"))
-            return {"score": 0.5, "status": "revise", "reason": "unparseable"}
+            return {"score": 0.5, "status": "revise", "type": "Natural", "reason": "unparseable"}
         
         # Normalize status to expected values
         status = m["status"].strip().lower()
@@ -89,10 +90,18 @@ class JudgeSession:
             status = "revise"
         elif status not in ["keep", "revise", "discard"]:
             status = "revise"  # Default fallback
+        
+        # Normalize type to expected values
+        content_type = m["type"].strip()
+        if content_type.lower() not in ["natural", "code", "mixed"]:
+            content_type = "Natural"  # Default fallback
+        else:
+            content_type = content_type.capitalize()  # Ensure proper capitalization
             
         return {
             "score": float(m["score"]),
             "status": status,
+            "type": content_type,
             "reason": m["reason"].strip()
         }
 

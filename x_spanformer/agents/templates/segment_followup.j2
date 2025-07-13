@@ -1,6 +1,7 @@
 Your previous rating was:
 Score: {{ prior_score }}
 Status: {{ prior_status }}
+Type: {{ prior_type }}
 Reason: {{ prior_reason }}
 
 Decision criteria:
@@ -13,3 +14,9 @@ Text:
 ---
 {{ text }}
 ---
+
+Respond in exactly 4 lines:
+Score: 0.0-1.0
+Status: keep | revise | discard  
+Type: Natural | Code | Mixed
+Reason: brief structural assessment

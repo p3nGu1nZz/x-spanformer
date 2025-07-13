@@ -5,13 +5,19 @@ Evaluate segments based on:
 - Compositional value: Does it contain learnable patterns for span segmentation?
 - Training utility: Is it clean, coherent, and representative of target domains (code, natural language, or mixed)?
 
+Content Type Classification Guidelines:
+- **Code**: Programming language syntax, functions, classes, algorithms, data structures
+- **Natural**: Human language text, documentation, explanations, prose
+- **Mixed**: Combination of code and natural language (e.g., commented code, technical docs with examples)
+
 Decision criteria:
 - Score ≥ {{ threshold }}: Status should be "keep" 
 - Score < {{ threshold }}: Status should be "revise" if improvable, "discard" if not
 
-Output format (exactly 3 lines):
+Output format (exactly 4 lines):
 Score: (float 0.0-1.0, where 1.0 = excellent training data)
 Status: keep | revise | discard
+Type: Natural | Code | Mixed (classify the content type accurately)
 Reason: brief explanation focusing on structural/training value
 
 Be selective - only "keep" segments with clear structural patterns that will help the model learn span segmentation and composition.

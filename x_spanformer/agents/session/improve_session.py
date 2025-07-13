@@ -18,7 +18,7 @@ class ImproveSession:
         if config:
             self.cfg = config
         else:
-            self.cfg = load_selfcrit_config(config_name, quiet=quiet)
+            self.cfg = load_selfcrit_config(config_name, quiet=True)
         
         # Get template name from config
         template_name = self.cfg.get("templates", {}).get("improve", "segment_improve")
@@ -146,6 +146,13 @@ class ImproveSession:
                     improved_lines.append(remainder)
                 continue
             if improved_start:
+                # Only stop if we see clear structural indicators of the AI adding meta-commentary
+                # We look for specific patterns that indicate the AI is explaining rather than providing content
+                if (line_clean.startswith("**") and ("note" in line_clean.lower() or "important" in line_clean.lower())) or \
+                   line_clean.lower().startswith(("note:", "explanation:", "(note:", "**note**", "**explanation**")) or \
+                   (line_clean.startswith("---") and len(improved_lines) > 0):  # Only stop on --- if we already have content
+                    c.print(f"[dim]🔧 Stopping improved text parsing at meta-commentary: {line_clean[:50]}...[/dim]")
+                    break
                 improved_lines.append(line)
         
         if improved_lines:

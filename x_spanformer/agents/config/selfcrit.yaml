@@ -16,7 +16,7 @@ dialogue:
   trim_strategy: rolling
 
 critique:
-  threshold: 0.69
+  threshold: 0.8
   discard_threshold: 0.25
   passes: 3
   max_retries: 3
@@ -25,10 +25,10 @@ critique:
 
 judge:
   model_name: phi4-mini
-  temperature: 0.2
+  temperature: 0.3
   max_retries: 3
   passes: 3
-  threshold: 0.69
+  threshold: 0.8
   discard_threshold: 0.25
 
 improver:
@@ -38,11 +38,11 @@ improver:
   max_turns: 3
 
 regex_filters:
-- pattern: "\\b\\w{40,}\\b"
-  reason: "long token, likely noise"
+- pattern: "\\b\\w{50,}\\b"
+  reason: "extremely long token, likely noise"
 
-- pattern: "\\S{25,}"
-  reason: "long unspaced word"
+- pattern: "\\S{40,}"
+  reason: "extremely long unspaced string"
 
 templates:
   system: selfcrit_system

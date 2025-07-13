@@ -52,7 +52,7 @@ class TestAgents(unittest.TestCase):
             "improver": {"model_name": "test_model", "temperature": 0.8},
             "dialogue": {"max_turns": 2},
             "regex_filters": [{"pattern": "badword"}],
-            "templates": {"system": "system_prompt", "score": "score_prompt"},
+            "templates": {"system": "system_prompt", "critique": "score_prompt"},
         }
         with (self.config_dir / "test.yaml").open("w") as f:
             yaml.dump(self.dummy_config, f)
@@ -88,7 +88,9 @@ class TestAgents(unittest.TestCase):
 
     @patch("x_spanformer.agents.ollama_client.AsyncClient")
     def test_ollama_client_chat(self, mock_client):
-        mock_response = {"message": {"content": "response"}}
+        # Create proper mock response object with message.content attribute
+        mock_response = MagicMock()
+        mock_response.message.content = "response"
         mock_client.return_value.chat = AsyncMock(return_value=mock_response)
         result = asyncio.run(
             ollama_client.chat("model", [{"role": "user", "content": "hi"}])

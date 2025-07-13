@@ -19,31 +19,21 @@ class TestImprovedFieldBug(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmp_dir)
 
-    @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
-    @patch("x_spanformer.pipelines.pdf2jsonl.ImproveSession")
-    def test_improved_field_not_null_when_improvement_made(self, mock_improve_session_class, mock_judge_session_class):
+    @patch("x_spanformer.pipelines.pdf2jsonl.process_segment_cycle")
+    def test_improved_field_not_null_when_improvement_made(self, mock_process_segment_cycle):
         """Test that improved field is not null when real improvement iterations occurred."""
-        # Mock JudgeSession to return different scores for original vs improved text
-        mock_judge_session = MagicMock()
-        mock_judge_session_class.return_value = mock_judge_session
         
         original_text = "This is the original text."
         improved_text = "This is the improved and enhanced text with better clarity."
         
-        def mock_evaluate(text):
-            if text == original_text:
-                return {"score": 0.6, "status": "revise", "reason": "needs improvement"}
-            elif text == improved_text:
-                return {"score": 0.8, "status": "keep", "reason": "good improvement"}
-            else:
-                return {"score": 0.6, "status": "revise", "reason": "needs improvement"}
-        
-        mock_judge_session.evaluate = AsyncMock(side_effect=mock_evaluate)
-        
-        # Mock ImproveSession to return actual improved text
-        mock_improve_session = MagicMock()
-        mock_improve_session_class.return_value = mock_improve_session
-        mock_improve_session.improve = AsyncMock(return_value=(improved_text, "Natural"))
+        # Mock process_segment_cycle to simulate improvement cycle with final improved text
+        mock_process_segment_cycle.return_value = {
+            "score": 0.8,
+            "status": "keep", 
+            "reason": "good improvement",
+            "final_text": improved_text,
+            "cycles_completed": 2
+        }
 
         # Create test CSV
         csv_content = f'text\n"{original_text}"'
@@ -69,21 +59,20 @@ class TestImprovedFieldBug(unittest.TestCase):
         if record.meta.notes:
             self.assertIn("Improvement iterations:", record.meta.notes)
 
-    @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
-    @patch("x_spanformer.pipelines.pdf2jsonl.ImproveSession")
-    def test_improved_field_null_when_no_improvement_made(self, mock_improve_session_class, mock_judge_session_class):
+    @patch("x_spanformer.pipelines.pdf2jsonl.process_segment_cycle")
+    def test_improved_field_null_when_no_improvement_made(self, mock_process_segment_cycle):
         """Test that improved field is null when no improvement was actually made."""
-        # Mock JudgeSession to return "keep" status (no improvement needed)
-        mock_judge_session = MagicMock()
-        mock_judge_session_class.return_value = mock_judge_session
-        mock_judge_session.evaluate = AsyncMock(return_value={
-            "score": 0.8, "status": "keep", "reason": "good text"
-        })
         
-        # Mock ImproveSession (shouldn't be called in this case)
-        mock_improve_session = MagicMock()
-        mock_improve_session_class.return_value = mock_improve_session
-        mock_improve_session.improve = AsyncMock(return_value=(None, "Natural"))
+        original_text = "This is good text that needs no improvement."
+        
+        # Mock process_segment_cycle to return "keep" status (no improvement needed)
+        mock_process_segment_cycle.return_value = {
+            "score": 0.8,
+            "status": "keep", 
+            "reason": "good text",
+            "final_text": original_text,
+            # Don't include cycles_completed to simulate immediate keep without improvement attempts
+        }
 
         # Create test CSV
         original_text = "This is good text that needs no improvement."
@@ -104,28 +93,24 @@ class TestImprovedFieldBug(unittest.TestCase):
         self.assertIsNone(record.improved, "improved field should be null when no improvement was made")
         self.assertEqual(record.raw, original_text, "raw field should contain the original text")
         
-        # Check that no improvement iterations were recorded
+        # Check that no improvement iterations were recorded when cycles_completed is not present
         if record.meta.notes:
             self.assertNotIn("Improvement iterations:", record.meta.notes)
 
-    @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
-    @patch("x_spanformer.pipelines.pdf2jsonl.ImproveSession")
-    def test_improved_field_null_when_improvement_returns_same_text(self, mock_improve_session_class, mock_judge_session_class):
+    @patch("x_spanformer.pipelines.pdf2jsonl.process_segment_cycle")
+    def test_improved_field_null_when_improvement_returns_same_text(self, mock_process_segment_cycle):
         """Test that improved field is null when improvement returns the same text as original."""
-        # Mock JudgeSession to return "revise" status to trigger improvement attempts
-        mock_judge_session = MagicMock()
-        mock_judge_session_class.return_value = mock_judge_session
-        mock_judge_session.evaluate = AsyncMock(return_value={
-            "score": 0.6, "status": "revise", "reason": "needs improvement"
-        })
-        
-        # Mock ImproveSession to return the same text (no actual improvement)
-        mock_improve_session = MagicMock()
-        mock_improve_session_class.return_value = mock_improve_session
         
         original_text = "This text cannot be improved."
-        # Improvement returns the same text
-        mock_improve_session.improve = AsyncMock(return_value=(original_text, "Natural"))
+        
+        # Mock process_segment_cycle to simulate improvement that returns same text
+        mock_process_segment_cycle.return_value = {
+            "score": 0.8,
+            "status": "keep",
+            "reason": "improvement completed", 
+            "final_text": original_text,  # Same as original
+            "cycles_completed": 2
+        }
 
         # Create test CSV
         csv_content = f'text\n"{original_text}"'

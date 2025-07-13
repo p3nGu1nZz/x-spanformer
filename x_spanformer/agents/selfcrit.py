@@ -13,9 +13,10 @@ cfg = load_selfcrit_config()
 RE_FLAGGED = [re.compile(rx["pattern"]) for rx in cfg.get("regex_filters", [])]
 
 SCORE_PATTERN = re.compile(
-	r"Score:\s*(?P<score>[0-9.]+)\s*"
-	r"Status:\s*(?P<status>\w+)\s*"
-	r"Reason:\s*(?P<reason>.+)",
+	r"Score:\s*(?P<score>[0-9.]+)"
+	r".*?Status:\s*(?P<status>\w+)"
+	r"(?:.*?Type:\s*(?P<type>[A-Za-z]+))?"
+	r".*?Reason:\s*(?P<reason>.+?)(?:\s*$)",
 	re.IGNORECASE | re.DOTALL
 )
 
@@ -28,11 +29,26 @@ def parse_response(raw: str) -> dict:
 			color="yellow",
 		)
 		return {"score": 0.5, "status": "revise", "reason": "unparseable"}
-	return {
-		"score": float(match["score"]),
-		"status": match["status"].strip().lower(),
-		"reason": match["reason"].strip()
-	}
+	
+	try:
+		result = {
+			"score": float(match["score"]),
+			"status": match["status"].strip().lower(),
+			"reason": match["reason"].strip()
+		}
+		
+		# Add type if it exists in the match
+		if "type" in match.groupdict() and match["type"]:
+			result["type"] = match["type"].strip()
+		
+		return result
+	except KeyError as e:
+		rich_log(
+			{"error": f"Missing key in regex match: {e}", "raw": raw.strip(), "groups": match.groupdict()},
+			title="Parse KeyError",
+			color="red",
+		)
+		return {"score": 0.5, "status": "revise", "reason": f"parse key error: {e}"}
 
 @retry(stop=stop_after_attempt(cfg["judge"]["max_retries"]), wait=wait_fixed(0.5))
 async def judge_segment(text: str) -> dict:
@@ -59,7 +75,7 @@ async def judge_segment(text: str) -> dict:
 
 	for i in range(passes):
 		dm = DialogueManager(system_prompt=system, max_turns=cfg["dialogue"]["max_turns"])
-		dm.add("user", render_prompt(cfg["templates"]["score"], text=text))
+		dm.add("user", render_prompt(cfg["templates"]["critique"], text=text))
 		console.print(f"[cyan]Judge {i+1}/{passes} — requesting judgment...[/cyan]")
 
 		reply = await chat(
@@ -72,28 +88,53 @@ async def judge_segment(text: str) -> dict:
 		rich_log(result, title=f"Judge {i+1}/{passes} Verdict", color="green")
 		consensus.append(result)
 
-		# Early exit if unanimous decision on keep/discard
+		# Early exit if unanimous decision on keep/discard, but still apply thresholds
 		if result["status"] in {"keep", "discard"}:
 			console.print(f"[magenta]⚡ Judge {i+1} decisive: {result['status'].upper()}[/magenta]")
 			if i == 0:  # If first judge is decisive, continue to get more opinions
 				continue
+			# Apply thresholds before returning early decision
+			judge_threshold = cfg.get("judge", {}).get("threshold", 0.8)
+			discard_threshold = cfg.get("judge", {}).get("discard_threshold", 0.25)
+			
+			if result["score"] < discard_threshold:
+				result["status"] = "discard"
+				result["reason"] = f"judge discard threshold: score {result['score']:.3f} < {discard_threshold:.3f}"
+			elif result["score"] < judge_threshold and result["status"] == "keep":
+				# Downgrade keep to revise if score doesn't meet threshold
+				result["status"] = "revise"
+				result["reason"] = f"judge threshold: score {result['score']:.3f} < {judge_threshold:.3f}"
+			
 			return result
 
 	console.print(f"[yellow]⚖️ MAJORITY RULE: Processing {len(consensus)} judge votes[/yellow]")
-	statuses = [r["status"] for r in consensus]
-	scores = [r["score"] for r in consensus]
-	reasons = sorted({r["reason"] for r in consensus})
+	
+	# Extract values safely, providing defaults for missing keys
+	statuses = []
+	scores = []
+	reasons = []
+	
+	for i, r in enumerate(consensus):
+		try:
+			statuses.append(r.get("status", "revise"))
+			scores.append(r.get("score", 0.5))
+			reasons.append(r.get("reason", f"judge_{i+1}_error"))
+		except Exception as e:
+			console.print(f"[red]⚠️ Error processing judge {i+1} result: {e}[/red]")
+			statuses.append("revise")
+			scores.append(0.5)
+			reasons.append(f"judge_{i+1}_processing_error")
 
 	final = {
-		"score": round(sum(scores) / len(scores), 3),
-		"status": max(set(statuses), key=statuses.count),  # Majority rules
-		"reason": " / ".join(reasons)
+		"score": round(sum(scores) / len(scores), 3) if scores else 0.5,
+		"status": max(set(statuses), key=statuses.count) if statuses else "revise",
+		"reason": " / ".join(sorted(set(reasons))) if reasons else "consensus_processing_error"
 	}
 
 	rich_log(final, title="🏛️ JUDGE CONSENSUS", color="bold green")
 	
 	# Apply judge thresholds for final decision
-	judge_threshold = cfg.get("judge", {}).get("threshold", 0.69)
+	judge_threshold = cfg.get("judge", {}).get("threshold", 0.8)
 	discard_threshold = cfg.get("judge", {}).get("discard_threshold", 0.25)
 	
 	# First check discard threshold (lowest priority, most strict)
@@ -101,12 +142,15 @@ async def judge_segment(text: str) -> dict:
 		console.print(f"[red]🗑️ JUDGE OVERRIDE: Score {final['score']:.3f} below discard threshold {discard_threshold:.3f} — REMOVING RECORD[/red]")
 		final["status"] = "discard"
 		final["reason"] = f"judge discard threshold: score {final['score']:.3f} < {discard_threshold:.3f}"
-	# Then check keep threshold (if not already discarded)
-	elif final["score"] >= judge_threshold and final["status"] != "discard":
+	# Then check keep threshold - enforce proper scoring logic
+	elif final["score"] >= judge_threshold:
 		console.print(f"[green]✅ JUDGE CONFIRMATION: Score {final['score']:.3f} meets keep threshold {judge_threshold:.3f}[/green]")
-		if final["status"] == "revise":
-			final["status"] = "keep"  # Upgrade revise to keep if score is high enough
-			final["reason"] = f"judge threshold: score {final['score']:.3f} >= {judge_threshold:.3f}"
+		final["status"] = "keep"  # Set to keep if score meets threshold
+	else:
+		# Score is between discard_threshold and judge_threshold, should be revise
+		console.print(f"[yellow]🔄 JUDGE THRESHOLD: Score {final['score']:.3f} below keep threshold {judge_threshold:.3f} — STATUS: REVISE[/yellow]")
+		final["status"] = "revise"
+		final["reason"] = f"judge threshold: score {final['score']:.3f} < {judge_threshold:.3f}"
 	
 	status_emoji = {"keep": "✅", "discard": "🗑️", "revise": "🔄"}
 	console.print(f"[bold]{status_emoji.get(final['status'], '❓')} FINAL JUDGE DECISION: {final['status'].upper()}[/bold]")
