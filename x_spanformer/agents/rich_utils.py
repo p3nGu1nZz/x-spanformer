@@ -40,21 +40,23 @@ def display_telemetry_panel(
     estimated_total_saves: int,
     records_saved_this_session: int,
     keep_count: int | None = None,
+    session_start_count: int = 0,  # New parameter for records already processed at session start
 ):
     """Display a comprehensive telemetry panel in magenta."""
     current_time = time.time()
     elapsed_time = current_time - start_time
     elapsed_minutes = elapsed_time / 60
 
-    # Calculate progress metrics
+    # Calculate progress metrics based on actual processing this session
+    records_processed_this_session = processed_count - session_start_count
     progress_percentage = (
         (processed_count / total_count * 100) if total_count > 0 else 0
     )
     processing_rate = (
-        processed_count / elapsed_minutes if elapsed_minutes > 0 else 0
+        records_processed_this_session / elapsed_minutes if elapsed_minutes > 0 else 0
     )
 
-    # Estimate remaining time
+    # Estimate remaining time based on actual processing rate
     remaining_items = total_count - processed_count
     estimated_remaining_minutes = (
         (remaining_items / processing_rate) if processing_rate > 0 else 0
@@ -70,15 +72,23 @@ def display_telemetry_panel(
 
     # Create the telemetry table
     table = Table(show_header=False, box=None)
-    table.add_column("Metric", style="bold white", min_width=20)
-    table.add_column("Value", style="bright_cyan", min_width=20)
-    table.add_column("Extra", style="dim white", min_width=25)
+    table.add_column("Metric", style="bold white", width=20)
+    table.add_column("Value", style="bright_cyan", width=25)
+    table.add_column("Extra", style="dim white", width=30)
 
     table.add_row(
         "📊 Progress",
         f"{processed_count:,} / {total_count:,}",
         f"({progress_percentage:.1f}%)",
     )
+    
+    # Show session-specific processing info
+    if session_start_count > 0:
+        table.add_row(
+            "🚀 This Session",
+            f"{records_processed_this_session:,} processed",
+            f"({session_start_count:,} resumed)",
+        )
     
     # Show breakdown of keeps vs discards if available
     if keep_count is not None:
@@ -118,6 +128,7 @@ def display_telemetry_panel(
         title="🚀 [bold white]PROCESSING TELEMETRY[/bold white] 🚀",
         border_style="bright_magenta",
         expand=False,
+        width=80,  # Fixed width for consistent box sizing
     )
 
     # Display with extra spacing
@@ -187,22 +198,32 @@ def display_judgment_result(
     
     # Create content table
     table = Table(show_header=False, box=None, padding=0, expand=True)
-    table.add_column("Field", style="bold", min_width=12)
+    table.add_column("Field", style="bold", width=15)
     table.add_column("Value", style="white")
     
     progress_info = f"({idx + 1}/{total_count})" if total_count else f"#{idx + 1}"
     table.add_row("📊 Progress", progress_info)
-    table.add_row("📝 Text", f'"{display_text}"')
+    
+    # Truncate text to ensure consistent width
+    text_display = f'"{display_text}"'
+    if len(text_display) > 80:
+        text_display = text_display[:77] + '..."'
+    table.add_row("📝 Text", text_display)
+    
     table.add_row("⚖️ Score", f"{score:.2f}")
     table.add_row("🏷️ Type", content_type)
     table.add_row(f"{status_icon} Status", f"[{status_style}]{status.upper()}[/{status_style}]")
-    table.add_row("💭 Reason", reason[:100] + "..." if len(reason) > 100 else reason)
+    
+    # Truncate reason to ensure consistent width
+    reason_display = reason[:80] + "..." if len(reason) > 80 else reason
+    table.add_row("💭 Reason", reason_display)
     
     panel = Panel(
         table,
         title=f"⚖️ [bold white]JUDGMENT COMPLETE[/bold white] ⚖️",
         border_style=border_color,
         expand=False,
+        width=110,  # Fixed width for consistent box sizing
     )
     
     console.print(panel)

@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 from x_spanformer.agents.config_loader import load_judge_config
-from x_spanformer.agents.ollama_client import check_ollama_connection
+from x_spanformer.agents.ollama_client import check_ollama_connection, wait_for_ollama_recovery
 from x_spanformer.agents.rich_utils import (
     console,
     display_summary_panel,
@@ -440,6 +440,7 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         
         # Process each document sequentially
         overall_completed_count = len(existing_records) if existing_records else 0  # Start from already processed count
+        session_start_count = overall_completed_count  # Remember where we started this session
         overall_keep_count = valid_records_count  # Start from already kept records count
         overall_discard_count = len(existing_records) - valid_records_count if existing_records else 0  # Start from already discarded records count
         results = []  # Track all results for final return
@@ -546,7 +547,8 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
                             save_count=overall_keep_count,  # Total saved records (all keeps)
                             estimated_total_saves=estimated_total_keeps,  # Estimated based on current keep rate
                             records_saved_this_session=records_saved_this_session,
-                            keep_count=overall_keep_count
+                            keep_count=overall_keep_count,
+                            session_start_count=session_start_count  # Pass the session start count
                         )
             
             # Sort this document's results by original index to maintain order within document

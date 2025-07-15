@@ -22,11 +22,11 @@ judge:
   threshold: 0.69
 
 regex_filters:
-- pattern: "\\b\\w{40,}\\b"
-  reason: "long token, likely noise"
+- pattern: "^[\\s\\n\\r]*$"
+  reason: "empty or whitespace-only content"
 
-- pattern: "\\S{25,}"
-  reason: "long unspaced word"
+- pattern: "^[^a-zA-Z0-9]{10,}$"
+  reason: "content with only symbols/punctuation"
 
 templates:
   system: judge_system
