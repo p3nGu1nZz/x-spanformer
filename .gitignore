@@ -177,3 +177,5 @@ x_spanformer/agents/__pycache__/*
 dist
 data/pretraining/in/*
 data/pretraining/out/*
+data/pretraining2/in/*
+data/pretraining2/out/*
