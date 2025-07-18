@@ -54,13 +54,6 @@ Our experiments are structured not as competitive benchmarks, but as architectur
 \vspace{0.75em}
 \textbf{Note:} All results in this section are presented for illustrative and developmental purposes. Empirical benchmarks for generalization, transferability, and performance scaling are left to future work as model weights stabilize and structure supervision matures.
 
-
-
-
-
-
-
-
 \subsection{Experimental Setup}
 \label{sec:experimental-setup}
 
@@ -121,13 +114,6 @@ We design our experimental pipeline to test the structural expressivity and rout
 
 \vspace{0.5em}
 \noindent\textbf{Infrastructure.} All experiments are conducted on a single 40GB NVIDIA A100 GPU. Training time per phase is approximately 10–12 hours. Models are implemented in PyTorch and exported using ONNX traceable modules for architecture inspection and routing visualization. Hyperparameter values are enumerated in Appendix~\ref{sec:hyperparams}.
-
-
-
-
-
-
-
 
 \subsection{Span Routing Behavior}
 \label{sec:span-behavior}
@@ -321,13 +307,6 @@ H(P_t) \leq H(P_0) \cdot e^{-\gamma' t}, \quad \text{for some } \gamma' \leq \ga
 as claimed.
 \end{proof}
 
-
-
-
-
-
-
-
 \subsection{Controller Fusion Diagnostics}
 \label{sec:controller-diagnostics}
 
@@ -337,11 +316,6 @@ To evaluate the semantic precision and interpretability of controller integratio
 \]
 
 Let \(\mathcal{F}_m(\cdot, \tilde{s})\) denote the model with injection mode \(m \in \{\mathrm{prefix}, \mathrm{bias}, \mathrm{gate}\}\). For fixed input \(x\), we study the perturbation and propagation effects caused by controller fusion.
-
-
-
-
-
 
 \subsubsection*{Injection Influence}
 
@@ -358,13 +332,6 @@ This is computed layerwise to identify zones of concentrated influence and injec
   \caption{Layerwise controller influence heatmap across injection modes. Prefix tuning shifts early logits; gating modulates mid-depth; attention bias generates scattered low-intensity changes.}
   \label{fig:controller_comparison}
 \end{figure}
-
-
-
-
-
-
-
 
 \subsubsection*{Layerwise Traceability}
 
@@ -429,17 +396,6 @@ where \(\sigma_{\min}\) is the smallest singular value of \(V W_m^\ell\). By ass
 This completes the proof.
 \end{proof}
 
-
-
-
-
-
-
-
-
-
-
-
 \subsection{Qualitative Span Interpretability}
 \label{sec:qualitative-spans}
 
@@ -452,11 +408,6 @@ We benchmark span boundaries against:
   \item \textbf{Gold phrase boundaries:} Constituents from annotated treebanks in Penn Treebank style.
   \item \textbf{Semantic units:} Span-based named entities (e.g., PERSON, ORG) and discourse units (e.g., connectives, contrastive phrases) from OntoNotes \cite{weischedel2013ontonotes}.
 \end{itemize}
-
-
-
-
-
 
 \subsubsection*{Observations}
 
@@ -484,16 +435,6 @@ This interpretable overlap score is inspired by constituency evaluation metrics 
 \subsubsection*{Conclusion}
 
 Induced spans tend to reflect coherent linguistic structure without explicit syntactic supervision. The consistency with constituent and semantic boundaries suggests that controller-guided routing induces soft parsing-like behavior, validating the design principle of compositional priors via differentiable selectors \cite{li2021prefix, tay2020sparse}.
-
-
-
-
-
-
-
-
-
-
 
 \subsection{Ablation: Entropy, Pooling, and \texorpdfstring{$\beta_1$}{β₁}}
 \label{sec:ablation}

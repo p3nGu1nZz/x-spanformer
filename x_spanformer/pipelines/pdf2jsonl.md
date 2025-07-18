@@ -7,10 +7,11 @@ This pipeline processes PDF files by first converting them to CSV using the `pdf
 The pipeline follows this workflow:
 1. **PDF Discovery**: Find PDF files in the input directory (or process a single PDF file)
 2. **Text Extraction**: Use `pdf2seg` package to extract text segments into CSV format
-3. **Resume Check**: Load existing dataset records to skip already processed segments
-4. **Judge Evaluation**: Process each text segment through Judge evaluation using configured LLM
-5. **JSONL Generation**: Output structured records using `PretrainRecord` schema with metadata
-6. **Incremental Saving**: Support progressive saving to prevent data loss during processing
+3. **Ollama Connection Test**: Test connection to Ollama with retry logic (3 attempts max)
+4. **Resume Check**: Load existing dataset records to skip already processed segments
+5. **Judge Evaluation**: Process each text segment through sequential Judge evaluation using configured LLM
+6. **JSONL Generation**: Output structured records using `PretrainRecord` schema with metadata
+7. **Incremental Saving**: Support progressive saving to prevent data loss during processing
 
 ## Usage
 
@@ -77,12 +78,15 @@ python pdf2jsonl.py -i ./data/pdfs/ -o ./out/ --pretty --workers 4
 ### 🔄 Workflow Details
 
 1. **PDF Processing**: Uses `pdf2seg` package to convert PDFs to structured CSV with text spans
-2. **Resume Support**: Automatically detects existing dataset files and skips already processed segments
-3. **Text Splitting**: Automatically splits long text segments to fit model context limits
-4. **Judge Evaluation**: Each text segment is evaluated by LLM for training suitability
-5. **Schema Compliance**: All records follow `PretrainRecord` schema with proper metadata
-6. **Language Detection**: Automatic language detection using `langid` package
-7. **Incremental Saving**: Prevents data loss during long processing runs
+2. **Connection Testing**: Tests Ollama connection with retry logic before processing (max 3 attempts)
+3. **Resume Support**: Automatically detects existing dataset files and skips already processed segments
+4. **Text Splitting**: Automatically splits long text segments to fit model context limits
+5. **Sequential Judge Evaluation**: Each text segment is evaluated by multiple LLM judges sequentially for better stability
+6. **Retry Logic**: Failed judge evaluations are retried up to 3 times before failing
+7. **Schema Compliance**: All records follow `PretrainRecord` schema with proper metadata
+8. **Language Detection**: Automatic language detection using `langid` package
+9. **Incremental Saving**: Prevents data loss during long processing runs
+10. **Error Handling**: Program exits immediately when max retries are exhausted
 
 ### 🔄 Resume Functionality
 
@@ -203,16 +207,22 @@ The pipeline includes robust error handling for:
 
 - **Missing pdf2seg**: Graceful fallback when package is not installed
 - **PDF Processing Errors**: Continues with remaining files if individual PDFs fail
-- **Judge Failures**: Assigns default "discard" status with error note
-- **Network Issues**: Retries LLM calls according to configuration
+- **Ollama Connection Failures**: Tests connection with retry logic (3 attempts max) before starting
+- **Judge Failures**: Retries individual judge evaluations up to 3 times before failing
+- **Max Retry Exhaustion**: Exits program immediately when retries are exhausted
+- **Network Issues**: Sequential judge processing reduces queue pressure on Ollama
 - **File I/O Errors**: Validates CSV generation and JSONL writing
 
 ## Performance
 
+- **Sequential Judge Processing**: Reduces Ollama queue pressure for better stability
+- **Retry Logic**: Individual judge calls are retried up to 3 times before failing
+- **Connection Testing**: Tests Ollama connectivity before starting processing
 - **Incremental Saving**: Prevents data loss during long processing runs
-- **Concurrent Evaluation**: Configurable worker count for Judge processing
+- **Concurrent Evaluation**: Configurable worker count for parallel document processing
 - **Memory Efficient**: Streams processing of large PDF collections
 - **Progress Tracking**: Rich console output with detailed progress and statistics
+- **Automatic Exit**: Program exits immediately when max retries are exhausted
 
 ## Integration with X-Spanformer
 

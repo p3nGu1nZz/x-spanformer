@@ -1,0 +1,21 @@
+\subsection{Seed Embeddings and Candidate Set}
+
+The segmentation process begins with a sequence of base representations, or seed embeddings, which are intended to provide a minimal yet expressive lexical signal for identifying higher-order linguistic structure. These embeddings, derived from a lightweight subword tokenizer, anchor the span predictor in a sparse but stable input space.\footnote{See \cite{kudo2018sentencepiece, sennrich2016bpe, tay2021charformer} for methods on fast and robust subword encoders.}
+
+Formally, given an input sequence tokenized to \(L\) elements, we define the embedding matrix
+\[
+E = [e_1, \dots, e_L] \in \mathbb{R}^{L \times d},
+\]
+where each \(e_i\) is a token-level embedding, and \(d\) is the model’s dimensionality. This sequence is processed through a contextualizing encoder:
+\[
+H = \mathrm{Encoder}(E) \in \mathbb{R}^{L \times d},
+\]
+yielding contextual representations \(H = [h_1, \dots, h_L]\).\footnote{The encoder may be frozen or fine-tuned and can be lightweight (e.g., convolutional \cite{tay2021charformer}) or transformer-based \cite{devlin2019bert, raffel2020t5}.}
+
+From this, the model constructs a complete candidate set of potential spans:
+\[
+C = \{(i,j) \mid 1 \le i < j \le L\}.
+\]
+This exhaustive enumeration is tractable for short sequences and compatible with global attention filtering, as used in segment-aware transformers \cite{joshi2020spanbert, zach2019segmenter, cao2021codegen}.
+
+Each span candidate corresponds to a contiguous subsequence \([h_i, \dots, h_j]\) and will be considered for inclusion in the predicted segmentation. The next module computes scores for each of these.

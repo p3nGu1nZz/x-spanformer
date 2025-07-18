@@ -5,15 +5,6 @@ Interpretability is central to the X-Spanformer framework, not only for debuggin
 
 These interfaces build on the interpretability literature in structured attention \cite{vig2019analyzing, hoover2020exbert}, entropy-based pruning \cite{grandvalet2006entropy, pereyra2017regularizing}, and latent syntactic probing \cite{linzen2016assessing, kim2019unsupervised}. Together, they scaffold an interactive environment for qualitative and quantitative analysis of controller behavior throughout training.
 
-
-
-
-
-
-
-
-
-
 \subsection{Span Trajectory Viewer (\texttt{trajectory\_overlay})}
 \label{sec:vis-traj}
 
@@ -38,14 +29,6 @@ The span trajectory viewer highlights how span selection stabilizes or evolves o
 
 This supports empirical validation of our entropy convergence claim from Proposition~\ref{prop:annealing}, echoing trends found in routing-based sparse architectures \cite{tay2020sparse, shazeer2017outrageously}.
 
-
-
-
-
-
-
-
-
 \subsection{Span Alignment Grid (\texttt{span\_grid\_align})}
 \label{sec:vis-align}
 
@@ -66,12 +49,6 @@ To assess whether X-Spanformer’s induced spans align with latent syntax or sem
 \end{enumerate}
 
 This grid supports span-level interpretability claims from Section~\ref{sec:qualitative-spans}, complementing prior syntactic induction probes \cite{kim2019unsupervised}.
-
-
-
-
-
-
 
 \subsection{Controller Influence Map (\texttt{influence\_heatmap})}
 \label{sec:vis-influence}

@@ -1,0 +1,53 @@
+\subsection{Span Predictor}
+
+Given the contextualized embeddings 
+\[
+H \;\in\;\mathbb{R}^{T\times d},
+\]
+we use two parallel linear heads (a factorized pointer network \cite{vinyals2015pointer}) to predict span boundaries. Concretely, we compute
+
+\[
+\ell^s \;=\; W_s H + b_s,\quad
+p^s \;=\;\softmax(\ell^s), 
+\qquad
+\ell^e \;=\; W_e H + b_e,\quad
+p^e \;=\;\softmax(\ell^e),
+\]
+where \(\ell^s,\ell^e\in\mathbb{R}^T\), and \(p^s_i\) (resp.\ \(p^e_j\)) is the probability that a span begins at position \(i\) (ends at \(j\)).  
+
+Each candidate span \((i,j)\in C\) is scored by the product of its boundary probabilities:
+\[
+\mathrm{score}(i,j) 
+\;=\; p^s_i \;\cdot\; p^e_j.
+\]
+This outer‐product scoring efficiently captures start–end salience and has been widely used in QA and entity extraction \cite{lee2016learning,xu2022faster}.  
+
+We then select the top-\(K\) spans by marginal likelihood:
+\[
+S 
+= \TopK\bigl\{\mathrm{score}(i,j)\mid (i,j)\in C\bigr\}.
+\]
+
+\begin{proposition}[Top-\(K\) Marginal Likelihood]
+	Let \(p^s,p^e\in\Delta^T\) be independent start/end distributions over \(T\) positions.  Define 
+	\[
+	P(i,j)\;=\;p^s_i\,p^e_j
+	\quad
+	\text{for all }(i,j)\in C=\{1\le i<j\le T\}.
+	\]
+	Then the set 
+	\(
+	S=\TopK\{P(i,j)\}
+	\)
+	maximizes the total probability mass over all \(K\)-sized span subsets:
+	\[
+	S
+	\;=\;
+	\arg\max_{\substack{S'\subseteq C\\|S'|=K}}
+	\sum_{(i,j)\in S'}P(i,j).
+	\]
+\end{proposition}
+
+\begin{proof}
+	Since \(P(i,j)\ge0\) and additive, greedily selecting the top \(K\) values of \(P(i,j)\) maximizes \(\sum_{(i,j)\in S'}P(i,j)\).  Independence ensures no additional interaction terms.
+\end{proof}

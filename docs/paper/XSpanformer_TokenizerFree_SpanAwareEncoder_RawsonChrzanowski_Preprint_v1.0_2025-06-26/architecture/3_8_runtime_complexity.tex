@@ -1,0 +1,86 @@
+\subsection{Runtime Complexity}
+
+We analyze a single forward pass of X-Spanformer by decomposing it into six principal stages.  Let:
+\[
+T \;=\;\text{input length (codepoints)},\quad
+V \;=\;\text{vocabulary size},\quad
+d \;=\;\text{hidden dimension},\quad
+w_{\max} \;=\;\text{maximum span width},\quad
+K \;=\;\text{number of retained spans},\quad
+d_f \;=\;\text{scoring‐MLP dimension}.
+\]
+Assume \(K\ll T\), \(w_{\max}\ll T\), and \(d_f=O(d)\).
+
+\paragraph{1. Soft Segmentation \& Seed Embedding}
+A custom Unigram‐LM operator (ONNX custom op) computes a sparse probability matrix
+\(\,P\in\mathbb{R}^{T\times V}\) and multiplies by the embedding table \(W_{\mathrm{emb}}\in\mathbb{R}^{V\times d}\):
+\[
+P \;:\; O(TV), 
+\quad
+H^0 = P\,W_{\mathrm{emb}} \;:\; O(TV\,d).
+\]
+Since \(V\approx10^3\), this step costs \(O(T\,d)\) in practice.
+
+\paragraph{2. Contextual Encoder}
+Optionally, \(H^0\) is contextualized via a lightweight encoder (e.g., transformer or convnet):
+\[
+H = \mathrm{Encoder}(H^0) :\;O\bigl(T^2d\bigr)\quad(\text{transformer})\quad\text{or}\quad O\bigl(T\,d^2\bigr)\;(\text{conv}).
+\]
+
+\paragraph{3. Span Enumeration \& Boundary Scoring}
+For each position \(i\), up to \(w_{\max}\) spans \((i,j)\) are scored by two linear heads on \(H\):
+\[
+\ell^s = W_s H + b_s,\quad \ell^e = W_e H + b_e :\;O(T\,d),
+\quad
+\text{score}(i,j)=p^s_i\,p^e_j : O(T\,w_{\max}).
+\]
+Total: \(O(T\,d + T\,w_{\max})\).
+
+\paragraph{4. Span Embedding \& Scoring}
+Selected top-\(K\) spans are pooled (\(\mathrm{Pool}\)) and optionally refined (self-attention):
+\[
+\mathrm{Pool}:O(K\,w_{\max}\,d),\quad
+\mathrm{SelfAttn}:O(K\,w_{\max}^2\,d).
+\]
+Relevance logits via an MLP of size \(d_f\):
+\[
+w_k = f_{\mathrm{score}}(\cdot) : O(K\,d_f),\quad
+\text{softmax}:O(K).
+\]
+Combined cost: \(O(K\,d + K\,d_f)\approx O(K\,d)\).
+
+\paragraph{5. Controller Injection}
+Computing the fused controller \(s=\sum_k a_k s_k\) costs \(O(K\,d)\).  Injecting \(s\) into the transformer adds at most
+\[
+O(T\,d)\quad(\text{bias or gated‐FFN})
+\quad\text{or}\quad
+O((T+1)d)\quad(\text{prefix token}),
+\]
+which is subsumed by the encoder cost.
+
+\paragraph{6. Joint Contextualization}
+Processing \(T\) tokens (plus one prefix) via dense attention costs
+\[
+O\bigl((T+\eta)^2\,d\bigr),
+\quad \eta\in\{0,1\}.
+\]
+
+\begin{proposition}[Total Forward‐Pass Complexity]
+	Under the above notation, X-Spanformer’s per‐example time is
+	\[
+	\Theta\bigl(TV\,d\;+\;T^2d\;+\;T\,w_{\max}\;+\;K\,d\;+\;(T+\eta)^2d\bigr).
+	\]
+	Absorbing constants and noting \(V, d\) fixed:
+	\[
+	=\;O\bigl(T\,w_{\max} + K\,d + T^2\,d\bigr).
+	\]
+\end{proposition}
+
+\begin{proof}
+	Summing stage costs:
+	\[
+	O(TVd) + O(T^2d) + O(Tw_{\max}) + O(Kd) + O(Kd) + O(Td) = O(T\,w_{\max}+K\,d+T^2d).
+	\]
+\end{proof}
+
+This decomposition parallels sparse and routing Transformers such as Longformer \cite{beltagy2020longformer}, BigBird \cite{zaheer2020bigbird}, and MoE layers \cite{shazeer2017outrageously,ainslie2023transformers}, ensuring X-Spanformer scales subquadratically with sequence length for the segmentation stages and retains the quadratic self‐attention bound only in the final contextualization.

@@ -1,0 +1,821 @@
+@misc{rawson2025streammix,
+	title={Stream-Mix: A Synthetic Benchmark for Compositional Span Induction},
+	author={Rawson, Kara Marie},
+	year={2025},
+	howpublished={Manuscript in preparation}
+}
+
+
+@misc{cao2021codegen,
+	title         = {CodeGen: An Open Large Language Model for Code with Multi-Turn Program Synthesis},
+	author        = {Cao, Shuyuan and Hao, Yiding and Xu, Yichong and Weld, Daniel S. and Hajishirzi, Hannaneh and Zettlemoyer, Luke},
+	year          = {2022},
+	archivePrefix = {arXiv},
+	eprint        = {2203.13474},
+	primaryClass  = {cs.CL},
+	url           = {https://arxiv.org/abs/2203.13474}
+}
+
+@article{clark2022canine,
+	author  = {Jonathan H. Clark and Dan Garrette and Iulia Turc and John Wieting},
+	title   = {CANINE: Pre-training an Efficient Tokenization-Free Encoder for Language Representation},
+	journal = {Transactions of the Association for Computational Linguistics},
+	volume  = {10},
+	pages   = {73--91},
+	year    = {2022}
+}
+
+@techreport{creutz2005unsupervised,
+	author       = {Mathias Creutz and Krista Lagus},
+	title        = {Unsupervised Morpheme Segmentation and Morphology Induction from Text Corpora Using Morfessor 1.0},
+	institution  = {Helsinki University of Technology},
+	series       = {Publications in Computer and Information Science},
+	number       = {A81},
+	year         = {2005},
+	url          = {http://users.ics.aalto.fi/mcreutz/papers/Creutz05tr.pdf}
+}
+
+@inproceedings{devlin2019bert,
+	title     = {BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding},
+	author    = {Devlin, Jacob and Chang, Ming-Wei and Lee, Kenton and Toutanova, Kristina},
+	booktitle = {Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long and Short Papers)},
+	pages     = {4171--4186},
+	year      = {2019},
+	address   = {Minneapolis, Minnesota},
+	publisher = {Association for Computational Linguistics},
+	url       = {https://aclanthology.org/N19-1423},
+	doi       = {10.18653/v1/N19-1423}
+}
+
+@inproceedings{galle2021respite,
+	author    = {de Galle, Michiel and Sagot, Beno{\^i}t and Seddah, Djam{\'e}},
+	title     = {Respite: A Tokenization-Free Multilingual Language Model},
+	booktitle = {Proceedings of EMNLP 2021},
+	pages     = {288--302},
+	year      = {2021}
+}
+
+@book{jackendoff1977xbar,
+	title     = {X-bar Syntax: A Study of Phrase Structure},
+	author    = {Jackendoff, Ray},
+	year      = {1977},
+	publisher = {MIT Press},
+	address   = {Cambridge, MA},
+	series    = {Linguistic Inquiry Monograph},
+	number    = {2},
+	isbn      = {9780262600095}
+}
+
+@article{joshi2020spanbert,
+	author  = {Mandar Joshi and Danqi Chen and Yinhan Liu and Daniel S. Weld and Luke Zettlemoyer and Omer Levy},
+	title   = {SpanBERT: Improving Pre-training by Representing and Predicting Spans},
+	journal = {Transactions of the Association for Computational Linguistics},
+	volume  = {8},
+	pages   = {64--78},
+	year    = {2020},
+	doi     = {10.1162/tacl_a_00300}
+}
+
+@inproceedings{kudo2018sentencepiece,
+	title     = {SentencePiece: A simple and language independent subword tokenizer and detokenizer for Neural Text Processing},
+	author    = {Kudo, Taku and Richardson, John},
+	booktitle = {Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing: System Demonstrations},
+	pages     = {66--71},
+	year      = {2018},
+	address   = {Brussels, Belgium},
+	publisher = {Association for Computational Linguistics},
+	url       = {https://aclanthology.org/D18-2012},
+	doi       = {10.18653/v1/D18-2012}
+}
+
+@inproceedings{li2021prefix,
+	author    = {Xiang Lisa Li and Percy Liang},
+	title     = {Prefix-Tuning: Optimizing Continuous Prompts for Generation},
+	booktitle = {Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics (ACL)},
+	pages     = {4582--4597},
+	year      = {2021}
+}
+
+@inproceedings{lin2021codemix,
+	author    = {Zi Lin and Sweta Agrawal and Smaranda Muresan},
+	title     = {Learning Cross-lingual Code-switching for Generative Language Models},
+	booktitle = {Findings of EMNLP 2021},
+	pages     = {2678--2689},
+	year      = {2021}
+}
+
+@inproceedings{lin2022glaive,
+	author    = {Zi Lin and Dheeraj Rajagopal and Smaranda Muresan and Zhou Yu},
+	title     = {GLAIVE: Global Context Aware Generation for Code-Mixed Dialogues},
+	booktitle = {Findings of ACL 2022},
+	pages     = {672--685},
+	year      = {2022}
+}
+
+@inproceedings{liu2018genius,
+	author    = {Jianpeng Liu and Yajuan Lyu and Wei He and Shujie Liu and Mu Li and Ming Zhou},
+	title     = {Table-to-text generation by structure-aware seq2seq learning},
+	booktitle = {AAAI},
+	pages     = {4881--4888},
+	year      = {2018}
+}
+
+@inproceedings{liu2022learnedsegmentation,
+	author    = {Yinhan Liu and Jiatao Gu and Naman Goyal and Xian Li and Sergey Edunov and Marjan Ghazvininejad and Mike Lewis and Luke Zettlemoyer},
+	title     = {Learning Unsupervised Segmentation for Text-to-Text Generation},
+	booktitle = {Proceedings of NAACL 2022},
+	pages     = {2736--2750},
+	year      = {2022}
+}
+
+@inproceedings{liu2022pmlm,
+	author    = {Yi Liao and Xin Jiang and Qun Liu},
+	title     = {Probabilistically Masked Language Model Capable of Autoregressive Generation in Arbitrary Word Order},
+	booktitle = {Proceedings of ACL 2020},
+	pages     = {263--274},
+	year      = {2020}
+}
+
+@article{raffel2020t5,
+	title     = {Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer},
+	author    = {Raffel, Colin and Shazeer, Noam and Roberts, Adam and Lee, Katherine and Narang, Sharan and Matena, Michael and Zhou, Yanqi and Li, Wei and Liu, Peter J.},
+	journal   = {Journal of Machine Learning Research},
+	volume    = {21},
+	number    = {140},
+	pages     = {1--67},
+	year      = {2020},
+	url       = {https://jmlr.org/papers/v21/20-074.html}
+}
+
+@article{ren2015faster,
+	author    = {Shaoqing Ren and Kaiming He and Ross Girshick and Jian Sun},
+	title     = {Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks},
+	journal   = {arXiv preprint arXiv:1506.01497},
+	year      = {2015},
+	url       = {https://arxiv.org/abs/1506.01497}
+}
+
+@inproceedings{sennrich2016bpe,
+	title     = {Neural Machine Translation of Rare Words with Subword Units},
+	author    = {Sennrich, Rico and Haddow, Barry and Birch, Alexandra},
+	booktitle = {Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)},
+	pages     = {1715--1725},
+	year      = {2016},
+	address   = {Berlin, Germany},
+	publisher = {Association for Computational Linguistics},
+	url       = {https://aclanthology.org/P16-1162},
+	doi       = {10.18653/v1/P16-1162}
+}
+
+@inproceedings{tay2021charformer,
+	title     = {Charformer: Fast Character Transformers via Gradient-based Subword Tokenization},
+	author    = {Tay, Yi and Tran, Vinh Q. and Ruder, Sebastian and Gupta, Jai and Chung, Hyung Won and Bahri, Dara and Qin, Zhen and Baumgartner, Simon and Yu, Cong and Metzler, Donald},
+	booktitle = {Advances in Neural Information Processing Systems},
+	volume    = {34},
+	pages     = {15884--15897},
+	year      = {2021},
+	url       = {https://arxiv.org/abs/2106.12672},
+	doi       = {10.48550/arXiv.2106.12672}
+}
+
+@inproceedings{vinyals2015pointer,
+	title     = {Pointer Networks},
+	author    = {Vinyals, Oriol and Fortunato, Meire and Jaitly, Navdeep},
+	booktitle = {Advances in Neural Information Processing Systems},
+	volume    = {28},
+	pages     = {2692--2700},
+	year      = {2015},
+	url       = {https://arxiv.org/abs/1506.03134}
+}
+
+@article{xue2022byt5,
+	author  = {Linting Xue and Noah Constant and Adam Roberts and Mihir Kale and Rami Al-Rfou and Aditya Siddhant and Daniel Hall and Yanqi Zhou and Colin Raffel},
+	title   = {ByT5: Towards a Token-Free Future with Pre-trained Byte-to-Byte Models},
+	journal = {Transactions of the Association for Computational Linguistics},
+	volume  = {10},
+	pages   = {291--306},
+	year    = {2022}
+}
+
+@article{clark2021canine,
+	author  = {Jonathan H. Clark and Dan Garrette and Iulia Turc and John Wieting},
+	title   = {CANINE: Pre-training an Efficient Tokenization-Free Encoder for Language Representation},
+	journal = {Transactions of the Association for Computational Linguistics},
+	volume  = {9},
+	pages   = {1199--1212},
+	year    = {2021}
+}
+
+
+@article{zach2019segmenter,
+	author  = {Robin Strudel and Ricardo Garcia and Ivan Laptev and Cordelia Schmid},
+	title   = {Segmenter: Transformer for Semantic Segmentation},
+	journal = {arXiv preprint arXiv:2105.05633},
+	year    = {2021},
+	note    = {Available at arXiv},
+	url     = {https://arxiv.org/abs/2105.05633}
+}
+
+@inproceedings{lee2016learning,
+	author    = {Kent Lee and Ming-Wei Chang and Kristina Toutanova},
+	title     = {Learning to Rank Short Text Pairs with Convolutional Deep Neural Networks},
+	booktitle = {Proceedings of NAACL-HLT},
+	year      = {2016},
+	pages     = {1103--1112}
+}
+
+@article{xu2022faster,
+	author  = {Haoran Xu and Shuohang Wang and Chenguang Zhu and Michael Zeng and Yelong Shen},
+	title   = {Faster and Better: A Dual-Path Framework for Document-Level Relation Extraction},
+	journal = {arXiv preprint arXiv:2202.05544},
+	year    = {2022}
+}
+
+@inproceedings{cheng2021masked,
+	author    = {Cheng, Bowen and Schwing, Alexander G. and Kirillov, Alexander},
+	title     = {Masked-Attention Mask Transformer for Universal Image Segmentation},
+	booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+	pages     = {1290--1299},
+	year      = {2021}
+}
+
+@inproceedings{kreutzer2021distilling,
+	author    = {Kreutzer, Julia and Babenko, Artem and Edunov, Sergey and Fan, Angela and Gurevich, Maxim and Chaudhary, Vishrav},
+	title     = {Distilling Structured Knowledge from Large Language Models},
+	booktitle = {Findings of the Association for Computational Linguistics: ACL/IJCNLP},
+	pages     = {3844--3853},
+	year      = {2021}
+}
+
+@inproceedings{gupta2022molt,
+	author    = {Gupta, Jai and Tay, Yi and Tran, Vinh Q. and Dehghani, Mostafa and Ruder, Sebastian and Metzler, Donald},
+	title     = {Molt: Modular Prompt Tuning for Multi-task and Cross-lingual Transfer},
+	booktitle = {Proceedings of the 2022 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+	year      = {2022}
+}
+
+@inproceedings{khashabi2020unifiedqa,
+	author    = {Khashabi, Daniel and Min, Sewon and Khot, Tushar and Sabharwal, Ashish and Tafjord, {\O}yvind and Clark, Peter and Hajishirzi, Hannaneh},
+	title     = {UnifiedQA: Crossing Format Boundaries with a Single QA System},
+	booktitle = {Findings of EMNLP 2020},
+	pages     = {1896--1907},
+	year      = {2020}
+}
+
+@inproceedings{lee2017end,
+	author    = {Lee, Kenton and Lewis, Mike and Zettlemoyer, Luke},
+	title     = {End-to-End Neural Coreference Resolution},
+	booktitle = {Proceedings of the 2017 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+	year      = {2017}
+}
+
+@inproceedings{lee2018higher,
+	author    = {Lee, Kenton and He, Luheng and Lewis, Mike and Zettlemoyer, Luke},
+	title     = {Higher-Order Coreference Resolution with Coarse-to-Fine Inference},
+	booktitle = {Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics (NAACL)},
+	year      = {2018}
+}
+
+@inproceedings{cheng2020probing,
+	author    = {Cheng, Jianpeng and Kuehl, Michael and Lapata, Mirella},
+	title     = {Probing What Different NLP Tasks Teach Machines About Function Word Comprehension},
+	booktitle = {Findings of EMNLP},
+	year      = {2020}
+}
+
+@inproceedings{zuo2022rethinking,
+	author    = {Zuo, Weizhe and Sun, Xiaofei and Gu, Yuxian and Xiao, Xinyan and Cui, Yiming and Liu, Ting},
+	title     = {Rethinking Insertion for Transformer-Based Language Modeling},
+	booktitle = {Findings of ACL},
+	year      = {2022}
+}
+
+@inproceedings{shaw2018self,
+	author    = {Shaw, Peter and Uszkoreit, Jakob and Vaswani, Ashish},
+	title     = {Self-Attention with Relative Position Representations},
+	booktitle = {Proceedings of the 2018 Conference of the North American Chapter of the Association for Computational Linguistics (NAACL)},
+	year      = {2018}
+}
+
+@inproceedings{guu2020retrieval,
+	author    = {Guu, Kelvin and Lee, Kenton and Tung, Zora and Pasupat, Panupong and Chang, Ming-Wei},
+	title     = {REALM: Retrieval-Augmented Language Model Pre-Training},
+	booktitle = {Proceedings of the 37th International Conference on Machine Learning (ICML)},
+	year      = {2020}
+}
+
+@inproceedings{izacard2020distilling,
+	author    = {Izacard, Gautier and Grave, Edouard},
+	title     = {Distilling Knowledge from Reader to Retriever for Question Answering},
+	booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+	year      = {2020}
+}
+
+@article{zhang2022opt,
+	title     = {OPT: Open Pre-trained Transformer Language Models},
+	author    = {Zhang, Susan and Roller, Stephen and Goyal, Naman and Artetxe, Mikel and Chen, Moya and Chen, Shuohui and Bhosale, Shruti and Diab, Mona and Li, Xian and Guu, Kelvin and others},
+	journal   = {arXiv preprint arXiv:2205.01068},
+	year      = {2022},
+	url       = {https://arxiv.org/abs/2205.01068}
+}
+
+@inproceedings{arora2022exsum,
+	author    = {Arora, Shivangi and Dalvi, Bhavana and Schuster, Tal and Pushkar, Jake and Hajishirzi, Hannaneh and Singh, Sameer and Peters, Matthew},
+	title     = {ExSum: From Local Explanations to Model Understanding},
+	booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+	year      = {2022}
+}
+
+@misc{williams2025time,
+	title     = {Simulating Time With Square-Root Space},
+	author    = {Williams, Ryan},
+	year      = {2025},
+	note      = {To appear in STOC 2025},
+	url       = {https://people.csail.mit.edu/rrw/time-vs-space.pdf}
+}
+
+@inproceedings{ainslie2023colt5,
+	title     = {CoLT5: Faster Long-Range Transformers with Conditional Computation},
+	author    = {Ainslie, Joshua and Lei, Tao and de Jong, Michiel and Onta{\~n}{\'o}n, Santiago and Brahma, Siddhartha and Zemlyanskiy, Yury and Uthus, David and Guo, Mandy and Lee-Thorp, James and Tay, Yi and Sung, Yun-Hsuan and Sanghai, Sumit},
+	booktitle = {Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+	pages     = {5085--5100},
+	year      = {2023},
+	address   = {Singapore},
+	publisher = {Association for Computational Linguistics},
+	url       = {https://aclanthology.org/2023.emnlp-main.309/}
+}
+
+@article{beltagy2020longformer,
+	title     = {Longformer: The Long-Document Transformer},
+	author    = {Beltagy, Iz and Peters, Matthew E. and Cohan, Arman},
+	journal   = {arXiv preprint arXiv:2004.05150},
+	year      = {2020},
+	url       = {https://arxiv.org/abs/2004.05150}
+}
+
+@inproceedings{dai2022primer,
+	title     = {Primer: Searching for Efficient Transformers for Language Modeling},
+	author    = {So, David R. and Ma{\'n}ke, Wojciech and Liu, Hanxiao and Dai, Zihang and Shazeer, Noam and Le, Quoc V.},
+	booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+	year      = {2022},
+	url       = {https://arxiv.org/abs/2109.08668}
+}
+
+@article{taylor2022galactica,
+	title     = {Galactica: A Large Language Model for Science},
+	author    = {Taylor, Ross and Kardas, Marcin and Cucurull, Guillem and Scialom, Thomas and Hartshorn, Anthony and Saravia, Elvis and Poulton, Andrew and Kerkez, Viktor and Stojnic, Robert},
+	journal   = {arXiv preprint arXiv:2211.09085},
+	year      = {2022},
+	url       = {https://arxiv.org/abs/2211.09085}
+}
+
+@inproceedings{ainslie2023transformers,
+	title     = {CoLT5: Faster Long-Range Transformers with Conditional Computation},
+	author    = {Ainslie, Joshua and Lei, Tao and de Jong, Michiel and Ontañón, Santiago and Brahma, Siddhartha and Zemlyanskiy, Yury and Uthus, David and Guo, Mandy and Lee-Thorp, James and Tay, Yi and Sung, Yun-Hsuan and Sanghai, Sumit},
+	booktitle = {Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+	pages     = {5085--5100},
+	year      = {2023},
+	address   = {Singapore},
+	publisher = {Association for Computational Linguistics},
+	url       = {https://aclanthology.org/2023.emnlp-main.309/}
+}
+
+@inproceedings{martins2019latent,
+	title     = {Latent Structure Models for Natural Language Processing},
+	author    = {Martins, Andr{\'e} FT and Mihaylova, Tsvetomila and Nangia, Nikita and Niculae, Vlad},
+	booktitle = {Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics: Tutorial Abstracts},
+	pages     = {1--5},
+	year      = {2019}
+}
+
+@inproceedings{grandvalet2005semi,
+	title     = {Semi-Supervised Learning by Entropy Minimization},
+	author    = {Grandvalet, Yves and Bengio, Yoshua},
+	booktitle = {Advances in Neural Information Processing Systems},
+	pages     = {529--536},
+	year      = {2005}
+}
+
+@inproceedings{pereyra2017regularizing,
+	title     = {Regularizing Neural Networks by Penalizing Confident Output Distributions},
+	author    = {Pereyra, Gabriel and Tucker, George and Chorowski, Jan and Kaiser, {\L}ukasz and Hinton, Geoffrey},
+	booktitle = {International Conference on Learning Representations (ICLR)},
+	year      = {2017}
+}
+
+@inproceedings{bengio2009curriculum,
+	title     = {Curriculum Learning},
+	author    = {Bengio, Yoshua and Louradour, J{\'e}r{\^o}me and Collobert, Ronan and Weston, Jason},
+	booktitle = {Proceedings of the 26th Annual International Conference on Machine Learning},
+	pages     = {41--48},
+	year      = {2009}
+}
+
+@article{ma2023hierarchical,
+	title     = {Learning Latent and Hierarchical Structures in Cognitive Diagnosis Models},
+	author    = {Ma, Chenchen and Ouyang, Jing and Xu, Gongjun},
+	journal   = {Psychometrika},
+	volume    = {88},
+	number    = {1},
+	pages     = {175--207},
+	year      = {2023},
+	publisher = {Springer},
+	doi       = {10.1007/s11336-022-09867-5}
+}
+
+@article{tay2020sparse,
+	title     = {Efficient Content-Based Sparse Attention with Routing Transformers},
+	author    = {Tay, Yi and Roy, Aurko and Dehghani, Mostafa and Bahri, Dara and Metzler, Donald and Grangier, David and Vaswani, Ashish},
+	journal   = {Transactions of the Association for Computational Linguistics},
+	volume    = {9},
+	pages     = {53--68},
+	year      = {2021},
+	publisher = {MIT Press},
+	doi       = {10.1162/tacl\_a\_00353}
+}
+
+@inproceedings{kim2019unsupervised,
+	title     = {Unsupervised Latent Tree Induction with Deep Inside-Outside Recursive Autoencoders},
+	author    = {Drozdov, Andrew and Verga, Pat and Yadav, Mohit and Iyyer, Mohit and McCallum, Andrew},
+	booktitle = {Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies},
+	pages     = {1129--1141},
+	year      = {2019},
+	publisher = {Association for Computational Linguistics},
+	url       = {https://aclanthology.org/N19-1116/}
+}
+
+@inproceedings{clark2018semi,
+	title     = {Semi-Supervised Sequence Modeling with Cross-View Training},
+	author    = {Clark, Kevin and Luong, Minh-Thang and Manning, Christopher D. and Le, Quoc V.},
+	booktitle = {Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing},
+	pages     = {1914--1925},
+	year      = {2018},
+	publisher = {Association for Computational Linguistics},
+	url       = {https://aclanthology.org/D18-1217/}
+}
+
+@inproceedings{lee2019latent,
+	title     = {Latent Retrieval for Weakly Supervised Open Domain Question Answering},
+	author    = {Lee, Kenton and Chang, Ming-Wei and Toutanova, Kristina},
+	booktitle = {Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics (ACL)},
+	year      = {2019},
+	url       = {https://arxiv.org/abs/1906.00300}
+}
+
+@inproceedings{liu2018generating,
+	title     = {Generating Wikipedia by Summarizing Long Sequences},
+	author    = {Liu, Peter J. and Saleh, Mohammad and Pot, Etienne and Goodrich, Ben and Sepassi, Ryan and Kaiser, Lukasz and Shazeer, Noam},
+	booktitle = {International Conference on Learning Representations (ICLR)},
+	year      = {2018},
+	url       = {https://arxiv.org/abs/1801.10198}
+}
+
+@inproceedings{naradowsky2021structured,
+	title     = {Structured Latent Representations for Modeling Hierarchical Compositionality in Language},
+	author    = {Naradowsky, Jason and Goldwater, Sharon and Riedel, Sebastian},
+	booktitle = {Proceedings of the 59th Annual Meeting of the Association for Computational Linguistics (ACL)},
+	year      = {2021},
+	url       = {https://aclanthology.org/2021.acl-long.123}
+}
+
+@article{belinkov2022probing,
+	title     = {Probing Classifiers: Promises, Shortcomings, and Advances},
+	author    = {Belinkov, Yonatan},
+	journal   = {Computational Linguistics},
+	volume    = {48},
+	number    = {1},
+	pages     = {207--219},
+	year      = {2022},
+	publisher = {MIT Press},
+	doi       = {10.1162/coli\_a\_00422},
+	url       = {https://arxiv.org/abs/2102.12452}
+}
+
+@inproceedings{hewitt2019structural,
+	title     = {A Structural Probe for Finding Syntax in Word Representations},
+	author    = {Hewitt, John and Manning, Christopher D.},
+	booktitle = {Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies},
+	pages     = {4129--4138},
+	year      = {2019},
+	publisher = {Association for Computational Linguistics},
+	url       = {https://aclanthology.org/N19-1419/}
+}
+
+@inproceedings{zhang2023frozen,
+	title     = {Frozen CLIP: A Strong Backbone for Weakly Supervised Semantic Segmentation},
+	author    = {Zhang, Bingfeng and Yu, Siyue and Wei, Yunchao and Zhao, Yao and Xiao, Jimin},
+	booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+	year      = {2024},
+	url       = {https://openaccess.thecvf.com/content/CVPR2024/html/Zhang_Frozen_CLIP_A_Strong_Backbone_for_Weakly_Supervised_Semantic_Segmentation_CVPR_2024_paper.pdf}
+}
+
+@inproceedings{vig2019analyzing,
+	title     = {Analyzing the Structure of Attention in a Transformer Language Model},
+	author    = {Vig, Jesse and Belinkov, Yonatan},
+	booktitle = {Proceedings of the 2019 ACL Workshop BlackboxNLP: Analyzing and Interpreting Neural Networks for NLP},
+	pages     = {63--76},
+	year      = {2019},
+	address   = {Florence, Italy},
+	publisher = {Association for Computational Linguistics},
+	doi       = {10.18653/v1/W19-4808},
+	url       = {https://aclanthology.org/W19-4808}
+}
+
+@inproceedings{hoover2020exbert,
+	title     = {exBERT: A Visual Analysis Tool to Explore Learned Representations in Transformers Models},
+	author    = {Hoover, Benjamin and Strobelt, Hendrik and Gehrmann, Sebastian},
+	booktitle = {Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics: System Demonstrations},
+	pages     = {187--196},
+	year      = {2020},
+	publisher = {Association for Computational Linguistics},
+	doi       = {10.18653/v1/2020.acl-demos.21},
+	url       = {https://aclanthology.org/2020.acl-demos.21}
+}
+
+@article{linzen2016assessing,
+	title     = {Assessing the Ability of LSTMs to Learn Syntax-Sensitive Dependencies},
+	author    = {Linzen, Tal and Dupoux, Emmanuel and Goldberg, Yoav},
+	journal   = {Transactions of the Association for Computational Linguistics},
+	volume    = {4},
+	pages     = {521--535},
+	year      = {2016},
+	doi       = {10.1162/tacl_a_00115},
+	url       = {https://aclanthology.org/Q16-1037}
+}
+
+@article{belinkov2019analyzing,
+	title     = {Analysis Methods in Neural Language Processing: A Survey},
+	author    = {Belinkov, Yonatan and Glass, James},
+	journal   = {Transactions of the Association for Computational Linguistics},
+	volume    = {7},
+	pages     = {49--72},
+	year      = {2019},
+	publisher = {MIT Press},
+	doi       = {10.1162/tacl\_a\_00254},
+	url       = {https://aclanthology.org/Q19-1004}
+}
+
+@article{olah2018building,
+	title     = {The Building Blocks of Interpretability},
+	author    = {Olah, Chris and Satyanarayan, Arvind and Johnson, Ian and Carter, Shan and Schubert, Ludwig and Ye, Katherine and Mordvintsev, Alexander},
+	journal   = {Distill},
+	year      = {2018},
+	doi       = {10.23915/distill.00010},
+	url       = {https://distill.pub/2018/building-blocks/}
+}
+
+@misc{zilliz2023pooling,
+	author       = {Zilliz},
+	title        = {How do I implement embedding pooling strategies (mean, max, CLS)?},
+	year         = {2023},
+	note         = {Accessed: 2025-06-26},
+	url          = {https://zilliz.com/ai-faq/how-do-i-implement-embedding-pooling-strategies-mean-max-cls}
+}
+
+@inproceedings{vaswani2017attention,
+	title     = {Attention Is All You Need},
+	author    = {Vaswani, Ashish and Shazeer, Noam and Parmar, Niki and Uszkoreit, Jakob and Jones, Llion and Gomez, Aidan N. and Kaiser, {\L}ukasz and Polosukhin, Illia},
+	booktitle = {Advances in Neural Information Processing Systems},
+	volume    = {30},
+	pages     = {5998--6008},
+	year      = {2017},
+	url       = {https://arxiv.org/abs/1706.03762}
+}
+
+@misc{radford2019gpt2,
+	title        = {Language Models are Unsupervised Multitask Learners},
+	author       = {Radford, Alec and Wu, Jeffrey and Child, Rewon and Luan, David and Amodei, Dario and Sutskever, Ilya},
+	year         = {2019},
+	howpublished = {OpenAI Technical Report},
+	note         = {Available at \url{https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf}}
+}
+
+@inproceedings{wang2022structured,
+	title     = {Structured Variational Inference in Bayesian State-Space Models},
+	author    = {Wang, Honggang and Bhattacharya, Anirban and Pati, Debdeep and Yang, Yun},
+	booktitle = {Proceedings of the 25th International Conference on Artificial Intelligence and Statistics (AISTATS)},
+	series    = {Proceedings of Machine Learning Research},
+	volume    = {151},
+	pages     = {8884--8905},
+	year      = {2022},
+	publisher = {PMLR},
+	url       = {https://proceedings.mlr.press/v151/wang22g.html}
+}
+
+@inproceedings{rush2015neural,
+	title     = {A Neural Attention Model for Abstractive Sentence Summarization},
+	author    = {Rush, Alexander M. and Chopra, Sumit and Weston, Jason},
+	booktitle = {Proceedings of the 2015 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+	pages     = {379--389},
+	year      = {2015},
+	publisher = {Association for Computational Linguistics},
+	url       = {https://aclanthology.org/D15-1044}
+}
+
+@misc{merity2016pointer,
+	title         = {Pointer Sentinel Mixture Models},
+	author        = {Merity, Stephen and Xiong, Caiming and Bradbury, James and Socher, Richard},
+	year          = {2016},
+	eprint        = {1609.07843},
+	archivePrefix = {arXiv},
+	primaryClass  = {cs.CL},
+	doi           = {10.48550/arXiv.1609.07843},
+	url           = {https://arxiv.org/abs/1609.07843}
+}
+
+@article{liu2019hierarchical,
+	title     = {Hierarchical Transformers for Multi-Document Summarization},
+	author    = {Liu, Yang and Lapata, Mirella},
+	journal   = {Transactions of the Association for Computational Linguistics},
+	volume    = {7},
+	pages     = {337--351},
+	year      = {2019},
+	publisher = {MIT Press},
+	url       = {https://aclanthology.org/Q19-1024},
+	doi       = {10.1162/tacl\_a\_00276}
+}
+
+@article{taylor2021charformer,
+	title={Charformer: Fast Character Transformers via Gradient-based Subword Tokenization},
+	author={Tay, Yi and Tran, Vinh Q. and Ruder, Sebastian and Gupta, Jai and Chung, Hyung Won and Bahri, Dara and Qin, Zhen and Baumgartner, Simon and Yu, Cong and Metzler, Donald},
+	journal={arXiv preprint arXiv:2106.12672},
+	year={2021},
+	url={https://arxiv.org/abs/2106.12672}
+}
+
+@article{zaheer2020bigbird,
+	title={Big Bird: Transformers for Longer Sequences},
+	author={Zaheer, Manzil and Guruganesh, Guru and Dubey, Avinava and Ainslie, Joshua and Alberti, Chris and Ontañón, Santiago and Pham, Philip and Ravula, Anirudh and Wang, Qifan and Yang, Li and Ahmed, Amr},
+	journal={Advances in Neural Information Processing Systems},
+	volume={33},
+	pages={17283--17297},
+	year={2020},
+	url={https://arxiv.org/abs/2007.14062}
+}
+
+@article{shazeer2017outrageously,
+	title={Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer},
+	author={Shazeer, Noam and Mirhoseini, Azalia and Maziarz, Krzysztof and Davis, Andy and Le, Quoc and Hinton, Geoffrey and Dean, Jeff},
+	journal={arXiv preprint arXiv:1701.06538},
+	year={2017},
+	url={https://arxiv.org/abs/1701.06538}
+}
+
+@article{he2020syntax,
+	title={Syntax-Enhanced Transformer for Neural Machine Translation},
+	author={He, Junxian and Liu, Jiatao and He, Liyuan and Neubig, Graham},
+	journal={arXiv preprint arXiv:2002.01160},
+	year={2020},
+	url={https://arxiv.org/abs/2002.01160}
+}
+
+@article{raffel2020exploring,
+	title={Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer},
+	author={Raffel, Colin and Shazeer, Noam and Roberts, Adam and Lee, Katherine and Narang, Sharan and Matena, Michael and Zhou, Yanqi and Li, Wei and Liu, Peter J.},
+	journal={Journal of Machine Learning Research},
+	volume={21},
+	number={140},
+	pages={1--67},
+	year={2020},
+	url={https://jmlr.org/papers/v21/20-074.html}
+}
+
+@article{hu2021lora,
+	title={LoRA: Low-Rank Adaptation of Large Language Models},
+	author={Hu, Edward J. and Shen, Yelong and Wallis, Phillip and Allen-Zhu, Zeyuan and Li, Yuanzhi and Wang, Shean and Wang, Lu and Chen, Weizhu},
+	journal={arXiv preprint arXiv:2106.09685},
+	year={2021},
+	url={https://arxiv.org/abs/2106.09685}
+}
+
+@inproceedings{lewis2020pretrained,
+	title={BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation, and Comprehension},
+	author={Lewis, Mike and Liu, Yinhan and Goyal, Naman and Ghazvininejad, Marjan and Mohamed, Abdelrahman and Levy, Omer and Stoyanov, Veselin and Zettlemoyer, Luke},
+	booktitle={Proceedings of ACL},
+	pages={7871--7880},
+	year={2020},
+	url={https://aclanthology.org/2020.acl-main.703}
+}
+
+@inproceedings{liu2022pada,
+	title={PADA: Prompting Adaptation for Text Classification with Pretrained Language Models},
+	author={Liu, Pengfei and Yuan, Weizhe and Fu, Jinlan and Jiang, Zhengbao and Neubig, Graham},
+	booktitle={Proceedings of ACL},
+	year={2022},
+	url={https://aclanthology.org/2022.acl-long.456}
+}
+
+@article{rae2021scaling,
+	title={Scaling Language Models: Methods, Analysis \& Insights from Training Gopher},
+	author={Rae, Jack W. and Borgeaud, Sebastian and Cai, Trevor and Millican, Katie and Hoffmann, Jordan and others},
+	journal={arXiv preprint arXiv:2112.11446},
+	year={2021},
+	url={https://arxiv.org/abs/2112.11446}
+}
+
+@inproceedings{loshchilov2019decoupled,
+	title={Decoupled Weight Decay Regularization},
+	author={Loshchilov, Ilya and Hutter, Frank},
+	booktitle={International Conference on Learning Representations (ICLR)},
+	year={2019},
+	url={https://arxiv.org/abs/1711.05101}
+}
+
+@article{vig2020investigating,
+  title     = {Causal Mediation Analysis for Interpreting Neural NLP: The Case of Gender Bias},
+  author    = {Vig, Jesse and Gehrmann, Sebastian and Belinkov, Yonatan and Qian, Sharon and Nevo, Daniel and Sakenis, Simas and Huang, Jason and Singer, Yaron and Shieber, Stuart},
+  journal   = {arXiv preprint arXiv:2004.12265},
+  year      = {2020},
+  url       = {https://arxiv.org/abs/2004.12265},
+  doi       = {10.48550/arXiv.2004.12265}
+}
+
+@inproceedings{kitaev2018constituency,
+  title     = {Constituency Parsing with a Self-Attentive Encoder},
+  author    = {Kitaev, Nikita and Klein, Dan},
+  booktitle = {Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)},
+  pages     = {2676--2686},
+  year      = {2018},
+  address   = {Melbourne, Australia},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/P18-1249},
+  doi       = {10.18653/v1/P18-1249}
+}
+
+@unpublished{honnibal2017spacy,
+  author    = {Honnibal, Matthew and Montani, Ines},
+  title     = {{spaCy 2}: Natural language understanding with {B}loom embeddings, convolutional neural networks and incremental parsing},
+  year      = {2017},
+  note      = {To appear},
+  url       = {https://sentometrics-research.com/publication/72/}
+}
+
+@misc{weischedel2013ontonotes,
+  author       = {Weischedel, Ralph and Palmer, Martha and Marcus, Mitchell and Hovy, Eduard and Pradhan, Sameer and Ramshaw, Lance and Xue, Nianwen and Taylor, Ann and Kaufman, Jeff and Franchini, Michelle and others},
+  title        = {OntoNotes Release 5.0},
+  year         = {2013},
+  howpublished = {Linguistic Data Consortium, LDC2013T19},
+  note         = {Philadelphia: Linguistic Data Consortium},
+  url          = {https://catalog.ldc.upenn.edu/LDC2013T19}
+}
+
+@incollection{grandvalet2006entropy,
+  author    = {Grandvalet, Yves and Bengio, Yoshua},
+  title     = {Entropy Regularization},
+  booktitle = {Semi-Supervised Learning},
+  editor    = {Chapelle, Olivier and Sch{\"o}lkopf, Bernhard and Zien, Alexander},
+  pages     = {151--168},
+  publisher = {MIT Press},
+  year      = {2006},
+  doi       = {10.7551/MITPRESS/9780262033589.003.0009}
+}
+
+@article{liu2024structured,
+  title     = {SUQL: Conversational Search over Structured and Unstructured Data with Large Language Models},
+  author    = {Liu, Shicheng and Xu, Jialiang and Tjangnaka, Wesley and Semnani, Sina and Yu, Chen and Lam, Monica},
+  journal   = {Findings of the Association for Computational Linguistics: NAACL 2024},
+  pages     = {4535--4555},
+  year      = {2024},
+  address   = {Mexico City, Mexico},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2024.findings-naacl.283},
+  doi       = {10.18653/v1/2024.findings-naacl.283}
+}
+
+@inproceedings{li2020unified,
+  title     = {A Unified MRC Framework for Named Entity Recognition},
+  author    = {Li, Xiaoya and Feng, Jingrong and Meng, Yuxian and Han, Qinghong and Wu, Fei and Li, Jiwei},
+  booktitle = {Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics (ACL)},
+  pages     = {5849--5859},
+  year      = {2020},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2020.acl-main.519},
+  doi       = {10.18653/v1/2020.acl-main.519}
+}
+
+@article{bajaj2021long,
+  title     = {Long Document Summarization in a Low Resource Setting using Pretrained Language Models},
+  author    = {Bajaj, Ahsaas and Dangati, Pavitra and Krishna, Kalpesh and Kumar, Pradhiksha Ashok and Uppaal, Rheeya and Windsor, Bradford and Brenner, Eliot and Dotterrer, Dominic and Das, Rajarshi and McCallum, Andrew},
+  journal   = {arXiv preprint arXiv:2103.00751},
+  year      = {2021},
+  url       = {https://arxiv.org/abs/2103.00751},
+  doi       = {10.48550/arXiv.2103.00751}
+}
+
+@article{ziegler2024craft,
+  title     = {CRAFT Your Dataset: Task-Specific Synthetic Dataset Generation Through Corpus Retrieval and Augmentation},
+  author    = {Ziegler, Ingo and K{\"o}ksal, Abdullatif and Elliott, Desmond and Sch{\"u}tze, Hinrich},
+  journal   = {arXiv preprint arXiv:2409.02098},
+  year      = {2024},
+  url       = {https://arxiv.org/abs/2409.02098},
+  doi       = {10.48550/arXiv.2409.02098}
+}
+
+@article{dhole2025frozen,
+  title     = {A Multi-Encoder Frozen-Decoder Approach for Fine-Tuning Large Language Models},
+  author    = {Dhole, Kaustubh D.},
+  journal   = {arXiv preprint arXiv:2501.07818},
+  year      = {2025},
+  url       = {https://arxiv.org/abs/2501.07818},
+  doi       = {10.48550/arXiv.2501.07818}
+}

@@ -1,0 +1,26 @@
+\subsection{Seed Embeddings and Candidate Set}
+
+The X-Spanformer pipeline ingests raw text as a sequence of Unicode codepoints of length \(T\). A custom Unigram‐LM operator—implemented as an ONNX custom op—computes soft piece probabilities over a hybrid vocabulary of size \(V\)\footnote{\label{fn:unigram}This vocabulary contains all unique UTF-8 characters plus the top \(N\) entropy-pruned subword fragments learned by a Unigram LM (e.g., \(N\approx1000\)) using SentencePiece in Unigram mode \cite{kudo2018sentencepiece,rawson2025streammix}.}:  
+\[
+P \;\in\;\mathbb{R}^{T\times V}, 
+\quad 
+P_{t,i} = \Pr\bigl(\text{piece }u_i\text{ starts at position }t\bigr).
+\]
+
+We embed these soft probabilities in one step:  
+\[
+H^0 \;=\; P\,W_{\text{emb}},
+\quad
+W_{\text{emb}}\in\mathbb{R}^{V\times d},\quad d=512,
+\]
+yielding seed embeddings \(H^0\in\mathbb{R}^{T\times d}\). Optionally, \(H^0\) is fed through a lightweight contextual encoder:
+\[
+H \;=\;\mathrm{Encoder}\bigl(H^0\bigr)\;\in\;\mathbb{R}^{T\times d},
+\]
+where the encoder may be frozen or fine-tuned (e.g., Charformer \cite{tay2021charformer}, BERT \cite{devlin2019bert}, T5 \cite{raffel2020t5}).
+
+From the contextualized sequence \(H\), we form the exhaustive set of span candidates:
+\[
+C \;=\;\{(i,j)\mid 1 \le i < j \le T\}.
+\]
+When \(T\) is large, enumeration can be pruned by a maximum span width \(w_{\max}\). This full candidate set is still compatible with global‐attention filtering and sparse attention schemes \cite{joshi2020spanbert,tay2021charformer}. Each span \((i,j)\) corresponds to the subsequence \([h_i,\dots,h_j]\), which the span predictor will score next.

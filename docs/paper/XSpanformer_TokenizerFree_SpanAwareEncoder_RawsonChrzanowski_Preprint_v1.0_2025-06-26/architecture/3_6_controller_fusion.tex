@@ -1,0 +1,59 @@
+\subsection{Controller Fusion}
+
+Given the set of retained span embeddings \(\{s_k\in\mathbb{R}^d\}_{k=1}^K\), we compute a single controller vector \(s\in\mathbb{R}^d\) via relevance‐weighted interpolation:
+
+\[
+w_k
+= f_{\mathrm{score}}\bigl(
+s_k,\;\phi(\delta_k),\;p^{\mathrm{mod}}_k,\;\log c_k
+\bigr),
+\quad
+a_k
+= \frac{\exp(w_k)}{\sum_{m=1}^K \exp(w_m)},
+\quad
+s = \sum_{k=1}^K a_k\,s_k,
+\]
+where
+\begin{itemize}
+	\item \(\delta_k = j_k - i_k + 1\) is the span length;
+	\item \(\phi(\delta_k)\in\mathbb{R}^D\) is a learned length embedding;
+	\item \(p^{\mathrm{mod}}_k\in\Delta^M\) is the modality distribution;
+	\item \(c_k = p^s_{i_k}\,p^e_{j_k}\) is the boundary confidence;
+	\item \(f_{\mathrm{score}}\) is a small MLP producing logits.
+\end{itemize}
+This scoring and softmax selection recovers the top-\(K\) spans by marginal likelihood \cite{vinyals2015pointer}.
+
+We inject \(s\) into a standard transformer encoder \(\mathrm{Transf}(\cdot)\) through three differentiable modes:
+
+\paragraph{Prefix‐Token Injection}
+Prepend \(s\) as a synthetic token at position 0:
+\[
+H' = [\,s;\,h_1;\dots;h_T\,]\in\mathbb{R}^{(T+1)\times d},
+\]
+with a learned position embedding for the prefix.  The transformer then processes \(H'\) normally, allowing all layers to attend to \(s\) from the first layer \cite{li2021prefix}.
+
+\paragraph{Attention‐Bias Injection}
+Add low-rank biases to queries and keys:
+\[
+Q_i \;\leftarrow\; Q_i + W_Q\,s,\quad
+K_j \;\leftarrow\; K_j + W_K\,s,
+\]
+so that attention logits become
+\(\exp\bigl((Q_i+W_Qs)^{\!\intercal}(K_j+W_Ks)\bigr)\).  Here \(W_Q,W_K\in\mathbb{R}^{d\times d}\) learn how the controller shifts attention subspaces \cite{hu2021lora}.
+
+\paragraph{Gated‐FFN Injection}
+Modulate the feed‐forward network output with a span‐conditioned gate:
+\[
+g = \sigma(W_g\,s + b_g)\in(0,1)^d,\quad
+h'_i = h_i + g\odot\mathrm{FFN}(h_i),
+\]
+where \(W_g\in\mathbb{R}^{d\times d}\) and \(\odot\) is elementwise multiplication.  This gate selectively amplifies or attenuates nonlinearity based on span context \cite{shazeer2017outrageously}.
+
+\medskip
+In practice, we learn nonnegative scalar weights \(\alpha,\beta,\gamma\) and compute
+\[
+\mathrm{Transf}\bigl(
+\alpha\,\text{(A)} + \beta\,\text{(B)} + \gamma\,\text{(C)}
+\bigr),
+\]
+allowing dynamic combination of injection modes while preserving full end‐to‐end differentiability.

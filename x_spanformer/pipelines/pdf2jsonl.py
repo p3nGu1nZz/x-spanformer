@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 from x_spanformer.agents.config_loader import load_judge_config
-from x_spanformer.agents.ollama_client import check_ollama_connection, wait_for_ollama_recovery
+from x_spanformer.agents.ollama_client import check_ollama_connection
 from x_spanformer.agents.rich_utils import (
     console,
     display_summary_panel,
@@ -355,9 +355,10 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         # Get judge configuration
         num_judges = agent_config.get("judge", {}).get("judges", 5)
         threshold = agent_config.get("judge", {}).get("threshold", 0.69)
+        max_retries = agent_config.get("judge", {}).get("max_retries", 3)
         
-        console.print(f"[bold magenta]🚀 Using {w} concurrent workers with {num_judges} judges each (total: {w * num_judges} concurrent evaluations)[/bold magenta]")
-        console.print(f"[yellow]💡 Ollama handles I/O concurrency efficiently - this should utilize your GPU well![/yellow]")
+        console.print(f"[bold magenta]🚀 Using {w} concurrent workers with {num_judges} judges each (sequential per worker)[/bold magenta]")
+        console.print(f"[yellow]💡 Sequential judge processing reduces Ollama queue pressure for better stability![/yellow]")
         
         # Initialize sessions once, sharing the same config
         from x_spanformer.agents.session.judge_session import JudgeSession
@@ -365,63 +366,83 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         
         # Use asyncio.Semaphore for concurrency control
         semaphore = asyncio.Semaphore(w)
+        consecutive_retry_errors = 0  # Track consecutive RetryError failures
         
         async def judge_segment(idx, text, source_file):
+            nonlocal consecutive_retry_errors
             async with semaphore:
                 try:
                     session = sessions[idx % len(sessions)]
-                    # Create concurrent judge evaluation tasks with timeout
-                    judge_tasks = [session.evaluate(text) for _ in range(num_judges)]
+                    judge_responses = []
                     
-                    # Execute all judge evaluations concurrently with timeout
-                    judge_responses = await asyncio.wait_for(
-                        asyncio.gather(*judge_tasks), 
-                        timeout=60.0  # 60 second timeout per segment
-                    )
+                    # Process judges sequentially - let tenacity handle retries
+                    for judge_num in range(num_judges):
+                        try:
+                            console.print(f"[dim]⚖️ Judging text (len={len(text)}): {text[:80]}...[/dim]")
+                            judge_result = await asyncio.wait_for(
+                                session.evaluate(text), 
+                                timeout=30.0
+                            )
+                            judge_responses.append(judge_result)
+                            # Reset consecutive error counter on any successful evaluation
+                            consecutive_retry_errors = 0
+                            
+                        except Exception as e:
+                            error_str = str(e)
+                            
+                            # Check for RetryError from tenacity exhaustion
+                            if "RetryError" in error_str and "ConnectionError" in error_str:
+                                consecutive_retry_errors += 1
+                                console.print(f"[red]❌ RetryError for segment {idx} judge {judge_num + 1} (consecutive: {consecutive_retry_errors}): {error_str}[/red]")
+                                
+                                # Exit after 3 consecutive RetryErrors across any judges
+                                if consecutive_retry_errors >= 3:
+                                    console.print(f"[bold red]🚫 CRITICAL: {consecutive_retry_errors} consecutive RetryErrors - Ollama connection unstable![/bold red]")
+                                    raise Exception(f"CRITICAL: {consecutive_retry_errors} consecutive RetryErrors - Ollama connection unstable")
+                                
+                                # RetryError means tenacity has exhausted all retries for this judge
+                                # This judge failed completely, so we continue to next judge
+                                console.print(f"[red]❌ Judge {judge_num + 1} failed after all retries - continuing to next judge[/red]")
+                                continue
+                            else:
+                                # For other errors (timeouts, etc.), increment counter and exit immediately
+                                consecutive_retry_errors += 1
+                                console.print(f"[red]❌ Critical error in judge {judge_num + 1} (consecutive: {consecutive_retry_errors}): {str(e)}[/red]")
+                                raise Exception(f"CRITICAL: Judge evaluation error for segment {idx}: {str(e)}")
+                    
+                    # Check if we got any successful judge responses
+                    if not judge_responses:
+                        console.print(f"[bold red]🚫 CRITICAL: All judges failed for segment {idx} - system failure detected![/bold red]")
+                        raise Exception(f"CRITICAL: No successful judge responses for segment {idx} - all judges failed")
+                    
+                    # Calculate consensus from available responses
                     scores = [r.get("score", 0) for r in judge_responses]
-                    
-                    # Calculate consensus score and type
                     consensus_score = sum(scores) / len(scores)
                     
-                    # Get consensus content type
                     content_types = [r.get("type", "natural") for r in judge_responses]
                     consensus_type = max(set(content_types), key=content_types.count)
                     
-                    # Determine final status based on consensus score
                     final_status = "keep" if consensus_score >= threshold else "discard"
                     
-                    # Combine all judge reasons
                     all_reasons = [r.get("reason", "") for r in judge_responses]
                     combined_reason = " / ".join(all_reasons)
                     
-                    # Create final consensus result
-                    consensus_result = {
+                    return idx, {
                         "score": consensus_score,
                         "status": final_status,
                         "type": consensus_type,
                         "reason": combined_reason
-                    }
-                    
-                    return idx, consensus_result, {
+                    }, {
                         "text": text,
                         "source_file": source_file,
                         "judge_responses": judge_responses
                     }
                     
-                except asyncio.TimeoutError:
-                    console.print(f"[red]⏰ Timeout evaluating segment {idx}: {text[:50]}...[/red]")
-                    return idx, {
-                        "score": 0.0, 
-                        "status": "discard", 
-                        "reason": "evaluation timeout"
-                    }, None
                 except Exception as e:
-                    console.print(f"[red]❌ Error evaluating segment {idx}: {str(e)}[/red]")
-                    return idx, {
-                        "score": 0.0, 
-                        "status": "discard", 
-                        "reason": f"processing error: {str(e)}"
-                    }, None
+                    error_str = str(e)
+                    # All critical errors should bubble up and stop processing
+                    console.print(f"[bold red]🚫 CRITICAL FAILURE: {error_str}[/bold red]")
+                    raise e
         
         # Group segments by source file to process documents sequentially
         segments_by_source = {}
@@ -578,8 +599,18 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
         console.print("\n[bold red]Interrupted by user. Exiting.[/bold red]")
         return []
     except Exception as e:
-        console.print(f"[red]❌ Processing error: {str(e)}[/red]")
-        return []
+        error_str = str(e)
+        if ("consecutive RetryErrors" in error_str or 
+            ("failed after" in error_str and "retries" in error_str) or
+            "Segment evaluation timeout" in error_str or
+            "Hard processing error" in error_str or
+            "all judges failed" in error_str):
+            console.print(f"\n[bold red]❌ Critical system failure: {error_str}[/bold red]")
+            console.print(f"[red]🚫 Exiting program immediately. Please check system status and try again.[/red]")
+            sys.exit(1)  # Exit immediately on critical system failures
+        else:
+            console.print(f"\n[bold red]❌ Processing failed: {error_str}[/bold red]")
+            return []
 
 
 def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: int = 1, force: bool = False):
@@ -599,25 +630,18 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
         # Allow continuing, as there might be existing CSVs to process
     
     # Check Ollama connection before starting any processing
-    async def test_ollama():
-        console.print("[cyan]🔍 Testing Ollama connection...[/cyan]")
-        agent_config = load_judge_config()
-        model = agent_config.get("judge", {}).get("model_name", "llama3.2:1b")
-        
-        if await check_ollama_connection(model):
-            console.print(f"[green]✅ Ollama is running and accessible (model: {model})[/green]")
-            return True
-        else:
-            console.print(f"[red]❌ Ollama connection failed![/red]")
-            console.print(f"[yellow]💡 Please ensure Ollama is running with: ollama serve[/yellow]")
-            console.print(f"[yellow]💡 And that the model '{model}' is available with: ollama pull {model}[/yellow]")
-            return False
+    console.print("[cyan]🔍 Testing Ollama connection...[/cyan]")
+    agent_config = load_judge_config()
+    model = agent_config.get("judge", {}).get("model_name", "llama3.2:1b")
     
-    # Run the connection test
     try:
-        if not asyncio.run(test_ollama()):
-            console.print(f"[red]🚫 Exiting due to Ollama connection failure. Please start Ollama and try again.[/red]")
+        if not asyncio.run(check_ollama_connection(model)):
+            console.print(f"[red]❌ Ollama connection failed! Please ensure Ollama is running and model '{model}' is available.[/red]")
+            console.print(f"[yellow]💡 Start Ollama with: ollama serve[/yellow]")
+            console.print(f"[yellow]💡 Load model with: ollama run {model}[/yellow]")
             return
+        else:
+            console.print(f"[green]✅ Ollama is running and accessible (model: {model})[/green]")
     except Exception as e:
         console.print(f"[red]❌ Error testing Ollama connection: {str(e)}[/red]")
         console.print(f"[red]🚫 Exiting due to connection test failure. Please check Ollama is running.[/red]")

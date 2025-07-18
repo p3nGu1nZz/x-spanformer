@@ -1,0 +1,57 @@
+\subsection{Span Embedding}
+
+Each retained span \((i,j)\in S'\) is mapped to a fixed-length vector \(s_{ij}\in\mathbb{R}^d\) capturing both its internal composition and contextual salience. We employ two complementary encoders and then fuse them with a learned gate.
+
+\subsubsection{Mean-Pooling Encoder}
+
+Define the span length \(\delta=j-i+1\) and compute the average of its token embeddings:
+\[
+\bar h_{ij}
+= \frac{1}{\delta} \sum_{k=i}^{j} h_k.
+\]
+Project to \(d\)-dimensions:
+\[
+s_{ij}^{\mathrm{mean}}
+= W_m\,\bar h_{ij} + b_m,
+\quad
+W_m\in\mathbb{R}^{d\times d}.
+\]
+Mean pooling is length-invariant and efficient, with strong performance in models such as BiDAF and SpanBERT \cite{lee2017end,joshi2020spanbert}.
+
+\subsubsection{Local Self-Attention Encoder}
+
+Apply a lightweight multi-head self-attention block to the subsequence \(H[i{:}j]\):
+\[
+\{S_{ij}^{(\ell)}\}_{\ell=1}^h
+= \mathrm{MHSA}\bigl(H[i{:}j]\bigr),
+\quad
+s_{ij}^{\mathrm{attn}}
+= W_o\,[\,S_{ij}^{(1)};\dots;S_{ij}^{(h)}] + b_o,
+\]
+where \(h\) is the number of heads, \(d_h = d/h\), and \(W_o\in\mathbb{R}^{d\times(h\,d_h)}\).  This encoder captures intra-span dependencies and positional asymmetries \cite{lee2018higher,tay2021charformer}.
+
+\subsubsection{Gated Fusion}
+
+We learn a scalar gate \(g_{ij}\in(0,1)\) to interpolate between the two embeddings.  Form a feature vector
+\[
+f_{ij}
+= \bigl[\,
+\bar h_{ij};
+\phi(\delta);
+p^{\mathrm{mod}}_{ij};
+c_{ij}
+\bigr]
+\;\in\;\mathbb{R}^{\,d + D + M + 1},
+\]
+where \(\phi(\delta)\in\mathbb{R}^D\) is a learned length embedding, \(p^{\mathrm{mod}}_{ij}\) the modality distribution (Sec. 3.4), and \(c_{ij}=p^s_i\,p^e_j\) the boundary confidence.  Then
+\[
+g_{ij}
+= \sigma\bigl(w_g^{\!\top}f_{ij} + b_g\bigr),
+\quad
+s_{ij}
+= g_{ij}\,s_{ij}^{\mathrm{attn}}
+\;+\;(1-g_{ij})\,s_{ij}^{\mathrm{mean}}.
+\]
+This gate balances efficiency with expressivity, adapting per span.  Prior work has shown gated mixtures improve latent structure modeling \cite{drozdov2019unsupervised}.
+
+All span embeddings \(s_{ij}\) share dimension \(d\) and are forwarded to the controller-fusion stage (Sec. 3.6).

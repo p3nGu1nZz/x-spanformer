@@ -1,0 +1,42 @@
+\subsection{Length Estimator}
+
+Even high-confidence boundary proposals can yield spans that are implausibly short or long. To inject a learned prior on span width, we train a length estimator that filters candidates based on predicted versus actual length.
+
+For each candidate \((i,j)\in S\), define its true length
+\[
+\delta \;=\; j - i + 1.
+\]
+We first pool the contextual embeddings over the span window:
+\[
+v_{ij} \;=\; \mathrm{Pool}\bigl(H[i{:}j]\bigr)\;\in\;\mathbb{R}^d,
+\]
+where \(\mathrm{Pool}(\cdot)\) can be mean‐ or max‐pooling, or a gated/self‐attentive aggregator \cite{tay2021charformer}.  
+
+Next, a linear classifier predicts a categorical distribution over \(B\) discrete length bins:
+\[
+\ell^\delta = W_\ell\,v_{ij} + b_\ell,
+\quad
+p^\delta = \softmax(\ell^\delta),
+\quad
+\hat\delta = \arg\max p^\delta.
+\]
+Here \(\hat\delta\) serves as a learned prior on plausible widths. We then retain only spans whose true length \(\delta\) falls within a tolerance \(\tau\) of this prediction:
+\[
+S' \;=\; \bigl\{(i,j)\in S \;\big|\; |\,(j-i+1) - \hat\delta\,|\le \tau \bigr\}.
+\]
+The hyperparameter \(\tau\) controls how strictly lengths must match the learned prior.
+
+\begin{proposition}[Span Count Upper Bound]
+	Assume all gold spans satisfy \(\delta\in[\delta_{\min},\delta_{\max}]\) and choose \(\tau<\delta_{\max}-\delta_{\min}\). Then
+	\[
+	|S'| = \mathcal{O}\bigl(T\cdot(2\tau+1)\bigr),
+	\]
+	i.e.\ only \(O(T)\) spans survive per start position.
+\end{proposition}
+\begin{proof}
+	For a fixed start \(i\), the end index \(j\) must lie in
+	\(\bigl[\hat\delta + i-\tau-1,\;\hat\delta + i+\tau-1\bigr]\),
+	a window of size \(2\tau+1\). Summing over \(T\) possible \(i\) gives the stated bound.
+\end{proof}
+
+This learned length filtering prunes subquadratic span proposals and enforces cognitively motivated span regularity \cite{jackendoff1977xbar}, improving both efficiency and segmentation quality.

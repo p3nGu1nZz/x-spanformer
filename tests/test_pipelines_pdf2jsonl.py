@@ -12,6 +12,18 @@ from x_spanformer.pipelines import pdf2jsonl
 from x_spanformer.schema import pretrain_record
 
 
+# Standard mock config for all tests
+MOCK_CONFIG = {
+    "judge": {"judges": 5, "threshold": 0.69, "model_name": "phi4-mini", "temperature": 0.1},
+    "processor": {"max_raw_length": 512},
+    "dialogue": {"max_turns": 1},
+    "templates": {
+        "system": "test_system_template", 
+        "judge": "test_judge_template"
+    }
+}
+
+
 class TestPdf2JsonlPipeline(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = Path(tempfile.mkdtemp())
@@ -23,8 +35,23 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         if self.tmp_dir.exists():
             shutil.rmtree(self.tmp_dir)
 
+    @patch("x_spanformer.pipelines.pdf2jsonl.check_ollama_connection")
     @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
-    def test_pdf2jsonl_pipeline(self, mock_judge_session_class):
+    @patch("x_spanformer.pipelines.pdf2jsonl.load_judge_config")
+    def test_pdf2jsonl_pipeline(self, mock_load_config, mock_judge_session_class, mock_ollama_check):
+        # Mock configuration
+        mock_config = {
+            "judge": {"judges": 5, "threshold": 0.69, "model_name": "phi4-mini", "temperature": 0.1},
+            "processor": {"max_raw_length": 512},
+            "dialogue": {"max_turns": 1},
+            "templates": {
+                "system": "test_system_template", 
+                "judge": "test_judge_template"
+            }
+        }
+        mock_load_config.return_value = mock_config
+        mock_ollama_check.return_value = True
+        
         pdf_path = self.tmp_dir / "test.pdf"
         pdf_path.touch()
         
@@ -47,6 +74,9 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             return {"score": 0.4, "status": "discard", "reason": "too simple"}
         
         mock_judge_session.evaluate = AsyncMock(side_effect=mock_evaluate)
+        
+        # Mock the JudgeSession class completely to avoid initialization issues
+        mock_judge_session_class.side_effect = lambda *args, **kwargs: mock_judge_session
         
         # Mock ImproveSession - REMOVED (no longer used in simplified pipeline)
         
@@ -131,7 +161,20 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             self.assertIsNone(result)
 
     @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
-    def test_process_all_csvs_function(self, mock_judge_session_class):
+    @patch("x_spanformer.pipelines.pdf2jsonl.load_judge_config")
+    def test_process_all_csvs_function(self, mock_load_config, mock_judge_session_class):
+        # Mock configuration
+        mock_config = {
+            "judge": {"judges": 5, "threshold": 0.69, "model_name": "phi4-mini", "temperature": 0.1},
+            "processor": {"max_raw_length": 512},
+            "dialogue": {"max_turns": 1},
+            "templates": {
+                "system": "test_system_template", 
+                "judge": "test_judge_template"
+            }
+        }
+        mock_load_config.return_value = mock_config
+        
         # Mock JudgeSession
         mock_judge_session = MagicMock()
         mock_judge_session_class.return_value = mock_judge_session
@@ -144,6 +187,9 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
                 return {"score": 0.3, "status": "discard", "reason": "poor quality"}
         
         mock_judge_session.evaluate = AsyncMock(side_effect=mock_evaluate)
+        
+        # Mock the JudgeSession class completely to avoid initialization issues
+        mock_judge_session_class.side_effect = lambda *args, **kwargs: mock_judge_session
         
         # Mock ImproveSession - REMOVED (no longer used in simplified pipeline)
 
@@ -174,8 +220,21 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         self.assertEqual(result[1].meta.tags, ["discard"])
 
     @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
+    @patch("x_spanformer.pipelines.pdf2jsonl.load_judge_config")
     # @patch("x_spanformer.pipelines.pdf2jsonl.ImproveSession") - REMOVED
-    def test_single_file_incremental_saving(self, mock_judge_session_class):
+    def test_single_file_incremental_saving(self, mock_load_config, mock_judge_session_class):
+        # Mock configuration
+        mock_config = {
+            "judge": {"judges": 5, "threshold": 0.69, "model_name": "phi4-mini", "temperature": 0.1},
+            "processor": {"max_raw_length": 512},
+            "dialogue": {"max_turns": 1},
+            "templates": {
+                "system": "test_system_template", 
+                "judge": "test_judge_template"
+            }
+        }
+        mock_load_config.return_value = mock_config
+        
         # Mock JudgeSession
         mock_judge_session = MagicMock()
         mock_judge_session_class.return_value = mock_judge_session
@@ -193,6 +252,9 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             return {"score": 0.5, "status": "discard", "reason": "default"}
         
         mock_judge_session.evaluate = AsyncMock(side_effect=mock_evaluate)
+        
+        # Mock the JudgeSession class completely to avoid initialization issues
+        mock_judge_session_class.side_effect = lambda *args, **kwargs: mock_judge_session
         
         # Mock ImproveSession
         # mock_improve_session = MagicMock() - REMOVED
@@ -244,10 +306,23 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         
         self.assertEqual(len(records), 3)  # Only the 3 "keep" records should be saved
 
+    @patch("x_spanformer.pipelines.pdf2jsonl.check_ollama_connection")
     @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
+    @patch("x_spanformer.pipelines.pdf2jsonl.load_judge_config")
     # @patch("x_spanformer.pipelines.pdf2jsonl.ImproveSession") - REMOVED
-    def test_incremental_saving_preserves_final_file(self, mock_judge_session_class):
-        # Mock JudgeSession
+    def test_incremental_saving_preserves_final_file(self, mock_load_config, mock_judge_session_class, mock_ollama_check):
+        # Mock configuration
+        mock_config = {
+            "judge": {"judges": 5, "threshold": 0.69, "model_name": "phi4-mini", "temperature": 0.1},
+            "processor": {"max_raw_length": 512},
+            "dialogue": {"max_turns": 1},
+            "templates": {
+                "system": "test_system_template", 
+                "judge": "test_judge_template"
+            }
+        }
+        mock_load_config.return_value = mock_config
+        mock_ollama_check.return_value = True        # Mock JudgeSession
         mock_judge_session = MagicMock()
         mock_judge_session_class.return_value = mock_judge_session
         
@@ -260,6 +335,9 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             return {"score": 0.5, "status": "discard", "reason": "default"}
         
         mock_judge_session.evaluate = AsyncMock(side_effect=mock_evaluate)
+        
+        # Mock the JudgeSession class completely to avoid initialization issues
+        mock_judge_session_class.side_effect = lambda *args, **kwargs: mock_judge_session
         
         # Mock ImproveSession
         # mock_improve_session = MagicMock() - REMOVED
@@ -351,39 +429,44 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         pdf1.touch()
         pdf2.touch()
 
-        with patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession") as mock_judge_session_class:
-            # with patch("x_spanformer.pipelines.pdf2jsonl.ImproveSession") as mock_improve_session_class: - REMOVED
-                mock_judge_session_class.return_value = MagicMock()
-                # mock_improve_session_class.return_value = ... - REMOVED
+        with patch("x_spanformer.pipelines.pdf2jsonl.check_ollama_connection", return_value=True):
+            with patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession") as mock_judge_session_class:
+                with patch("x_spanformer.pipelines.pdf2jsonl.load_judge_config", return_value=MOCK_CONFIG):
+                    # Mock JudgeSession
+                    mock_judge_session = MagicMock()
+                    mock_judge_session_class.return_value = mock_judge_session
+                    
+                    # Mock judge results - each segment gets 5 judge calls for consensus
+                    def mock_evaluate(text):
+                        if "doc1" in text:
+                            return {"score": 0.8, "status": "keep", "reason": "good"}
+                        elif "doc2" in text:
+                            return {"score": 0.9, "status": "keep", "reason": "excellent"}
+                        return {"score": 0.5, "status": "discard", "reason": "default"}
 
-                # Mock judge results - each segment gets 5 judge calls for consensus
-                def mock_evaluate(text):
-                    if "doc1" in text:
-                        return {"score": 0.8, "status": "keep", "reason": "good"}
-                    elif "doc2" in text:
-                        return {"score": 0.9, "status": "keep", "reason": "excellent"}
-                    return {"score": 0.5, "status": "discard", "reason": "default"}
-                
-                mock_judge_session_class.return_value.evaluate = AsyncMock(side_effect=mock_evaluate)
-                # mock_improve_session_class.return_value.improve = AsyncMock(return_value=(None, "Natural")) - REMOVED
+                    mock_judge_session.evaluate = AsyncMock(side_effect=mock_evaluate)
+                    
+                    # Mock the JudgeSession class completely to avoid initialization issues
+                    mock_judge_session_class.side_effect = lambda *args, **kwargs: mock_judge_session
+                    # mock_improve_session_class.return_value.improve = AsyncMock(return_value=(None, "Natural")) - REMOVED
 
-                temp_csv_dir = self.output_dir / "temp_csv"
-                temp_csv_dir.mkdir(parents=True)
+                    temp_csv_dir = self.output_dir / "temp_csv"
+                    temp_csv_dir.mkdir(parents=True)
 
-                csv1 = temp_csv_dir / "doc1.csv"
-                csv2 = temp_csv_dir / "doc2.csv"
-                csv1.write_text('text\n"Text from doc1"')
-                csv2.write_text('text\n"Text from doc2"')
+                    csv1 = temp_csv_dir / "doc1.csv"
+                    csv2 = temp_csv_dir / "doc2.csv"
+                    csv1.write_text('text\n"Text from doc1"')
+                    csv2.write_text('text\n"Text from doc2"')
 
-                def mock_pdf2seg(pdf_file, output_dir, force_regenerate=False):
-                    if pdf_file.name == "doc1.pdf":
-                        return csv1
-                    elif pdf_file.name == "doc2.pdf":
-                        return csv2
-                    return None
+                    def mock_pdf2seg(pdf_file, output_dir, force_regenerate=False):
+                        if pdf_file.name == "doc1.pdf":
+                            return csv1
+                        elif pdf_file.name == "doc2.pdf":
+                            return csv2
+                        return None
 
-                with patch("x_spanformer.pipelines.pdf2jsonl.run_pdf2seg", side_effect=mock_pdf2seg):
-                    pdf2jsonl.run(pdf_dir, self.output_dir, "text", False, "test_dataset", 1, save_interval=1)
+                    with patch("x_spanformer.pipelines.pdf2jsonl.run_pdf2seg", side_effect=mock_pdf2seg):
+                        pdf2jsonl.run(pdf_dir, self.output_dir, "text", False, "test_dataset", 1, save_interval=1)
 
         output_file = self.output_dir / "jsonl" / "test_dataset.jsonl"
         self.assertTrue(output_file.exists())
@@ -410,14 +493,21 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         generated_csv.write_text(csv_content)
 
         with patch("x_spanformer.pipelines.pdf2jsonl.run_pdf2seg", return_value=generated_csv):
-            with patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession") as mock_judge_session_class:
-                mock_judge_session_class.return_value = MagicMock()
-                mock_judge_session_class.return_value.evaluate = AsyncMock(
-                    return_value={"score": 0.8, "status": "keep", "reason": "good"}
-                )
-                
-                pdf2jsonl.run(pdf_file, self.output_dir, "text", False, "single_dataset", 1, save_interval=1)
-        
+            with patch("x_spanformer.pipelines.pdf2jsonl.check_ollama_connection", return_value=True):
+                with patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession") as mock_judge_session_class:
+                    with patch("x_spanformer.pipelines.pdf2jsonl.load_judge_config", return_value=MOCK_CONFIG):
+                        # Mock JudgeSession
+                        mock_judge_session = MagicMock()
+                        mock_judge_session_class.return_value = mock_judge_session
+                        mock_judge_session.evaluate = AsyncMock(
+                            return_value={"score": 0.8, "status": "keep", "reason": "good"}
+                        )
+                        
+                        # Mock the JudgeSession class completely to avoid initialization issues
+                        mock_judge_session_class.side_effect = lambda *args, **kwargs: mock_judge_session
+
+                        pdf2jsonl.run(pdf_file, self.output_dir, "text", False, "single_dataset", 1, save_interval=1)
+
         output_file = self.output_dir / "jsonl" / "single_dataset.jsonl"
         self.assertTrue(output_file.exists())
         
@@ -425,9 +515,13 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             lines = [line for line in f if line.strip()]
             self.assertEqual(len(lines), 1)
 
+    @patch("x_spanformer.pipelines.pdf2jsonl.check_ollama_connection")
     @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
+    @patch("x_spanformer.pipelines.pdf2jsonl.load_judge_config")
     # @patch("x_spanformer.pipelines.pdf2jsonl.ImproveSession") - REMOVED
-    def test_end_to_end_pdf_to_jsonl_workflow(self, mock_judge_session_class):
+    def test_end_to_end_pdf_to_jsonl_workflow(self, mock_load_config, mock_judge_session_class, mock_ollama_check):
+        mock_load_config.return_value = MOCK_CONFIG
+        mock_ollama_check.return_value = True
         """Test the complete workflow from PDF to JSONL."""
         pdf_path = self.tmp_dir / "document.pdf"
         pdf_path.touch()
@@ -447,6 +541,9 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             return {"score": 0.5, "status": "discard", "reason": "default"}
         
         mock_judge_session.evaluate = AsyncMock(side_effect=mock_evaluate)
+        
+        # Mock the JudgeSession class completely to avoid initialization issues
+        mock_judge_session_class.side_effect = lambda *args, **kwargs: mock_judge_session
         
         # Mock ImproveSession
         # mock_improve_session = MagicMock() - REMOVED
@@ -491,9 +588,13 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             pretty_data = json.load(f)
             self.assertEqual(len(pretty_data), 3, "Pretty JSON should have same number of records")
 
+    @patch("x_spanformer.pipelines.pdf2jsonl.check_ollama_connection")
     @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
+    @patch("x_spanformer.pipelines.pdf2jsonl.load_judge_config")
     # @patch("x_spanformer.pipelines.pdf2jsonl.ImproveSession") - REMOVED
-    def test_partial_pdf2seg_failure(self, mock_judge_session_class):
+    def test_partial_pdf2seg_failure(self, mock_load_config, mock_judge_session_class, mock_ollama_check):
+        mock_load_config.return_value = MOCK_CONFIG
+        mock_ollama_check.return_value = True
         """Test behavior when pdf2seg fails for some PDFs but succeeds for others."""
         pdf_dir = self.tmp_dir / "mixed_pdfs"
         pdf_dir.mkdir()
@@ -507,6 +608,9 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         mock_judge_session = MagicMock()
         mock_judge_session_class.return_value = mock_judge_session
         mock_judge_session.evaluate = AsyncMock(return_value={"score": 0.8, "status": "keep", "reason": "good"})
+        
+        # Mock the JudgeSession class completely to avoid initialization issues
+        mock_judge_session_class.side_effect = lambda *args, **kwargs: mock_judge_session
         
         # Mock ImproveSession
         # mock_improve_session = MagicMock() - REMOVED
@@ -534,8 +638,10 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             self.assertEqual(len(lines), 1, "Should only process the successful PDF")
 
     @patch("x_spanformer.pipelines.pdf2jsonl.JudgeSession")
+    @patch("x_spanformer.pipelines.pdf2jsonl.load_judge_config")
     # @patch("x_spanformer.pipelines.pdf2jsonl.ImproveSession") - REMOVED
-    def test_pdf_to_csv_mapping(self, mock_judge_session_class):
+    def test_pdf_to_csv_mapping(self, mock_load_config, mock_judge_session_class):
+        mock_load_config.return_value = MOCK_CONFIG
         """Test that original PDF filenames are correctly mapped to source_file fields."""
         # Mock JudgeSession
         mock_judge_session = MagicMock()
@@ -545,6 +651,9 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             {"score": 0.8, "status": "keep", "reason": "good text"},
             {"score": 0.7, "status": "keep", "reason": "acceptable text"},
         ])
+        
+        # Mock the JudgeSession class completely to avoid initialization issues
+        mock_judge_session_class.side_effect = lambda *args, **kwargs: mock_judge_session
         
         # Mock ImproveSession
         # mock_improve_session = MagicMock() - REMOVED
