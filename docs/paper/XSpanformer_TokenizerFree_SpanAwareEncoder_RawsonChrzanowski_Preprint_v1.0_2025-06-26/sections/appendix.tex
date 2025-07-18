@@ -64,7 +64,7 @@
 		\FOR{each $u$ with $p^{(t+1)}(u)<\epsilon$}
 		\STATE Form $V' = V\setminus\{u\}$ and Viterbi decode $\mathrm{seg}^*_{V'}(x)$
 		\STATE Compute $L', N'_p, N'_{\mathrm{uncov}}$ as in Sec.~\ref{sec:vocab-induction}
-		\IF{$\exp(L'/N'_p)-\mathrm{PPL}^{(t)}<\tau_{\mathrm{ppl}}$ and $N'_{\mathrm{uncov}}/T\le\delta_{\mathrm{oov}}$}
+		\IF{$\exp(L'/N'_p)-\mathrm{PPL}^{(t)}<\tau_{\mathrm{ppl}}$ and $N'_{\mathrm{uncov}}/N_t\le\delta_{\mathrm{oov}}$}
 		\STATE Accept: $V\leftarrow V'$
 		\ENDIF
 		\ENDFOR

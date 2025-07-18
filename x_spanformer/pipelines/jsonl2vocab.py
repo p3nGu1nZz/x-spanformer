@@ -153,6 +153,26 @@ def build_candidate_set(corpus: List[str], L_max: int, M: int, out: Path) -> Tup
     return U_0, freq
 
 
+def validate_vocabulary_completeness(corpus: List[str], V: List[str]) -> None:
+    """
+    Validate that vocabulary includes all single codepoints from corpus.
+    
+    According to the paper, U_0 must include all single codepoints to ensure
+    complete coverage without fallbacks.
+    """
+    corpus_chars = set()
+    for x in corpus:
+        corpus_chars.update(x)
+    
+    vocab_chars = set(u for u in V if len(u) == 1)
+    
+    missing_chars = corpus_chars - vocab_chars
+    if missing_chars:
+        raise ValueError(f"Vocabulary missing required single codepoints: {sorted(missing_chars)}")
+    
+    console.log(f"[green]✓ Vocabulary includes all {len(corpus_chars)} single codepoints from corpus[/green]")
+
+
 def viterbi_segment(x: str, V: List[str], p_u: Dict[str, float]) -> List[str]:
     """
     Viterbi segmentation following the paper's formulation.
@@ -176,17 +196,25 @@ def viterbi_segment(x: str, V: List[str], p_u: Dict[str, float]) -> List[str]:
         for u in by_first.get(x[i], []):
             j = i + len(u)
             if j <= T and x[i:j] == u:
-                pu = p_u.get(u, 1e-12)
+                if u not in p_u:
+                    raise ValueError(f"Piece '{u}' not found in probability dictionary")
+                pu = p_u[u]
+                if pu <= 0:
+                    raise ValueError(f"Invalid probability {pu} for piece '{u}' - must be positive")
                 sc = dp[i] + math.log(pu)
                 if sc > dp[j]:
                     dp[j], back[j] = sc, u
 
-    # Reconstruct path
+    # Reconstruct path - paper assumes all single codepoints are in vocabulary
     seg, ptr = [], T
     while ptr > 0:
-        piece = back[ptr] or x[ptr - 1]  # Fallback to single character
-        seg.append(piece)
-        ptr -= len(piece)
+        piece = back[ptr]
+        if piece is not None:
+            seg.append(piece)
+            ptr -= len(piece)
+        else:
+            # This should never happen if vocabulary properly includes all single codepoints
+            raise ValueError(f"Segmentation failed at position {ptr} in string '{x}' - vocabulary incomplete")
     return list(reversed(seg))
 
 
@@ -212,62 +240,48 @@ def compute_coverage(x: str, segmentation: List[str]) -> Set[int]:
     return covered
 
 
-def compute_corpus_coverage(corpus: List[str], V: List[str]) -> float:
+def compute_corpus_coverage(corpus: List[str], V: List[str], p_u: Dict[str, float]) -> float:
     """
     Compute corpus-level coverage as the percentage of codepoints covered.
+    Uses actual vocabulary probabilities for segmentation as specified in paper.
     """
     total_covered = 0
     total_positions = 0
     
     for x in corpus:
-        segmentation = viterbi_segment(x, V, {})  # Use uniform probabilities for coverage
+        segmentation = viterbi_segment(x, V, p_u)
         covered = compute_coverage(x, segmentation)
         total_covered += len(covered)
         total_positions += len(x)
     
     return total_covered / total_positions if total_positions > 0 else 0.0
-    covered = set()
-    pos = 0
-    reconstructed = ""
-    
-    for piece in segmentation:
-        # Track covered positions
-        for i in range(pos, pos + len(piece)):
-            if i < len(x):  # Ensure we don't go beyond string bounds
-                covered.add(i)
-        reconstructed += piece
-        pos += len(piece)
-    
-    # Validate reconstruction matches original
-    if reconstructed != x:
-        raise ValueError(f"Segmentation reconstruction failed: '{reconstructed}' != '{x}'")
-    
-    return covered
 
 
 def compute_baseline_perplexity(corpus: List[str], V: List[str], p_u: Dict[str, float]) -> float:
     """
-    Compute baseline perplexity following the paper's formulation.
+    Compute baseline perplexity following the paper's corrected formulation.
     
-    PPL^(0) = exp(-1/|X| * Σ_{x∈X} log ∏_{v∈seg*(x)} p^(0)(v))
+    PPL^(0) = exp(L^(0)/N_p^(0)) where L^(0) is negative log-likelihood, N_p^(0) is total pieces
     
-    This is sequence-level perplexity as defined in the paper.
+    This uses piece-level normalization for consistency with pruning perplexity.
     """
-    total_log_likelihood = 0.0
-    num_sequences = len(corpus)
+    total_pieces = 0  # N_p^(0)
+    total_log_prob = 0.0  # L^(0) (will be negative)
     
     for x in corpus:
         segmentation = viterbi_segment(x, V, p_u)
-        sequence_log_prob = 0.0
+        total_pieces += len(segmentation)
         
         for piece in segmentation:
-            prob = p_u.get(piece, 1e-12)
-            sequence_log_prob += math.log(prob)
-        
-        total_log_likelihood += sequence_log_prob
+            if piece not in p_u:
+                raise ValueError(f"Piece '{piece}' not found in probability dictionary during baseline perplexity calculation")
+            prob = p_u[piece]
+            if prob <= 0:
+                raise ValueError(f"Invalid probability {prob} for piece '{piece}' - must be positive")
+            total_log_prob += math.log(prob)
     
-    # Paper's baseline perplexity formula
-    ppl = math.exp(-total_log_likelihood / num_sequences)
+    # Paper's corrected baseline perplexity formula (piece-level normalization)
+    ppl = math.exp(-total_log_prob / total_pieces) if total_pieces > 0 else float('inf')
     return ppl
 
 
@@ -296,7 +310,11 @@ def compute_pruning_perplexity_and_oov(corpus: List[str], V: List[str], p_u: Dic
         
         # Update log probability
         for piece in segmentation:
-            prob = p_u.get(piece, 1e-12)
+            if piece not in p_u:
+                raise ValueError(f"Piece '{piece}' not found in probability dictionary during pruning perplexity calculation")
+            prob = p_u[piece]
+            if prob <= 0:
+                raise ValueError(f"Invalid probability {prob} for piece '{piece}' - must be positive")
             total_log_prob += math.log(prob)
     
     # Compute metrics according to paper
@@ -338,12 +356,12 @@ def induce_vocab(corpus: List[str], V: List[str], freq: Counter, h: Dict, out: P
     total_freq = sum(freq[u] for u in V)
     p_u = {u: freq[u] / total_freq for u in V}
 
-    # Compute baseline perplexity PPL^(0) 
-    # Note: Using piece-level normalization for consistency with pruning comparisons
-    # This differs from the paper's sequence-level baseline to enable meaningful comparison
-    baseline_ppl, baseline_oov = compute_pruning_perplexity_and_oov(corpus, V, p_u)
+    # Compute baseline perplexity PPL^(0) using piece-level normalization
+    # This matches the corrected paper formulation for mathematical consistency
+    baseline_ppl = compute_baseline_perplexity(corpus, V, p_u)
+    _, baseline_oov = compute_pruning_perplexity_and_oov(corpus, V, p_u)  # Get OOV for reporting
     console.log(f"  Baseline PPL: {baseline_ppl:.4f}, OOV: {baseline_oov:.4f}")
-    console.log(f"  [yellow]Note: Using piece-level PPL for consistency with pruning comparisons[/yellow]")
+    console.log(f"  [green]Using piece-level normalization as corrected in paper[/green]")
 
     current_ppl = baseline_ppl
     final_iteration = 0  # Track the final iteration count
@@ -375,23 +393,30 @@ def induce_vocab(corpus: List[str], V: List[str], freq: Counter, h: Dict, out: P
             # Tentative removal: V' = V \ {u}
             V_prime = [v for v in V if v != u]
             
+            # Create renormalized probabilities for reduced vocabulary V'
+            # Following paper: probabilities must be renormalized after removal
+            total_prob_remaining = sum(p_next[v] for v in V_prime)
+            p_prime = {v: p_next[v] / total_prob_remaining for v in V_prime}
+            
             # Simulate removal and compute new metrics using pruning formula
-            ppl_prime, oov_prime = compute_pruning_perplexity_and_oov(corpus, V_prime, p_next)
+            ppl_prime, oov_prime = compute_pruning_perplexity_and_oov(corpus, V_prime, p_prime)
             
             # Check pruning criteria from the paper
             ppl_increase = ppl_prime - current_ppl
             if ppl_increase < tau_ppl and oov_prime <= delta_oov:
                 console.log(f"    Pruned '{u}' ΔPPL={ppl_increase:.4f}, OOV={oov_prime:.4f}")
                 V = V_prime
+                # Update current_ppl to reflect the accepted change
                 current_ppl = ppl_prime
 
         # Update probabilities for next iteration
-        p_u = p_next
+        # Only keep probabilities for remaining vocabulary pieces
+        p_u = {u: p_next[u] for u in V if u in p_next}
 
     console.log(f"[green]Final vocab size: {len(V)}[/green]")
     
     # Final vocabulary statistics using schema
-    final_coverage = compute_corpus_coverage(corpus, V)
+    final_coverage = compute_corpus_coverage(corpus, V, p_u)
     final_ppl, final_oov_rate = compute_pruning_perplexity_and_oov(corpus, V, p_u)
     
     stats = VocabStats(
@@ -441,6 +466,9 @@ def main():
     
     # Stage 2: Build candidate set U_0
     U_0, freq = build_candidate_set(corpus, h["L_max"], h["M_candidates"], out)
+    
+    # Validate vocabulary completeness before proceeding
+    validate_vocabulary_completeness(corpus, U_0)
     
     # Stage 3: EM-based vocabulary induction with adaptive pruning
     V_final, p_final = induce_vocab(corpus, U_0, freq, h, out)
