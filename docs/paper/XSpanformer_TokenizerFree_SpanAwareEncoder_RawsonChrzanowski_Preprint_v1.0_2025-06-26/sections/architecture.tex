@@ -26,12 +26,13 @@ yielding seed embeddings \(H^0\in\mathbb{R}^{T\times d}\).  From these low-level
 Span-level augmentation parallels auxiliary token insertion in models like SpanBERT \cite{joshi2020spanbert} but operates on soft, overlapping spans rather than hard subwords.  All modules—from boundary scoring to controller fusion—are fully differentiable and trained end-to-end with the downstream encoder.
 
 % New subsection: vocabulary induction
-\input{architecture/3_0_vocab_induction}
-\input{architecture/3_1_seed_embeddings}
-\input{architecture/3_2_span_predictor}
-\input{architecture/3_3_length_estimator}
-\input{architecture/3_4_modality_typing}
-\input{architecture/3_5_span_embedding}
-\input{architecture/3_6_controller_fusion}
-\input{architecture/3_7_span_interpolation}
-\input{architecture/3_8_runtime_complexity}
+\input{architecture/3_0_dataset_extraction}
+\input{architecture/3_1_vocab_induction}
+\input{architecture/3_2_seed_embeddings}
+\input{architecture/3_3_span_predictor}
+\input{architecture/3_4_length_estimator}
+\input{architecture/3_5_modality_typing}
+\input{architecture/3_6_span_embedding}
+\input{architecture/3_7_controller_fusion}
+\input{architecture/3_8_span_interpolation}
+\input{architecture/3_9_runtime_complexity}

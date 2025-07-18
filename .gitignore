@@ -175,7 +175,13 @@ cython_debug/
 uv.lock
 x_spanformer/agents/__pycache__/*
 dist
-data/pretraining/in/*
-data/pretraining/out/*
-data/pretraining2/in/*
-data/pretraining2/out/*
+
+# Batch 1
+data/pretraining/out/csv/*
+data/pretraining/out/jsonl/*/*
+data/pretraining/out/jsonl/discard*
+
+# Batch 2
+data/pretraining2/out/csv/*
+data/pretraining2/out/jsonl/*/*
+data/pretraining2/out/jsonl/discard*
