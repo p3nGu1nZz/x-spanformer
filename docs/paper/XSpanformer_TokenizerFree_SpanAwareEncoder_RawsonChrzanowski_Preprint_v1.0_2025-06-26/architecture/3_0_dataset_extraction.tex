@@ -1,0 +1,8 @@
+\subsubsection{Dataset Extraction and Validation}
+\label{sec:dataset-extraction}
+
+Our segmentation pipeline begins by converting raw PDF documents into judged text segments.  We first apply the \texttt{pdf2seg} tool, which performs layout-aware OCR to extract candidate snippets.  Each CSV record includes the Unicode codepoint sequence, bounding‐box metadata, and an OCR confidence score.  Records failing heuristic filters—such as non‐text artifacts, control‐character noise, or confidence below a threshold—are flagged and excluded.
+
+Validated CSV records are then ingested by \texttt{pdf2jsonl}, which normalizes Unicode, merges overlapping snippets, and emits a clean JSONL dataset.  During this conversion we remove duplicates, discard empty segments, and log all excluded records for audit.  The resulting corpus of high‐quality, human‐judged text segments serves as the input to our vocabulary induction and span modeling stages.
+
+We considered augmenting each validated segment with multiple paraphrases (e.g., three per segment) to increase diversity, but this introduces substantial preprocessing overhead and can distort structural cues.  Instead, we expand corpus coverage by ingesting additional PDFs, ensuring scale and domain variety without paraphrase‐induced noise.

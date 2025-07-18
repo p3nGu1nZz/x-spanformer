@@ -1,0 +1,236 @@
+\subsection{Hybrid Unigram‐LM Vocabulary Induction}
+\label{sec:vocab-induction}
+
+We construct a data‐adaptive subword vocabulary by training a Unigram language model (LM) over all substrings up to length \(L_{\max}\), then pruning pieces based on both corpus perplexity and coverage (OOV rate). Let
+\(\mathcal X = \{x^{(i)}\}_{i=1}^N\)
+be our corpus of raw Unicode codepoint sequences of total length \(T\), and let \(\mathcal U_{0}\) denote the initial candidate set formed by extracting every substring of length \(\le L_{\max}\), retaining the top \(M\) by frequency, and including all individual codepoints.
+
+\subsubsection{Candidate Generation}
+
+For each sequence \(x \in \mathcal X\), we slide a window of width \(\le L_{\max}\) across all codepoints to extract substrings. We record their frequency and retain the top \(M\) most frequent substrings. The resulting candidate set is:
+\[
+\mathcal U_{0}
+= \{\text{top }M\text{ substrings}\} \cup \{\text{all single codepoints}\},
+\]
+ensuring base coverage and bounding vocabulary size.
+
+\subsubsection{Unigram LM via EM}
+
+We initialize the piece probabilities by normalizing raw frequency counts:
+\[
+p^{(0)}(u)
+= \frac{\mathrm{freq}(u)}{\sum_{v\in\mathcal U_{0}}\mathrm{freq}(v)},
+\quad
+\forall\,u\in\mathcal U_{0}.
+\]
+
+At each EM iteration \(t\), we alternate:
+
+\paragraph{E-step:}
+
+For each sequence \(x\in\mathcal X\), we compute the posterior usage mass \(\gamma^{(t)}(u \mid x)\) for every piece \(u\in \mathcal U_t\). Since enumerating all segmentations of \(x\) is intractable, we approximate using the single best segmentation:
+\[
+\mathrm{seg}^{*}(x)
+= \arg\max_{\mathrm{seg}} \prod_{v\in\mathrm{seg}} p^{(t)}(v),
+\]
+obtained via Viterbi decoding \cite{kudo2018sentencepiece}. We then compute:
+\[
+\gamma^{(t)}(u \mid x)
+= \sum_{v \in \mathrm{seg}^{*}(x)} \mathbf{1}_{u = v}.
+\]
+
+\paragraph{M-step:}
+
+We re-estimate the piece probabilities as:
+\[
+p^{(t+1)}(u)
+= \frac{
+	\sum_{x \in \mathcal X} \gamma^{(t)}(u \mid x)
+}{
+	\sum_{v \in \mathcal U_t} \sum_{x \in \mathcal X} \gamma^{(t)}(v \mid x)
+},
+\]
+which reduces to relative frequency over the Viterbi segmentations.
+
+\subsubsection{Baseline Perplexity}
+
+To benchmark compressibility before pruning, we compute the initial corpus perplexity:
+\[
+\mathrm{PPL}^{(0)}
+= \exp\left(
+-\frac{1}{|\mathcal X|} \sum_{x\in\mathcal X} \log \prod_{v \in \mathrm{seg}^{*}(x)} p^{(0)}(v)
+\right),
+\]
+where \(\mathrm{seg}^{*}(x)\) is the Viterbi segmentation under \(p^{(0)}\).
+
+
+
+
+
+
+
+\subsubsection{Adaptive Pruning by PPL and OOV}
+
+After each M‐step, we consider pruning any piece \(u\in V\) with \(p^{(t)}(u)<\epsilon\).  For a candidate removal \(V' = V \setminus \{u\}\), we first perform Viterbi segmentation under the reduced vocabulary:
+
+\[
+\mathrm{seg}^{*}_{V'}(x) \;=\;\arg\max_{\mathrm{seg}} \;\prod_{v\in\mathrm{seg}} p^{(t)}_{V'}(v)
+\quad\text{for each }x\in\mathcal X.
+\]
+
+We then introduce the following quantities:
+
+\[
+N_{p}' \;=\;\sum_{x\in\mathcal X} \bigl|\mathrm{seg}^{*}_{V'}(x)\bigr|
+\quad\text{(total number of subword pieces)},
+\]
+
+\[
+L' \;=\; -\,\sum_{x\in\mathcal X}\;\sum_{v\in\mathrm{seg}^{*}_{V'}(x)}\log p^{(t)}_{V'}(v)
+\quad\text{(negative log‐likelihood of all pieces)},
+\]
+
+\[
+N_{t} \;=\;\sum_{x\in\mathcal X} |x|
+\quad\text{(total number of codepoint tokens)},
+\]
+
+\[
+N_{\mathrm{uncov}}' 
+\;=\; \sum_{x\in\mathcal X}\;\sum_{i=1}^{|x|}
+\mathbf1\bigl(i\not\in \mathrm{cover}_{V'}(x)\bigr)
+\quad\text{(total uncovered positions)},
+\]
+
+where \(\mathrm{cover}_{V'}(x)\) is the set of codepoint indices spanned by \(\mathrm{seg}^{*}_{V'}(x)\).
+
+Using these, we define:
+
+\[
+\mathrm{PPL}' 
+= \exp\Bigl(\tfrac{L'}{N_{p}'}\Bigr),
+\quad
+\mathrm{OOV}' 
+= \frac{N_{\mathrm{uncov}}'}{N_{t}}.
+\]
+
+We accept the removal \(u\) if and only if both
+\[
+\mathrm{PPL}' - \mathrm{PPL}^{(t)} < \tau_{\mathrm{ppl}}
+\quad\text{and}\quad
+\mathrm{OOV}' \le \delta_{\mathrm{oov}}.
+\]
+
+This criterion guarantees that any pruning step degrades the model’s average piece‐level log‐likelihood by at most \(\tau_{\mathrm{ppl}}\) and introduces no more than \(\delta_{\mathrm{oov}}\) uncovered codepoint positions.
+
+
+
+
+
+
+
+
+
+\subsubsection{Existence and Monotonicity Proposition}
+
+Define the feasible set:
+\[
+\mathcal F(\tau,\delta)
+= \left\{\,V\subseteq\mathcal U_{0}\,\middle|\,
+\mathrm{PPL}(V)\le \mathrm{PPL}^{(0)}+\tau,\;
+\mathrm{OOV}(V)\le \delta
+\right\}.
+\]
+
+\begin{proposition}[Feasibility and Monotonicity]
+	For any \(\tau,\delta \ge 0\), the feasible set \(\mathcal F(\tau,\delta)\) is nonempty. Moreover, if \(\tau' \ge \tau\), \(\delta' \ge \delta\), then:
+	\[
+	\mathcal F(\tau,\delta) \subseteq \mathcal F(\tau',\delta'),
+	\quad
+	\Rightarrow
+	\quad
+	\min_{V\in\mathcal F(\tau',\delta')}|V| \le \min_{V\in\mathcal F(\tau,\delta)}|V|.
+	\]
+\end{proposition}
+
+\begin{proof}
+	\textbf{Step 1: Existence}
+	
+	Choose \(V = \mathcal U_0\), the full candidate set.
+	
+	Since \(V\) includes all substrings and individual codepoints:
+	\[
+	\mathrm{OOV}(V) = 0,
+	\quad
+	\mathrm{PPL}(V) = \mathrm{PPL}^{(0)}.
+	\]
+	
+	Therefore, for any \(\tau,\delta \ge 0\),
+	\[
+	\mathrm{PPL}(V) \le \mathrm{PPL}^{(0)} + \tau,
+	\quad
+	\mathrm{OOV}(V) \le \delta,
+	\quad
+	\Rightarrow
+	V \in \mathcal F(\tau,\delta).
+	\]
+	
+	\textbf{Step 2: Monotonicity}
+	
+	Let \(V \in \mathcal F(\tau,\delta)\), and suppose \(\tau' \ge \tau\), \(\delta' \ge \delta\). Then:
+	\[
+	\mathrm{PPL}(V) \le \mathrm{PPL}^{(0)} + \tau \le \mathrm{PPL}^{(0)} + \tau',
+	\quad
+	\mathrm{OOV}(V) \le \delta \le \delta',
+	\quad
+	\Rightarrow
+	V \in \mathcal F(\tau',\delta').
+	\]
+	
+	Thus:
+	\[
+	\mathcal F(\tau,\delta) \subseteq \mathcal F(\tau',\delta').
+	\]
+	
+	\textbf{Step 3: Minimality}
+	
+	Since \(\mathcal F(\tau,\delta) \subseteq \mathcal F(\tau',\delta')\),
+	\[
+	\min_{V \in \mathcal F(\tau',\delta')} |V| \le \min_{V \in \mathcal F(\tau,\delta)} |V|.
+	\]
+\end{proof}
+
+\subsubsection{Algorithm: Adaptive Vocabulary Induction}
+
+To construct an efficient and corpus-aware subword vocabulary, we apply an expectation-maximization loop over the candidate set \(\mathcal{U}_0\), guided by a Viterbi-decoded likelihood objective. Starting from raw frequency estimates, we refine piece probabilities \(p(u)\) via best-segmentation token counts and normalize them across the corpus. After each M-step, we attempt to prune low-probability pieces while preserving compressibility and coverage. Each candidate removal is simulated by resegmenting \(\mathcal{X}\) under the reduced vocabulary \(V'\) and evaluating both perplexity and position-level OOV rate. If the degradation in log-likelihood is bounded and no coverage gaps are introduced, the removal is accepted. This selective pruning yields a compact, entropy-regularized vocabulary tailored to the domain structure.
+
+\begin{algorithm}[H]
+	\caption{Adaptive Unigram‐LM Vocabulary Induction}
+	\label{alg:vocab-induction}
+	\begin{algorithmic}[1]
+		\STATE Extract candidate substrings up to length \(L_{\max}\) from corpus \(\mathcal{X}\); form initial vocabulary \(\mathcal{U}_0\)
+		\STATE Initialize piece probabilities: \(p^{(0)}(u) \propto \mathrm{freq}(u)\) for all \(u \in \mathcal{U}_0\)
+		\STATE Compute baseline perplexity \(\mathrm{PPL}^{(0)}\) via Viterbi decoding over \(\mathcal{X}\)
+		\FOR{iteration \(t = 0\) to \(T_{\max}\)}
+		\FOR{each sequence \(x \in \mathcal{X}\)}
+		\STATE Compute best segmentation \(\mathrm{seg}^{*}(x)\) using current \(p^{(t)}\)
+		\STATE Accumulate token usage counts \(\gamma^{(t)}(u \mid x)\) for all \(u \in \mathrm{seg}^{*}(x)\)
+		\ENDFOR
+		\STATE Update probabilities: normalize counts to get \(p^{(t+1)}(u)\)
+		\STATE Set current vocabulary \(V = \{u \mid p^{(t+1)}(u) > 0\}\)
+		\FOR{each \(u \in V\) with \(p^{(t+1)}(u) < \epsilon\)}
+		\STATE Tentatively prune: define \(V' = V \setminus \{u\}\)
+		\FOR{each sequence \(x \in \mathcal{X}\)}
+		\STATE Decode \(\mathrm{seg}^{*}_{V'}(x)\) using updated \(V'\)
+		\STATE Compute log-prob score and uncovered positions
+		\ENDFOR
+		\STATE Compute \(\mathrm{PPL}'\) and \(\mathrm{OOV}'\) from new segmentations
+		\IF{\(\mathrm{PPL}' - \mathrm{PPL}^{(t)} < \tau_{\mathrm{ppl}}\) and \(\mathrm{OOV}' \le \delta_{\mathrm{oov}}\)}
+		\STATE Accept removal: \(V \leftarrow V'\)
+		\ENDIF
+		\ENDFOR
+		\STATE Update \(\mathrm{PPL}^{(t+1)}\) using accepted vocabulary \(V\)
+		\ENDFOR
+		\STATE \textbf{Return} final pruned vocabulary \(V\) and piece probabilities \(\{p(u)\}\)
+	\end{algorithmic}
+\end{algorithm}
