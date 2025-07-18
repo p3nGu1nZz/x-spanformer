@@ -1,75 +1,126 @@
 \subsection{Modality Typing}
+\label{sec:modality-typing}
 
-Text streams frequently interleave multiple subdomains—natural language, programming syntax, identifiers, numeric literals, or markup. To capture this heterogeneity, we append a lightweight classification head that predicts a soft modality distribution for each span embedding \(v_{ij}\) (pooled as in Section 3.3).
+Text streams often mix multiple domains—natural language, code syntax, identifiers, numeric values, markup—especially in technical or hybrid contexts. To model this structure, we attach a modality classifier to each pooled span embedding \(v_{ij}\in\mathbb{R}^d\), as defined in Sec.~\ref{sec:length-estimator}. The classifier predicts a soft type distribution and accompanying entropy score.
 
-Let \(M\) be the number of modality classes. We first optionally transform the pooled span vector:
+\subsubsection{Modality Classification}
+
+Let \(M\) be the number of modality classes. We first transform the span vector:
 \[
-h_{ij} = \mathrm{ReLU}\bigl(W_v\,v_{ij} + b_v\bigr)\;\in\;\mathbb{R}^{d'},
+h_{ij} = \mathrm{ReLU}(W_v\,v_{ij} + b_v)\in\mathbb{R}^{d'},
 \]
-with \(d'\le d\).  Then we compute raw logits and probabilities:
+where \(d'\le d\). We then compute:
 \[
 \ell^{\mathrm{mod}}_{ij} = W_{\mathrm{mod}}\,h_{ij} + b_{\mathrm{mod}},
-\qquad
-p^{\mathrm{mod}}_{ij} = \softmax\bigl(\ell^{\mathrm{mod}}_{ij}\bigr)
-\;\in\;\Delta^{M}.
+\quad
+p^{\mathrm{mod}}_{ij} = \softmax(\ell^{\mathrm{mod}}_{ij}) \in \Delta^M.
 \]
-Each entry \(p^{\mathrm{mod}}_{ij,m}\) is the model’s belief that span \((i,j)\) belongs to modality \(m\).
+Here \(p^{\mathrm{mod}}_{ij,m}\) is the model’s belief that span \((i,j)\) belongs to modality \(m\).
 
-To quantify uncertainty, we define the modality entropy
+\subsubsection{Modality Entropy and Ambiguity}
+
+To quantify ambiguity:
 \[
 H^{\mathrm{mod}}_{ij}
 = -\sum_{m=1}^M
 p^{\mathrm{mod}}_{ij,m}\,\log p^{\mathrm{mod}}_{ij,m}.
 \]
-Higher entropy indicates ambiguous or code-switched spans, which can guide exploration early in training.
+Higher entropy indicates uncertainty, useful for early training exploration or hybrid domains.
 
-This soft‐typing serves three roles:
+\subsubsection{Auxiliary Supervision}
 
-1. \textbf{Auxiliary supervision.}  
-When gold labels \(y^{\mathrm{gold}}_{ij}\in\{0,1\}^M\) are available, we incur a cross‐entropy loss
+When gold labels \(y^{\mathrm{gold}}_{ij}\in\{0,1\}^M\) are available, we optimize:
 \[
 \mathcal{L}_{\mathrm{mod}}
 = -\sum_{(i,j)\in S}
 \sum_{m=1}^M
 y^{\mathrm{gold}}_{ij,m}\,\log p^{\mathrm{mod}}_{ij,m}.
 \]
-This signal improves zero-shot transfer and multimodal fluency \cite{khashabi2020unifiedqa, gupta2022molt}.
+This improves zero-shot transfer across modalities \cite{khashabi2020unifiedqa,gupta2022molt}.
 
-2. \textbf{Conditional routing.}  
-During inference, the distribution \(p^{\mathrm{mod}}_{ij}\) can gate span embeddings through specialized adapters or decoder blocks. For example, a modality embedding
+\subsubsection{Conditional Routing}
+
+During inference, \(p^{\mathrm{mod}}_{ij}\) can modulate decoder behavior:
 \[
-e^{\mathrm{mod}}_{ij}
-= p^{\mathrm{mod}}_{ij}\,E_{\mathrm{mod}}
-\quad\text{with}\quad
-E_{\mathrm{mod}}\in\mathbb{R}^{M\times d}
+e^{\mathrm{mod}}_{ij} = p^{\mathrm{mod}}_{ij} \cdot E_{\mathrm{mod}},
+\quad
+E_{\mathrm{mod}}\in\mathbb{R}^{M\times d}.
 \]
-may be concatenated to \(v_{ij}\) or used to bias attention \cite{li2021prefix}.
+This embedding may be concatenated to \(v_{ij}\) or used to bias attention heads \cite{li2021prefix}.
 
-3. \textbf{Interpretability.}  
-The entropy and class‐probabilities expose which semantic stream each span belongs to, aiding diagnostics in mixed‐modality settings \cite{lin2021codemix, tay2021charformer}.
+\subsubsection{Interpretability}
 
-\medskip
-\noindent
-\emph{Integration into Span Scoring.}  
-We incorporate modality features into the span scoring MLP \(f_{\mathrm{score}}\) used in Section 3.7.  Let
+The modality entropy and distribution expose latent semantic domains of each span, aiding mixed‐modality diagnostics and span alignment analysis \cite{lin2021codemix, tay2021charformer}.
+
+\subsubsection{Integration into Span Scoring}
+
+We incorporate modality typing into the span relevance MLP \(f_{\mathrm{score}}\) (Sec.~\ref{sec:span-interpolation}). Define:
 \[
-d_{ij} = j - i + 1,\quad
-c_{ij} = p^s_i\,p^e_j
+d_{ij} = j - i + 1,
+\quad
+c_{ij} = p^s_i\,p^e_j.
 \]
-be the span length and boundary confidence.  We form the feature vector
+Let \(\phi(d_{ij})\in\mathbb{R}^D\) be a learned embedding of span length. Form the joint feature vector:
 \[
-x_{ij} = \bigl[
+x_{ij}
+= \bigl[
 v_{ij};
 \phi(d_{ij});
 p^{\mathrm{mod}}_{ij};
 H^{\mathrm{mod}}_{ij};
 c_{ij}
-\bigr]\;\in\;\mathbb{R}^{\,d + D + M + 1 + 1},
+\bigr]
+\in \mathbb{R}^{d + D + M + 1 + 1}.
 \]
-where \(\phi(d)\in\mathbb{R}^{D}\) is a learned length‐embedding.  Then
+We compute relevance weight:
 \[
-w_{ij} = \mathrm{MLP}_{\mathrm{score}}\bigl(x_{ij}\bigr), 
-\qquad
+w_{ij} = \mathrm{MLP}_{\mathrm{score}}(x_{ij}),
+\quad
 a_{ij} = \frac{\exp(w_{ij})}{\sum_{(p,q)\in S'}\exp(w_{pq})}.
 \]
-This joint conditioning on content, length, type, and confidence yields well‐calibrated relevance weights for overlapping spans.
+
+\begin{proposition}[Modality‐Aware Relevance Weighting]
+	Let \(x_{ij}\in\mathbb{R}^d\) be a span descriptor including content, length, boundary confidence, and modality entropy.  Then the normalized weight
+	\[
+	a_{ij}
+	= \frac{\exp\bigl(\mathrm{MLP}(x_{ij})\bigr)}
+	{\sum_{(p,q)\in S'} \exp\bigl(\mathrm{MLP}(x_{pq})\bigr)}
+	\]
+	defines a probability distribution over spans in \(S'\), with preference toward spans that match learned structural and semantic type priors.
+\end{proposition}
+
+\begin{proof}
+	\textbf{Step 1: Positivity and normalization}
+	
+	For each \((i,j)\in S'\), let \(w_{ij} = \mathrm{MLP}(x_{ij})\).  Since \(\exp(w_{ij})>0\), it follows immediately that
+	\[
+	a_{ij} > 0.
+	\]
+	Moreover,
+	\[
+	\sum_{(i,j)\in S'} a_{ij}
+	= \sum_{(i,j)\in S'} \frac{\exp(w_{ij})}{\sum_{(p,q)\in S'}\exp(w_{pq})}
+	= \frac{\sum_{(i,j)\in S'}\exp(w_{ij})}{\sum_{(p,q)\in S'}\exp(w_{pq})}
+	= 1.
+	\]
+	
+	\textbf{Step 2: Preference via logits}
+	
+	Because \(a_{ij}\) is obtained by applying the softmax to the logits \(\{w_{pq}\}\), it is strictly increasing in its own logit and decreasing in the others.  Concretely, if for two spans
+	\(\;w_{ij} > w_{p'q'}\), then
+	\[
+	a_{ij} = \frac{\exp(w_{ij})}{\sum\exp(w)} 
+	> \frac{\exp(w_{p'q'})}{\sum\exp(w)} = a_{p'q'}.
+	\]
+	Since \(w_{ij}=\mathrm{MLP}(x_{ij})\) incorporates modality distribution \(p^{\mathrm{mod}}_{ij}\) and entropy \(H^{\mathrm{mod}}_{ij}\), spans with lower entropy and stronger modality alignment receive higher \(w_{ij}\) and thus larger \(a_{ij}\).
+	
+	\textbf{Step 3: Explicit softmax form}
+	
+	Combining the above, we recover the stated formula
+	\[
+	a_{ij}
+	= \frac{\exp\bigl(\mathrm{MLP}(x_{ij})\bigr)}
+	{\sum_{(p,q)\in S'} \exp\bigl(\mathrm{MLP}(x_{pq})\bigr)},
+	\]
+	which is a valid probability distribution over \(S'\) that embeds learned modality‐aware preferences.
+\end{proof}

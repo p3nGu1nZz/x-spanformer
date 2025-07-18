@@ -1,28 +1,19 @@
 \section{Related Work}
 
 \subsection{Static Subword Tokenization}
-Traditional transformer pipelines segment text into fixed subwords, most commonly via Byte-Pair Encoding (BPE) \cite{sennrich2016bpe} or unigram‐LM tokenizers such as SentencePiece \cite{kudo2018sentencepiece}.  These methods produce compact, efficient lookup tables and underpin many large-scale models \cite{vaswani2017attention,devlin2019bert,raffel2020t5}, but their immutable vocabularies (i) cannot adapt during training, (ii) fragment rare or compositional phrases under domain shift \cite{galle2021respite}, and (iii) require expensive re-tokenization when new syntax or terminology appear.
+Conventional transformer pipelines rely on fixed subword vocabularies, most prominently Byte‐Pair Encoding (BPE) \cite{sennrich2016bpe} and Unigram‐LM tokenizers such as SentencePiece \cite{kudo2018sentencepiece}. These methods facilitate efficient embedding lookup and strong in‐domain performance, but their immutable vocabularies cannot adapt during training, fragment compositional or rare phrases under domain shift \cite{galle2021respite}, and necessitate costly re‐tokenization when new syntax or terminology arise.
 
 \subsection{Character- and Byte-Level Encoders}
-To remove the subword bottleneck, several works operate directly on characters or bytes.  Charformer learns latent splits via gradient-based tokenization during training \cite{tay2021charformer}.  CANINE processes raw Unicode codepoints with down- and up-sampling layers, matching BPE baselines on transfer tasks \cite{clark2021canine}.  ByT5 further explores byte-level modeling for fully token-free representations \cite{xue2022byt5}.  These approaches eliminate offline heuristics but do not explicitly model overlapping or hierarchical spans.
+To eliminate subword heuristics, character‐ and byte‐level models process raw codepoints directly. Charformer \cite{tay2021charformer} learns latent splits via gradient‐based tokenization, CANINE \cite{clark2021canine} applies down‐ and up‐sampling around raw Unicode, and ByT5 \cite{xue2022byt5} explores purely byte‐level inputs. While these approaches remove offline segmentation, they do not produce overlapping or hierarchical spans and rely on global self‐attention for context.
 
-\subsection{Differentiable Span Discovery}
-Unsupervised segmentation methods integrate boundary induction into neural pretraining.  Morfessor uses minimum description‐length for morpheme discovery \cite{creutz2005unsupervised}.  Probabilistically Masked Language Models (PMLM) learn to mask and predict spans \cite{liu2022pmlm}, while other works optimize reconstruction losses to induce segmentation for text-to-text tasks \cite{liu2022learnedsegmentation}.  These differentiable methods yield end-to-end learning but generate non-overlapping partitions without explicit linguistic structure.
+\subsection{Differentiable Segmentation}
+Unsupervised and differentiable segmentation integrates boundary induction into neural pretraining. Morfessor \cite{creutz2005unsupervised} applies minimum description‐length to discover morphemes. Probabilistically Masked Language Models \cite{liu2022pmlm} and learned‐segmentation models \cite{liu2022learnedsegmentation} optimize reconstruction objectives to induce non‐overlapping partitions. These methods enable end‐to‐end learning but lack explicit modeling of overlapping spans or linguistic structure.
 
-\subsection{Span-Based and Pointer-Network Models}
-Pointer networks predict variable-length spans by emitting start/end indices \cite{vinyals2015pointer}.  SpanBERT applies this in pretraining by masking contiguous spans and reconstructing them \cite{joshi2020spanbert}.  In vision and speech, learned segmenters output overlapping proposals for improved alignment \cite{ren2015faster,zach2019segmenter}.  However, prior work does not integrate pointer-based, overlapping span prediction with generative grammar priors in transformer encoders.
+\subsection{Span-Based and Pointer Networks}
+Pointer networks \cite{vinyals2015pointer} predict arbitrary start–end pairs to locate variable‐length spans. SpanBERT \cite{joshi2020spanbert} leverages this for masked span reconstruction, and similar architectures in vision and speech generate overlapping proposals for improved alignment \cite{ren2015faster,zach2019segmenter}. However, prior work has not combined pointer‐based, overlapping span induction with explicit grammar‐inspired priors within transformer encoders.
 
 \subsection{Bridging Static and Dynamic Segmentation}
-Recent efforts seek a middle ground between rigid subwords and unstructured bytes.  Gradient-based BPE merges (Charformer) and hybrid vocabularies (static subwords plus characters) improve robustness \cite{tay2021charformer,clark2021canine}.  Our approach extends these ideas by training a hybrid Unigram-LM front-end—combining full‐coverage characters with entropy-pruned subwords—then learning overlapping, softly typed spans via a pointer network with length and modality priors.
+Hybrid vocabularies that merge character coverage with static subwords have been proposed to improve robustness \cite{tay2021charformer,clark2021canine}. Our approach extends this paradigm by training a hybrid Unigram‐LM front end—induced by an EM procedure approximated via Viterbi decoding and pruned on perplexity and OOV thresholds—implemented as an ONNX custom operator. We then employ a convolutional encoder to contextualize soft assignments, a factorized pointer network to propose overlapping spans, and a modality‐aware scoring mechanism to filter and fuse spans into a controller vector for downstream transformer injection.
 
-\subsection{Summary}
-Segmentation strategies span:
-
-\begin{itemize}
-	\item Offline subwords (BPE, Unigram) that are efficient but inflexible under domain shift \cite{sennrich2016bpe,kudo2018sentencepiece,galle2021respite}.
-	\item Character- or byte-level encoders that remove heuristics but lack explicit higher-order units \cite{tay2021charformer,clark2021canine,xue2022byt5}.
-	\item Differentiable segmentation that produces non-overlapping partitions without linguistic priors \cite{creutz2005unsupervised,liu2022learnedsegmentation,liu2022pmlm}.
-	\item Span-based predictors that yield flexible proposals but have not been grounded in phrase structure \cite{vinyals2015pointer,joshi2020spanbert}.
-\end{itemize}
-
-X-Spanformer unifies pointer-based, overlapping span prediction with X-bar–inspired inductive biases, yielding dynamic, interpretable spans that integrate seamlessly into transformer encoders for end-to-end training.
+\medskip
+In contrast to purely static tokenizers, character‐level models, and non‐overlapping segmentation methods, X‐Spanformer unifies hybrid vocabulary induction, differentiable Viterbi‐based pruning, convolutional contextualization, and pointer‐network span prediction under a single, ONNX‐native framework. This design yields dynamic, interpretable spans that adapt to domain shifts and can be optimized end‐to‐end alongside downstream tasks.  

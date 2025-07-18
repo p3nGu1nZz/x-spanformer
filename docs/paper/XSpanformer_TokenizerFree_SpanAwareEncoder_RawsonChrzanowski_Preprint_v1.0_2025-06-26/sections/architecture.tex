@@ -1,31 +1,32 @@
 \section{Architecture}
 
-This section formalizes the modular components of X-Spanformer and their interactions within the segmentation pipeline. Each architectural unit is motivated, given a precise mathematical formulation, and illustrated with pseudocode where appropriate. We conclude with strategies for integrating the fused span controller into standard transformer encoders and analyze runtime complexity.
+This section formalizes the modular components of X-Spanformer and their interactions within the segmentation pipeline.  Each architectural unit is motivated, given a precise mathematical formulation, and illustrated with pseudocode where appropriate.  We conclude with strategies for integrating the fused span controller into standard transformer encoders and analyze runtime complexity.
 
-X-Spanformer begins with a hybrid Unigram-LM vocabulary\footnote{\label{fn:unigram}The vocabulary comprises all unique UTF-8 characters in the corpus plus the top \(N\) entropy-pruned subword fragments learned by a Unigram LM (e.g., \(N\approx1000\)) using the SentencePiece toolkit in Unigram mode \cite{kudo2018sentencepiece,rawson2025streammix}.} that replaces hard token boundaries with soft, probabilistic segmentation. A custom ONNX operator ingests raw Unicode codepoints of length \(T\) and computes a probability matrix  
+X-Spanformer begins with a hybrid Unigram-LM vocabulary\footnote{Learned via EM over substrings up to length \(L_{\max}\); see Sec.~\ref{sec:vocab-induction} for details.} that replaces hard token boundaries with soft, probabilistic segmentation.  A custom ONNX operator ingests raw Unicode codepoints of length \(T\) and computes a probability matrix  
 \[
-P \in \mathbb{R}^{T \times V}, 
+P \;\in\;\mathbb{R}^{T\times V}, 
 \quad
-P_{t,i} = \Pr(\text{piece }u_i \text{ starts at position }t),
+P_{t,i} = \Pr(\text{piece }u_i\text{ starts at position }t),
 \]
-where \(V\) is the vocabulary size. We embed these soft piece probabilities via  
+where \(V\) is the induced vocabulary size.  We embed these soft piece probabilities via  
 \[
-H^0 = P\,W_{\mathrm{emb}}, 
+H^0 = P\,W_{\mathrm{emb}},
 \quad
-W_{\mathrm{emb}}\in\mathbb{R}^{V\times d},\quad d=512,
+W_{\mathrm{emb}}\in\mathbb{R}^{V\times d},
 \]
-yielding seed embeddings \(H^0\in\mathbb{R}^{T\times d}\). From these low-level vectors, the model:
+yielding seed embeddings \(H^0\in\mathbb{R}^{T\times d}\).  From these low-level vectors, the model:
 
 \begin{itemize}
 	\item Extracts a ranked span set \(S=\{(i_k,j_k)\}_{k=1}^K\) with \(1\le i_k<j_k\le T\) via a pointer network \cite{vinyals2015pointer}.
-	\item Pools each span \((i_k,j_k)\) into a \(d\)-dimensional embedding \(s_{i_k j_k}\) (mean or gated pooling) \cite{tay2021charformer}.
-	\item Predicts soft modality distributions \(p^\mathrm{type}_{i_k j_k}\in\Delta^T\), reflecting types such as code, natural language, or identifier \cite{lin2021codemix,li2021prefix}.
+	\item Pools each span \((i_k,j_k)\) into a \(d\)-dimensional embedding \(s_{i_kj_k}\) (mean or gated pooling) \cite{tay2021charformer}.
+	\item Predicts soft modality distributions \(p^\mathrm{type}_{i_kj_k}\in\Delta^M\), reflecting types such as code, natural language, or identifier \cite{lin2021codemix,li2021prefix}.
 	\item Filters down to a final span set \(S'\subseteq S\) via a learned length estimator \cite{cheng2021masked}.
 \end{itemize}
 
-Span-level augmentation parallels auxiliary token insertion in models like SpanBERT \cite{joshi2020spanbert} but operates on soft, overlapping spans rather than hard subwords. All modules—from boundary scoring to controller fusion—are fully differentiable and trained end-to-end with the downstream encoder.
+Span-level augmentation parallels auxiliary token insertion in models like SpanBERT \cite{joshi2020spanbert} but operates on soft, overlapping spans rather than hard subwords.  All modules—from boundary scoring to controller fusion—are fully differentiable and trained end-to-end with the downstream encoder.
 
-% pull in each detailed subsection:
+% New subsection: vocabulary induction
+\input{architecture/3_0_vocab_induction}
 \input{architecture/3_1_seed_embeddings}
 \input{architecture/3_2_span_predictor}
 \input{architecture/3_3_length_estimator}

@@ -1,55 +1,91 @@
 \subsection{Span Interpolation for Overlap Resolution}
+\label{sec:span-interpolation}
 
-After filtering, we have a set of \(K'\) overlapping span embeddings
-\(\{s_k\}_{k=1}^{K'}\subset\mathbb{R}^d\) corresponding to spans \(\{(i_k,j_k)\}\).  Rather than injecting each \(s_k\) separately, we compute a single global summary via a soft interpolation:
+After filtering, we obtain a set of overlapping span embeddings \(\{s_{ij}\}_{(i,j)\in S'}\subset\mathbb{R}^d\). Rather than injecting each span separately, we compute a single fused controller vector \(\tilde{s}\in\mathbb{R}^d\) via relevance‐weighted interpolation.
 
+\subsubsection{Soft Interpolation}
+
+For each span \((i,j)\in S'\), we define its relevance logit:
 \begin{equation}
-	\tilde s \;=\;
-	\sum_{k=1}^{K'} \alpha_k\,s_k,
+	w_{ij} = f_{\mathrm{score}}\bigl(
+	s_{ij},\;
+	\phi(\delta_{ij}),\;
+	p^{\mathrm{mod}}_{ij},\;
+	H^{\mathrm{mod}}_{ij},\;
+	\log c_{ij}
+	\bigr),
+	\label{eq:relevance_score}
+\end{equation}
+where:
+- \(\delta_{ij} = j - i + 1\),
+- \(\phi(\delta_{ij})\in\mathbb{R}^D\) is a learned embedding,
+- \(p^{\mathrm{mod}}_{ij}\in\Delta^M\) is the modality distribution,
+- \(H^{\mathrm{mod}}_{ij}\) is entropy (Sec.~\ref{sec:modality-typing}),
+- \(c_{ij} = p^s_i\,p^e_j\) is the boundary confidence.
+
+We normalize via softmax:
+\begin{equation}
+	\alpha_{ij} = \frac{\exp(w_{ij})}{\sum_{(p,q)\in S'}\exp(w_{pq})},
 	\quad
-	\alpha_k \;=\;\frac{\exp(w_k)}{\sum_{m=1}^{K'}\exp(w_m)},
+	\tilde{s} = \sum_{(i,j)\in S'} \alpha_{ij}\,s_{ij}.
 	\label{eq:span_interp}
 \end{equation}
 
-where the relevance logits \(w_k\in\mathbb{R}\) are computed by a learned scoring function:
+This formulation parallels soft-attention in retrieval-augmented models \cite{guu2020retrieval,izacard2020distilling} and expert fusion \cite{arora2022exsum}.
 
-\begin{equation}
-	w_k \;=\; f_{\mathrm{score}}\bigl(
-	s_k,\;\phi(\delta_k),\;p^{\mathrm{mod}}_k,\;H^{\mathrm{mod}}_k,\;\log c_k
-	\bigr).
-	\label{eq:relevance_score}
-\end{equation}
+\subsubsection{Theoretical Properties}
 
-Here  
-\(\delta_k=j_k-i_k+1\)  
-is the span length embedding \(\phi(\delta_k)\in\mathbb{R}^D\),  
-\(p^{\mathrm{mod}}_k\in\Delta^M\) its modality distribution,  
-\(H^{\mathrm{mod}}_k\) the modality entropy (Section 3.4),  
-and \(c_k=p^s_{i_k}p^e_{j_k}\) the boundary confidence.  
-
-Because each \(\alpha_k\) is positive and sums to 1 (Equation \ref{eq:span_interp}), \(\tilde s\) is a convex combination of the span vectors.  This interpolation parallels soft‐attention or memory‐reading mechanisms in retrieval‐augmented models \cite{guu2020retrieval,izacard2020distilling} and mixture‐of‐experts fusion \cite{arora2022exsum}.
-
-\begin{figure}[t]
-	\centering
-	\includegraphics[width=0.95\textwidth]{figures/figure_1.png}
-	\caption{Overlap‐aware interpolation of span embeddings.  Each span \(s_k\) is scored by \(w_k\), normalized to \(\alpha_k\), and fused into \(\tilde s\), which then conditions the transformer (Section 3.6).}
-	\label{fig:span_interpolation}
-\end{figure}
-
-\begin{proposition}[Permutation Equivariance \& Convexity]
-	Let \(\{(s_k,w_k)\}_{k=1}^{K'}\) be any reordered set of span‐logit pairs.  Then:
+\begin{proposition}[Span Interpolation: Equivariance, Differentiability, Convexity, Boundedness]
+	Let \(S' = \{(i,j)\}\) be any ordered span set with embeddings \(\{s_{ij}\in\mathbb{R}^d\}\) and scores \(\{w_{ij}\in\mathbb{R}\}\). Then:
 	\begin{enumerate}
-		\item \emph{Permutation equivariant}: \(\tilde s\) is invariant to reordering of \(\{s_k\}\).  
-		\item \emph{Differentiable}: gradients flow through both \(w_k\) and \(s_k\).  
-		\item \emph{Convex}: \(\tilde s\in\mathrm{conv}\{s_k\}_{k=1}^{K'}\).  
+		\item \textbf{Permutation equivariant:}
+		\(\tilde{s}\) is invariant to reordering of \((s_{ij}, w_{ij})\).
+		\item \textbf{Differentiable:}
+		\(\tilde{s}\) is differentiable w.r.t.\ both scores and embeddings.
+		\item \textbf{Convex:}
+		\(\tilde{s} \in \mathrm{conv}\{s_{ij}\}_{(i,j)\in S'}\).
+		\item \textbf{Norm‐bounded:}
+		If \(\|s_{ij}\|_2 \le B\), then \(\|\tilde{s}\|_2 \le B\).
 	\end{enumerate}
 \end{proposition}
+
 \begin{proof}
-	Equivariance follows since the softmax in Equation \ref{eq:span_interp} is order‐invariant.  Differentiability holds by the smoothness of \(f_{\mathrm{score}}\) and the linear combination.  Convexity arises because \(\tilde s\) is a positive‐weighted sum of \(\{s_k\}\) with \(\sum_k\alpha_k=1\).
+	\textbf{Equivariance:} Softmax weights \(\alpha_{ij}\) depend only on relative magnitudes of \(w_{ij}\) and not index order. Reordering inputs yields the same output.
+	
+	\textbf{Differentiability:} \(w_{ij}\) is produced via an MLP \(f_{\mathrm{score}}\), and \(\tilde{s}\) is a weighted linear combination. The entire computation is smooth.
+	
+	\textbf{Convexity:}
+	\[
+	\alpha_{ij} \ge 0,\quad \sum_{(i,j)} \alpha_{ij} = 1
+	\;\Rightarrow\;
+	\tilde{s} \in \mathrm{conv}\{s_{ij}\}.
+	\]
+	
+	\textbf{Boundedness:} If \(\|s_{ij}\|_2 \le B\) for all \((i,j)\), then
+	\[
+	\|\tilde{s}\|_2
+	\le \sum_{(i,j)} \alpha_{ij} \|s_{ij}\|_2
+	\le \sum \alpha_{ij} B = B.
+	\]
 \end{proof}
 
-\paragraph{Computational Cost}  
-Computing all \(w_k\) costs \(O(K'd_f)\) (for an MLP of hidden size \(d_f\)), plus \(O(K')\) for softmax.  The final weighted sum costs \(O(K'd)\).  Since \(K'\) is kept small by length filtering and top-\(K\) selection, this interpolation is efficient.
+\subsubsection{Computational Cost}
 
-\paragraph{Downstream Integration}  
-The fused controller \(\tilde s\) is injected into the transformer as described in Section 3.6 (prefix, attention bias, or gated FFN), enabling full end-to-end learning.
+Let \(K'\) be the number of retained spans after filtering (Sec.~\ref{sec:length-estimator}). For each span \((i,j)\in S'\), we compute a relevance logit \(w_{ij} = f_{\mathrm{score}}(x_{ij})\), where \(f_{\mathrm{score}}\) is a feed-forward network with hidden dimension \(d_f\). This scoring step requires \(O(K' d_f)\) operations.
+
+Next, the softmax normalization over \(\{w_{ij}\}\) is computed in \(O(K')\) time:
+\[
+\alpha_{ij} = \frac{\exp(w_{ij})}{\sum_{(p,q)\in S'}\exp(w_{pq})}.
+\]
+
+Finally, the fused controller vector
+\[
+\tilde{s} = \sum_{(i,j)\in S'} \alpha_{ij}\,s_{ij}
+\]
+involves a weighted summation over \(K'\) vectors of dimension \(d\), incurring a cost of \(O(K'd)\).
+
+Since \(K'\ll T^2\) due to length filtering, gating, and top-\(K\) selection, the total interpolation cost remains linear in the span count and embedding dimension. This makes relevance-based fusion tractable even for long sequences.
+
+\subsubsection{Transformer Injection}
+
+The fused controller \(\tilde{s}\) is injected into the downstream transformer encoder via the strategies in Sec.~\ref{sec:controller-fusion} (prefix token, attention bias, gated FFN). End-to-end gradients flow into all upstream components, enabling adaptive span weighting, entropy regularization, and modality‐conditioned interpolation.

@@ -1,53 +1,70 @@
 \subsection{Span Predictor}
+\label{sec:span-predictor}
 
-Given the contextualized embeddings 
+Given contextualized embeddings 
 \[
 H \;\in\;\mathbb{R}^{T\times d},
 \]
-we use two parallel linear heads (a factorized pointer network \cite{vinyals2015pointer}) to predict span boundaries. Concretely, we compute
-
+we first form the candidate span set:
 \[
-\ell^s \;=\; W_s H + b_s,\quad
-p^s \;=\;\softmax(\ell^s), 
+C \;=\;\{(i,j)\mid 1 \le i < j \le T,\; j - i \le w_{\max}\},
+\]
+as defined in Sec.~\ref{sec:seed-embeddings}. We then use two parallel linear heads—forming a factorized pointer network \cite{vinyals2015pointer}—to predict span boundaries:
+\[
+\ell^s = W_s\,H + b_s,
+\quad
+p^s = \softmax(\ell^s),
 \qquad
-\ell^e \;=\; W_e H + b_e,\quad
-p^e \;=\;\softmax(\ell^e),
+\ell^e = W_e\,H + b_e,
+\quad
+p^e = \softmax(\ell^e),
 \]
-where \(\ell^s,\ell^e\in\mathbb{R}^T\), and \(p^s_i\) (resp.\ \(p^e_j\)) is the probability that a span begins at position \(i\) (ends at \(j\)).  
+where \(W_s,W_e\in\mathbb{R}^{T\times d}\), \(b_s,b_e\in\mathbb{R}^T\), and \(p^s_i\), \(p^e_j\) denote the probabilities that a span begins at position \(i\) and ends at position \(j\), respectively.
 
-Each candidate span \((i,j)\in C\) is scored by the product of its boundary probabilities:
+Each span \((i,j)\in C\) is scored by the outer-product of its boundary probabilities:
 \[
-\mathrm{score}(i,j) 
-\;=\; p^s_i \;\cdot\; p^e_j.
+\mathrm{score}(i,j) = p^s_i\,p^e_j.
 \]
-This outer‐product scoring efficiently captures start–end salience and has been widely used in QA and entity extraction \cite{lee2016learning,xu2022faster}.  
+This method efficiently captures boundary salience and mirrors successful strategies in QA and span-based extraction models \cite{lee2016learning,xu2022faster}.
 
-We then select the top-\(K\) spans by marginal likelihood:
+We then select the top-\(K\) spans by score:
 \[
-S 
-= \TopK\bigl\{\mathrm{score}(i,j)\mid (i,j)\in C\bigr\}.
+S = \TopK\bigl\{\,\mathrm{score}(i,j)\;\mid\;(i,j)\in C\,\bigr\}.
 \]
 
 \begin{proposition}[Top-\(K\) Marginal Likelihood]
-	Let \(p^s,p^e\in\Delta^T\) be independent start/end distributions over \(T\) positions.  Define 
+	\label{prop:topk-marginal}
+	Let \(p^s,p^e\in\Delta^T\) be independent distributions over start and end positions. For each span \((i,j)\in C\), define
 	\[
-	P(i,j)\;=\;p^s_i\,p^e_j
-	\quad
-	\text{for all }(i,j)\in C=\{1\le i<j\le T\}.
+	P(i,j) = p^s_i\,p^e_j.
 	\]
-	Then the set 
-	\(
-	S=\TopK\{P(i,j)\}
-	\)
-	maximizes the total probability mass over all \(K\)-sized span subsets:
+	Then the top-\(K\) spans by \(P(i,j)\) maximize total mass among all subsets of size \(K\):
 	\[
-	S
-	\;=\;
-	\arg\max_{\substack{S'\subseteq C\\|S'|=K}}
-	\sum_{(i,j)\in S'}P(i,j).
+	S 
+	= \arg\max_{\substack{S'\subseteq C\\|S'|=K}} \sum_{(i,j)\in S'} P(i,j).
 	\]
 \end{proposition}
 
 \begin{proof}
-	Since \(P(i,j)\ge0\) and additive, greedily selecting the top \(K\) values of \(P(i,j)\) maximizes \(\sum_{(i,j)\in S'}P(i,j)\).  Independence ensures no additional interaction terms.
+	We aim to solve
+	\[
+	\max_{\substack{S'\subseteq C\\|S'|=K}} \sum_{(i,j)\in S'} P(i,j).
+	\]
+	\textbf{Step 1:} The objective is additive in \(P(i,j)\), and all terms are non-negative:
+	\[
+	P(i,j)\ge0,\quad \text{so } \sum_{(i,j)\in S'} P(i,j) \text{ increases with high-mass elements}.
+	\]
+	\textbf{Step 2:} Sorting all \((i,j)\in C\) by \(P(i,j)\), selecting the \(K\) largest entries yields the subset with maximal total mass:
+	\[
+	S = \TopK\{P(i,j)\}.
+	\]
+	\textbf{Step 3:} Since \(p^s\) and \(p^e\) are independent, there are no interaction terms across spans—greedy selection remains optimal.
+	
+	\textbf{Conclusion:}
+	\[
+	\boxed{
+		S = \arg\max_{|S'|=K} \sum_{(i,j)\in S'} p^s_i\,p^e_j
+	}
+	\]
+	as claimed.
 \end{proof}

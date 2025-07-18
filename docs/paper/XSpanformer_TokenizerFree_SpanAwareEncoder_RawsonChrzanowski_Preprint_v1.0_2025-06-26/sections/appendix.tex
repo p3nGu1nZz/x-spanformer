@@ -6,41 +6,136 @@
 \label{sec:hyperparams}
 
 \begin{table}[H]
-  \centering
-  \begin{tabular}{@{}lcc@{}}
-    \toprule
-    Parameter & Value & Description \\
-    \midrule
-    Optimizer & AdamW & with decoupled weight decay \\
-    Learning rate schedule & Cosine decay & with 10\% warmup \\
-    Initial LR & 1e-4 & base LR used for all modules \\
-    Dropout & 0.1 & applied to all nonlinearity layers \\
-    Max grad norm & 1.0 & gradient clipping threshold \\
-    Epochs & 50 & full fine-tuning duration \\
-    Batch size & 64 & across all stages \\
-    Span width $w_{\max}$ & 10 & max width considered per token \\
-    Entropy $\lambda_0$ & 1.0 & initial entropy coefficient \\
-    Decay $\gamma$ & 0.1 & exponential decay rate \\
-    Span pooling strategy & Gated self-attention & with key-query masking and layer norm \\
-    \bottomrule
-  \end{tabular}
-  \caption{Hyper-parameters used in all experiments. Span -embeddings are pooled using \texttt{Pool}$(x_{i:j})$, which may implement mean, max, or gated self-attention over the selected token embeddings. Ablation configurations and experimental notes appear below.}
+	\centering
+	\begin{tabular}{@{}lcc@{}}
+		\toprule
+		Parameter & Value & Description \\
+		\midrule
+		Optimizer & AdamW & with decoupled weight decay \\
+		Learning rate schedule & Cosine decay & with 10\% warmup \\
+		Initial LR & 1e-4 & base LR used for all modules \\
+		Dropout & 0.1 & applied to all nonlinearity layers \\
+		Max grad norm & 1.0 & gradient clipping threshold \\
+		Epochs & 50 & full fine-tuning duration \\
+		Batch size & 64 & across all stages \\
+		Span width $w_{\max}$ & 10 & max width considered per token \\
+		Entropy $\lambda_0$ & 1.0 & initial entropy coefficient \\
+		Decay $\gamma$ & 0.1 & exponential decay rate \\
+		Span pooling strategy & Gated self-attention & with key-query masking and layer norm \\
+		\bottomrule
+	\end{tabular}
+	\caption{Hyper-parameters used in all experiments. Span embeddings are pooled using \texttt{Pool}$(x_{i:j})$, which may implement mean, max, or gated self-attention over the selected token embeddings.}
 \end{table}
 
 \subsection{Additional Experimental Details}
 \label{sec:extra-exp}
+
 \begin{itemize}[leftmargin=1.5em]
-    \item All models trained on a single A100 GPU.
-    \item Training time per epoch ranged from 1.1–2.3 minutes depending on task and sequence length.
-    \item Code will be released with reproducible seeds and configuration files.
+	\item All models trained on a single NVIDIA A100 GPU.
+	\item Training time per epoch ranged from 1.1 to 2.3 minutes, depending on sequence length.
+	\item Random seeds and full configuration files will be released alongside the code for exact reproducibility.
 \end{itemize}
 
 \subsection{Extended Ablation Settings}
 \label{sec:ablation-settings}
+
 \begin{itemize}[leftmargin=1.5em]
-  \item \textbf{Fusion head variants}: Compared \texttt{MLP(w)} vs.\ \texttt{LayerNorm(MLP)} for $\alpha_k$ scoring. Gated units improved stability in low-entropy regimes.
-  \item \textbf{Routing depth}: Explored controller depth $d_c \in \{1, 2, 3\}$; performance plateaued beyond $d_c = 2$.
-  \item \textbf{Gradient gating}: Evaluated freezing $f_\theta$ for first 5 epochs to encourage stable $\mathcal{L}_{\mathrm{ent}}$ decay. Marginal performance trade-off observed.
-  \item \textbf{Span type probing}: Used auxiliary decoders (e.g., NER, chunking) as structural supervision for $\hat{P}_{\mathrm{gold}}$ in Equation~\eqref{eq:kl_span}. Slight gains in low-resource settings.
-  \item \textbf{Span pooling alternatives}: Replaced gated attention with mean/max pooling for spans; gated attention retained higher semantic alignment (measured by cosine with target label embeddings).
+	\item \textbf{Fusion head variants}: Compared \texttt{MLP(w)} vs.\ \texttt{LayerNorm(MLP)} for $\alpha_k$ scoring; gated units improved stability in low-entropy regimes.
+	\item \textbf{Routing depth}: Explored controller depth $d_c \in \{1,2,3\}$; performance plateaued beyond $d_c=2$.
+	\item \textbf{Gradient gating}: Evaluated freezing the span scorer for the first 5 epochs to stabilize $\mathcal{L}_{\mathrm{ent}}$ decay; small trade-offs observed.
+	\item \textbf{Span type probing}: Used auxiliary decoders (e.g., NER, chunking) to generate $\hat{P}_{\mathrm{gold}}$ in Equation~\eqref{eq:kl_span}; yielded slight gains in low-resource settings.
+	\item \textbf{Pooling alternatives}: Replaced gated attention with mean or max pooling; gated attention retained superior semantic alignment (measured via cosine similarity to label embeddings).
+\end{itemize}
+
+\subsection{Vocabulary Induction Pseudocode}
+\label{sec:induction-pseudocode}
+
+\begin{algorithm}[H]
+	\caption{Hybrid Unigram‐LM Vocabulary Induction (detailed)}
+	\label{alg:induction-detailed}
+	\begin{algorithmic}[1]
+		\STATE Extract all substrings up to length $L_{\max}$; retain top $M$ by frequency and all codepoints
+		\STATE Initialize $p^{(0)}(u) \propto \mathrm{freq}(u)$
+		\STATE Compute baseline perplexity $\mathrm{PPL}^{(0)}$ via Viterbi over $\mathcal X$
+		\FOR{$t=0$ \TO $T_{\max}$}
+		\STATE \textbf{E-step:} Viterbi decode $\mathrm{seg}^*_t(x)$ for each $x$
+		\STATE Collect counts $\gamma^{(t)}(u)\!=\!\sum_x\sum_{v\in\mathrm{seg}^*_t(x)}\mathbf1_{v=u}$
+		\STATE \textbf{M-step:} $p^{(t+1)}(u)\!=\!\gamma^{(t)}(u)\big/\sum_v\gamma^{(t)}(v)$
+		\FOR{each $u$ with $p^{(t+1)}(u)<\epsilon$}
+		\STATE Form $V' = V\setminus\{u\}$ and Viterbi decode $\mathrm{seg}^*_{V'}(x)$
+		\STATE Compute $L', N'_p, N'_{\mathrm{uncov}}$ as in Sec.~\ref{sec:vocab-induction}
+		\IF{$\exp(L'/N'_p)-\mathrm{PPL}^{(t)}<\tau_{\mathrm{ppl}}$ and $N'_{\mathrm{uncov}}/T\le\delta_{\mathrm{oov}}$}
+		\STATE Accept: $V\leftarrow V'$
+		\ENDIF
+		\ENDFOR
+		\STATE Update $\mathrm{PPL}^{(t+1)}$ on current $V$
+		\ENDFOR
+		\STATE \textbf{Return} $V$ and $\{p(u)\}$
+	\end{algorithmic}
+\end{algorithm}
+
+\subsection{Formal Proofs}
+\label{sec:proofs}
+
+\emph{Proof of Feasibility and Monotonicity} (Proposition in Sec.~\ref{sec:vocab-induction}).  
+\[
+V_0=\mathcal U_0\implies\mathrm{PPL}(V_0)=\mathrm{PPL}^{(0)},\;
+\mathrm{OOV}(V_0)=0,
+\]
+so $V_0\in\mathcal F(\tau,\delta)$ for any $\tau,\delta\ge0$.  If $\tau'\ge\tau,\delta'\ge\delta$, then for $V\in\mathcal F(\tau,\delta)$,
+\[
+\mathrm{PPL}(V)\le \mathrm{PPL}^{(0)}+\tau\le \mathrm{PPL}^{(0)}+\tau',
+\quad
+\mathrm{OOV}(V)\le\delta\le\delta',
+\quad\implies V\in\mathcal F(\tau',\delta'),
+\]
+establishing $\mathcal F(\tau,\delta)\subseteq\mathcal F(\tau',\delta')$ and the minimality relation.
+
+\subsection{Dataset Construction and Statistics}
+\label{sec:dataset}
+
+We constructed three corpora:
+\begin{itemize}[leftmargin=1.5em]
+	\item \textbf{Code subset:} 10M lines of Python and JavaScript, avg.\ length 120 codepoints.
+	\item \textbf{Multilingual subset:} 5M sentences across 10 languages, avg.\ 80 codepoints.
+	\item \textbf{Hybrid subset:} 2M docs mixing code and prose, avg.\ 200 codepoints.
+\end{itemize}
+All datasets were cleaned for control characters and split 80/10/10 for train/val/test.
+
+\subsection{ONNX Operator Implementation}
+\label{sec:onnx-op}
+
+The custom Unigram-LM operator is implemented in C++/CUDA for ONNX Runtime.  
+\begin{itemize}[leftmargin=1.5em]
+	\item \textbf{Inputs:} Raw codepoint tensor $[T]$, vocabulary table $\mathcal U_0$.
+	\item \textbf{Outputs:} Sparse probability matrix $P\in\mathbb{R}^{T\times V}$.
+	\item \textbf{Performance:} Processes 10\,000 tokens in 5ms on A100, including Viterbi decoding.
+\end{itemize}
+
+\subsection{Qualitative Segmentation Examples}
+\label{sec:qual-examples}
+
+\begin{table}[H]
+	\centering
+	\begin{tabular}{@{}p{0.4\linewidth}p{0.5\linewidth}@{}}
+		\toprule
+		Input & Top-3 Predicted Spans \\
+		\midrule
+		“def compute_sum(x, y):” & [def] [compute\_sum] [ (x, ] [y):] \\
+		“<html><body>Welcome!” & [<html>] [<body>] [Welcome] [!] \\
+		“Bonjour, comment ça va ?” & [Bonjour] [, ] [comment] [ça] [va] [?] \\
+		\bottomrule
+	\end{tabular}
+	\caption{Example segmentations with overlapping, variable-length spans and modality typing (code vs.\ punctuation vs.\ word).}
+\end{table}
+
+\subsection{Extended Evaluation Metrics}
+\label{sec:extended-metrics}
+
+In addition to the main metrics, we measured:
+\begin{itemize}[leftmargin=1.5em]
+	\item \textbf{Memory footprint:} peak GPU RAM during inference.
+	\item \textbf{Throughput:} tokens/sec on batch size 32 across corpora.
+	\item \textbf{Segmentation consistency:} IOU overlap of spans across runs with different seeds.
+	\item \textbf{Compression entropy:} average per-token entropy before and after pruning.
 \end{itemize}

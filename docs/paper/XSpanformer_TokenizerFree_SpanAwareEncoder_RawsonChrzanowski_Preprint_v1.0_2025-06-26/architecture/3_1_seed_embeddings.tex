@@ -1,26 +1,36 @@
 \subsection{Seed Embeddings and Candidate Set}
+\label{sec:seed-embeddings}
 
-The X-Spanformer pipeline ingests raw text as a sequence of Unicode codepoints of length \(T\). A custom Unigram‐LM operator—implemented as an ONNX custom op—computes soft piece probabilities over a hybrid vocabulary of size \(V\)\footnote{\label{fn:unigram}This vocabulary contains all unique UTF-8 characters plus the top \(N\) entropy-pruned subword fragments learned by a Unigram LM (e.g., \(N\approx1000\)) using SentencePiece in Unigram mode \cite{kudo2018sentencepiece,rawson2025streammix}.}:  
+The X-Spanformer pipeline begins with a sequence of \(T\) raw Unicode codepoints. We apply our custom Unigram‐LM operator (Sec.~\ref{sec:vocab-induction}), implemented as an ONNX custom op, to compute soft piece probabilities over the induced vocabulary \(V\):
 \[
-P \;\in\;\mathbb{R}^{T\times V}, 
-\quad 
+P \;\in\;\mathbb{R}^{T\times V},
+\quad
 P_{t,i} = \Pr\bigl(\text{piece }u_i\text{ starts at position }t\bigr).
 \]
+The vocabulary \(V\) comprises all single codepoints plus the final entropy‐ and perplexity‐pruned subword fragments.
 
-We embed these soft probabilities in one step:  
+These probabilities are embedded via a single matrix multiplication:
 \[
-H^0 \;=\; P\,W_{\text{emb}},
+H^0 = P\,W_{\mathrm{emb}},
 \quad
-W_{\text{emb}}\in\mathbb{R}^{V\times d},\quad d=512,
+W_{\mathrm{emb}}\in\mathbb{R}^{V\times d},
 \]
-yielding seed embeddings \(H^0\in\mathbb{R}^{T\times d}\). Optionally, \(H^0\) is fed through a lightweight contextual encoder:
-\[
-H \;=\;\mathrm{Encoder}\bigl(H^0\bigr)\;\in\;\mathbb{R}^{T\times d},
-\]
-where the encoder may be frozen or fine-tuned (e.g., Charformer \cite{tay2021charformer}, BERT \cite{devlin2019bert}, T5 \cite{raffel2020t5}).
+yielding initial seed embeddings \(H^0\in\mathbb{R}^{T\times d}\) for each input position.
 
-From the contextualized sequence \(H\), we form the exhaustive set of span candidates:
+\subsubsection{Contextual Encoder: Convolutional Pathway}
+
+To enrich these seed embeddings with contextual structure, we apply a lightweight convolutional encoder to produce the final representation \(H\in\mathbb{R}^{T\times d}\):
 \[
-C \;=\;\{(i,j)\mid 1 \le i < j \le T\}.
+H = \mathrm{ConvNet}(H^0),\quad \text{cost }O(T d^2).
 \]
-When \(T\) is large, enumeration can be pruned by a maximum span width \(w_{\max}\). This full candidate set is still compatible with global‐attention filtering and sparse attention schemes \cite{joshi2020spanbert,tay2021charformer}. Each span \((i,j)\) corresponds to the subsequence \([h_i,\dots,h_j]\), which the span predictor will score next.
+This encoder employs stacked or dilated 1D convolutions \cite{tay2021charformer}, providing fixed-window receptive fields that are tuned to capture short-range compositional patterns. By avoiding the quadratic complexity of self-attention, the convolutional encoder ensures scalability across long codepoint sequences and maintains a runtime that is linear in the input length.
+
+The design choice to adopt convolutional contextualization reflects the architectural goal of high-throughput segmentation in real-time or resource-constrained settings. While transformer-based encoders offer richer modeling of long-distance dependencies \cite{vaswani2017attention}, their runtime limits applicability for streaming inputs or modular deployments. In contrast, convolutional filters preserve local positional regularities critical for span induction—such as those arising in identifiers, literals, or markup—and enable reproducible, interpretable segmentation across diverse modalities. Empirical evidence on synthetic benchmarks further suggests that this encoder achieves robust span localization without sacrificing structural fidelity \cite{rawson2025streammix}.
+
+\subsubsection{Span Candidate Enumeration}
+
+Given the contextualized sequence \(H\), we enumerate all contiguous span candidates:
+\[
+C = \{(i,j)\mid 1 \le i < j \le T,\quad j - i + 1 \le w_{\max}\}.
+\]
+This restricts span width to \(w_{\max}\), reducing total candidates from quadratic to linear scale: \(|C| = O(T\,w_{\max})\). Each span \((i,j)\) corresponds to the subsequence \([h_i,\dots,h_j]\), which is passed to the boundary scorer and length filter in subsequent modules. The candidate set remains compatible with global-attention filtering and sparse attention schemes \cite{joshi2020spanbert,tay2021charformer}, ensuring scalability and modularity in downstream processing.
