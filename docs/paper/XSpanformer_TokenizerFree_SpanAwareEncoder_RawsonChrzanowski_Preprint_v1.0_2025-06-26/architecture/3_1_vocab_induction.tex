@@ -54,14 +54,26 @@ which reduces to relative frequency over the Viterbi segmentations.
 
 \subsubsection{Baseline Perplexity}
 
-To benchmark compressibility before pruning, we compute the initial corpus perplexity:
+To benchmark compressibility before pruning, we compute the initial corpus perplexity using piece-level normalization for consistency with the pruning criterion:
 \[
 \mathrm{PPL}^{(0)}
 = \exp\left(
--\frac{1}{|\mathcal X|} \sum_{x\in\mathcal X} \log \prod_{v \in \mathrm{seg}^{*}(x)} p^{(0)}(v)
+\frac{L^{(0)}}{N_{p}^{(0)}}
 \right),
 \]
-where \(\mathrm{seg}^{*}(x)\) is the Viterbi segmentation under \(p^{(0)}\).
+where:
+\[
+L^{(0)} = -\sum_{x\in\mathcal X}\;\sum_{v\in\mathrm{seg}^{*}(x)}\log p^{(0)}(v)
+\quad\text{(negative log-likelihood of all pieces)},
+\]
+\[
+N_{p}^{(0)} = \sum_{x\in\mathcal X} \bigl|\mathrm{seg}^{*}(x)\bigr|
+\quad\text{(total number of pieces)},
+\]
+and \(\mathrm{seg}^{*}(x)\) is the Viterbi segmentation under \(p^{(0)}\).
+
+\paragraph{Mathematical Consistency Note:} 
+This piece-level normalization ensures that the baseline perplexity \(\mathrm{PPL}^{(0)}\) and pruning perplexity \(\mathrm{PPL}'\) use the same normalization scheme, enabling meaningful comparison in the pruning criterion \(\mathrm{PPL}' - \mathrm{PPL}^{(t)} < \tau_{\mathrm{ppl}}\). An alternative sequence-level baseline would divide by \(|\mathcal X|\) instead of \(N_{p}^{(0)}\), but this would make the pruning comparison mathematically invalid since \(\mathrm{PPL}'\) uses piece-level normalization.
 
 
 
@@ -210,7 +222,7 @@ To construct an efficient and corpus-aware subword vocabulary, we apply an expec
 	\begin{algorithmic}[1]
 		\STATE Extract candidate substrings up to length \(L_{\max}\) from corpus \(\mathcal{X}\); form initial vocabulary \(\mathcal{U}_0\)
 		\STATE Initialize piece probabilities: \(p^{(0)}(u) \propto \mathrm{freq}(u)\) for all \(u \in \mathcal{U}_0\)
-		\STATE Compute baseline perplexity \(\mathrm{PPL}^{(0)}\) via Viterbi decoding over \(\mathcal{X}\)
+		\STATE Compute baseline perplexity \(\mathrm{PPL}^{(0)} = \exp(L^{(0)}/N_p^{(0)})\) via Viterbi decoding over \(\mathcal{X}\)
 		\FOR{iteration \(t = 0\) to \(T_{\max}\)}
 		\FOR{each sequence \(x \in \mathcal{X}\)}
 		\STATE Compute best segmentation \(\mathrm{seg}^{*}(x)\) using current \(p^{(t)}\)

@@ -445,7 +445,7 @@ We conduct a structured ablation to isolate the effect of key hyperparameters on
   \item \textbf{Entropy Decay Rate} \(\gamma \in \{0.01, 0.1, 0.5\}\): Controls the rate in the entropy regularization schedule
   \begin{equation}
   \lambda_{\mathrm{ent}}(t) = \lambda_0 e^{-\gamma t},
-  \label{eq:entropy_schedule}
+  \label{eq:entropy_decay_exp}
   \end{equation}
   which governs routing sparsity and confidence evolution throughout training \cite{grandvalet2006entropy, pereyra2017regularizing}.
 
