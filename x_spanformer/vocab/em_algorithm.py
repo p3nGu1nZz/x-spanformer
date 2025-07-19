@@ -107,6 +107,9 @@ def adaptive_pruning(
     # Consider removing pieces with p^(t+1)(u) < ε
     candidates_to_prune = [u for u in V_pruned if p_next[u] < eps]
     
+    # Precompute the set of all characters in the corpus
+    corpus_chars = set(c for x in corpus for c in x)
+    
     for u in candidates_to_prune:
         # Tentative removal: V' = V \ {u}
         V_prime = [v for v in V_pruned if v != u]
@@ -115,7 +118,6 @@ def adaptive_pruning(
             continue
         
         # Ensure V_prime still contains all required single characters
-        corpus_chars = set(c for x in corpus for c in x)
         vocab_chars = set(v for v in V_prime if len(v) == 1)
         if not corpus_chars.issubset(vocab_chars):
             # Cannot remove this piece as it would make vocabulary incomplete
