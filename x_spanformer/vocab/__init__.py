@@ -17,7 +17,8 @@ from .core import (
     compute_baseline_perplexity,
     compute_pruning_perplexity_and_oov,
     compute_corpus_coverage,
-    build_candidate_set
+    build_candidate_set,
+    is_whitespace_coherent
 )
 
 from .em_algorithm import (
@@ -42,6 +43,7 @@ __all__ = [
     "compute_pruning_perplexity_and_oov",
     "compute_corpus_coverage",
     "build_candidate_set",
+    "is_whitespace_coherent",
     
     # EM Algorithm
     "initialize_probabilities",

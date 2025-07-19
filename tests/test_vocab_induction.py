@@ -28,6 +28,7 @@ from x_spanformer.vocab import (
     compute_pruning_perplexity_and_oov,
     compute_corpus_coverage,
     build_candidate_set,
+    is_whitespace_coherent,
     
     # EM Algorithm
     initialize_probabilities,
@@ -182,6 +183,44 @@ class TestCoreFunctions:
         
         # No piece should be longer than L_max
         assert all(len(u) <= L_max for u in U_0)
+    
+    def test_whitespace_coherence_basic(self):
+        """Test basic whitespace coherence validation."""
+        # Pure whitespace should be valid
+        assert is_whitespace_coherent(" ")
+        assert is_whitespace_coherent("  ")
+        assert is_whitespace_coherent("\t")
+        assert is_whitespace_coherent("\n")
+        assert is_whitespace_coherent("\r")
+        assert is_whitespace_coherent("\t\n")
+        
+        # Pure content should be valid
+        assert is_whitespace_coherent("hello")
+        assert is_whitespace_coherent("abc")
+        
+        # Mixed should be invalid
+        assert not is_whitespace_coherent(" hello")
+        assert not is_whitespace_coherent("hello ")
+        assert not is_whitespace_coherent("a b")
+        assert not is_whitespace_coherent("\thello")
+    
+    def test_build_candidate_set_whitespace_separation(self):
+        """Test that candidate set respects whitespace separation."""
+        corpus = ["hello world", "test\tcase"]
+        L_max = 8
+        M = 20
+        
+        U_0, freq = build_candidate_set(corpus, L_max, M)
+        
+        # Check that no mixed candidates exist
+        mixed_candidates = []
+        for candidate in U_0:
+            has_whitespace = any(ch in " \t\n\r\x0b\x0c" for ch in candidate)
+            has_content = any(ch not in " \t\n\r\x0b\x0c" for ch in candidate)
+            if has_whitespace and has_content:
+                mixed_candidates.append(candidate)
+        
+        assert len(mixed_candidates) == 0, f"Found mixed candidates: {mixed_candidates}"
 
 
 class TestEMAlgorithm:
