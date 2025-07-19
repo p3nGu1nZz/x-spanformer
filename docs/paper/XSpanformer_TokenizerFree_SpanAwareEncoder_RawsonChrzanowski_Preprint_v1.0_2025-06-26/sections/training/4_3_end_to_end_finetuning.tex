@@ -1,0 +1,76 @@
+\subsection{End-to-End Fine-Tuning}
+\label{sec:end-to-end-finetuning}
+
+After the span scorer \(f_\theta\) and aggregator \(g_\phi\) have learned stable inductive patterns, we integrate the fused controller \(\tilde{s}\) into the transformer backbone \(\psi\) and optimize all components jointly.
+
+\subsubsection{Joint Routing and Regularization}
+\label{sec:joint-routing-regularization}
+
+The total objective over epochs \(t=T_1+1,\dots,T_2\) is
+
+\begin{equation}
+	\mathcal{L}_{\mathrm{total}}(t)
+	= \mathcal{L}_{\mathrm{task}}
+	+ \beta_{1}\,\mathcal{L}_{\mathrm{span}}
+	+ \beta_{2}\,\lambda_{\mathrm{ent}}(t)\,H(P),
+	\label{eq:curriculum_total}
+\end{equation}
+
+where
+\(\mathcal{L}_{\mathrm{task}}\) is the downstream loss (e.g., negative log‐likelihood, classification cross‐entropy, or contrastive objective),  
+\(\mathcal{L}_{\mathrm{span}} = \mathrm{KL}\bigl(P_{\mathrm{gold}}\Vert P_{\theta}\bigr)\) aligns the induced span distribution \(P_\theta\) with any available span supervision, and  
+\(H(P)\) is the Shannon entropy of \(P_\theta\).  
+The entropy coefficient is annealed only after the Phase I transition epoch \(T_1\):
+\[
+\lambda_{\mathrm{ent}}(t)
+= \lambda_{0}\,\exp\bigl(-\gamma\,(t - T_1)\bigr)\,\mathbf{1}_{t > T_1},
+\label{eq:entropy_schedule}
+\]
+ensuring continued but diminishing exploration during fine‐tuning.
+
+\subsubsection{Training Algorithm}
+\label{sec:training-algorithm}
+
+\medskip
+\noindent\textbf{Algorithm: Joint Optimization}
+
+\begin{algorithm}[H]
+	\caption{End‐to‐End Fine‐Tuning}
+	\label{alg:e2e_finetuning}
+	\begin{algorithmic}[1]
+		\REQUIRE Pretrained scorer \(f_\theta\), aggregator \(g_\phi\), transformer \(\psi\)
+		\FOR{epoch \(t=T_1+1\) to \(T_2\)}
+		\FOR{each batch \((x,y)\)}
+		\STATE Compute contextual embeddings \(H = \psi_{\mathrm{enc}}(x)\)
+		\STATE Enumerate spans \(S\) and pool \(v_{ij} = \mathrm{Pool}(H[i:j])\)
+		\STATE Induce span logits \(w_{ij}=f_\theta(v_{ij})\), normalize 
+		\(P_{ij}=\softmax(w)\)
+		\STATE Select top-\(K\) spans \(\{s_k\}\) and compute \(\tilde{s}=\sum_k a_k s_k\)
+		\STATE Inject \(\tilde{s}\) into \(\psi\) via prefix/bias/gate
+		\STATE Compute \(\mathcal{L}_{\mathrm{total}}(t)\) by Eq.~\eqref{eq:curriculum_total}
+		\STATE Backpropagate and update \(\theta,\phi,\psi\)
+		\ENDFOR
+		\ENDFOR
+	\end{algorithmic}
+\end{algorithm}
+
+\noindent\textbf{Summary.} This joint training approach combines span induction (\(f_\theta\)), aggregation (\(g_\phi\)), and the transformer parameters \(\psi\), using the controller vector \(\tilde{s}\) as a structural bottleneck.  This combined optimization:
+\begin{itemize}
+	\item Preserves high‐entropy exploration early in fine‐tuning,  
+	\item Gradually shifts focus to task‐relevant spans via entropy annealing,  
+	\item Learns to route structural information into the encoder through differentiable injection modes.
+\end{itemize}
+Empirically, this two‐stage curriculum yields stable convergence under sparse span supervision and enhances interpretability of transformer behavior \cite{belinkov2022probing}.
+
+\subsubsection{Optimization Details}
+\label{sec:optimization-details}
+
+\medskip
+\noindent We train all parameters with AdamW \cite{loshchilov2019decoupled}, using:
+\begin{itemize}[leftmargin=1.5em]
+	\item Cosine learning‐rate schedule with 10\% warmup,
+	\item Gradient clipping at \(\|\nabla\|_2\le1.0\),
+	\item Dropout rate 0.1,
+	\item Batch size 64 (token‐aligned).
+\end{itemize}
+Full hyperparameter ranges and ablation settings are provided in Appendix~\ref{sec:hyperparams} and \ref{sec:ablation-settings}.
