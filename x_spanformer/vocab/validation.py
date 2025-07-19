@@ -56,7 +56,7 @@ def validate_probabilities(p_u: Dict[str, float]) -> None:
         if prob > 1:
             raise ValueError(f"Invalid probability {prob} for piece '{piece}' - must be <= 1")
         # Check for NaN or infinity
-        if not (prob == prob and abs(prob) != float('inf')):  # NaN check: NaN != NaN
+        if not math.isfinite(prob):  # Check for NaN or infinity
             raise ValueError(f"Invalid probability {prob} for piece '{piece}' - must be a finite number")
     
     # Check if probabilities sum to approximately 1
