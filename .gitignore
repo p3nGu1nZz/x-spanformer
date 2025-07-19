@@ -185,3 +185,6 @@ data/pretraining/out/jsonl/discard*
 data/pretraining2/out/csv/*
 data/pretraining2/out/jsonl/*/*
 data/pretraining2/out/jsonl/discard*
+data/vocab/out/candidates/*
+data/vocab/out/full_freq/*
+data/vocab/out/pruning/*

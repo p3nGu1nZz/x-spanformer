@@ -35,9 +35,32 @@ class TestJsonl2VocabPipeline:
         self.output_dir.mkdir()
         
     def teardown_method(self):
+        # Close and remove all logging handlers to avoid file locks on Windows
+        import logging
+        for handler in logging.root.handlers[:]:
+            handler.close()
+            logging.root.removeHandler(handler)
+            
+        # Also clean up logger-specific handlers
+        for logger_name in ['jsonl2vocab']:
+            logger_obj = logging.getLogger(logger_name)
+            for handler in logger_obj.handlers[:]:
+                handler.close()
+                logger_obj.removeHandler(handler)
+        
         import shutil
+        import time
         if self.tmp_dir.exists():
-            shutil.rmtree(self.tmp_dir)
+            try:
+                shutil.rmtree(self.tmp_dir)
+            except PermissionError:
+                # On Windows, sometimes we need to wait a bit for file handles to be released
+                time.sleep(0.1)
+                try:
+                    shutil.rmtree(self.tmp_dir)
+                except PermissionError:
+                    # If still fails, skip cleanup - test tmp dirs will be cleaned by OS
+                    pass
     
     def test_parse_args_required(self):
         """Test argument parsing with required arguments."""

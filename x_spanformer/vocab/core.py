@@ -7,8 +7,13 @@ Section 3.1 of the X-Spanformer paper.
 """
 
 import math
+import logging
+import string
 from typing import List, Dict, Set, Tuple
 from collections import Counter
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 
 def truncate_string(s: str, max_len: int) -> str:
@@ -123,7 +128,13 @@ def compute_baseline_perplexity(corpus: List[str], V: List[str], p_u: Dict[str, 
     total_pieces = 0  # N_p^(0)
     total_log_prob = 0.0  # L^(0) (will be negative)
     
-    for x in corpus:
+    # Track progress through corpus segments
+    progress_interval = max(1, len(corpus) // 20)  # Log approximately every 5% of total items
+    for i, x in enumerate(corpus):
+        if i % progress_interval == 0 or i == len(corpus) - 1:
+            progress_pct = (i + 1) / len(corpus) * 100
+            logger.info(f"    Progress: {i+1:,}/{len(corpus):,} segments ({progress_pct:.1f}%)")
+        
         segmentation = viterbi_segment(x, V, p_u)
         total_pieces += len(segmentation)
         
@@ -157,12 +168,20 @@ def compute_pruning_perplexity_and_oov(corpus: List[str], V: List[str], p_u: Dic
     Returns:
         Tuple of (perplexity, oov_rate)
     """
+    logger.info(f"Computing pruning perplexity and OOV rate for {len(corpus):,} segments")
+    
     total_pieces = 0  # N_p'
     total_log_prob = 0.0  # L' (will be negative)
     total_codepoints = 0  # N_t
     uncovered_positions = 0  # N_uncov'
     
-    for x in corpus:
+    # Track progress through corpus segments  
+    progress_interval = max(1, len(corpus) // 20)  # Log every 5% of progress
+    for i, x in enumerate(corpus):
+        if i % progress_interval == 0 or i == len(corpus) - 1:
+            progress_pct = (i + 1) / len(corpus) * 100
+            logger.info(f"  Pruning perplexity progress: {i+1:,}/{len(corpus):,} segments ({progress_pct:.1f}%)")
+            
         segmentation = viterbi_segment(x, V, p_u)
         coverage = compute_coverage(x, segmentation)
         
@@ -184,6 +203,7 @@ def compute_pruning_perplexity_and_oov(corpus: List[str], V: List[str], p_u: Dic
     ppl = math.exp(-total_log_prob / total_pieces) if total_pieces > 0 else float('inf')
     oov_rate = uncovered_positions / total_codepoints if total_codepoints > 0 else 0.0
     
+    logger.info(f"Pruning metrics complete: perplexity={ppl:.2f}, OOV rate={oov_rate:.4f}")
     return ppl, oov_rate
 
 
@@ -212,11 +232,53 @@ def compute_corpus_coverage(corpus: List[str], V: List[str], p_u: Dict[str, floa
     return total_covered / total_positions if total_positions > 0 else 0.0
 
 
+def is_whitespace_coherent(candidate: str) -> bool:
+    """
+    Check if a candidate maintains whitespace as atomic units.
+    
+    Enforces strict whitespace separation using Python's standard string.whitespace
+    definition, which includes: space, tab, newline, carriage return, vertical tab,
+    and form feed. This follows standard tokenization conventions used by other LMs.
+    
+    Whitespace sequences must be standalone tokens, never mixed with non-whitespace
+    characters. This treats whitespace like repeated character sequences - always atomic.
+    
+    Args:
+        candidate: Candidate substring to validate
+        
+    Returns:
+        True if candidate maintains atomic whitespace separation, False otherwise
+    """
+    if len(candidate) <= 1:
+        return True
+    
+    # Use Python's standard whitespace definition (includes all 6 standard whitespace chars)
+    # This matches conventions used by other language models
+    whitespace_chars = set(string.whitespace)  # ' \t\n\r\x0b\x0c'
+    
+    # Check if this is a pure whitespace sequence (allowed)
+    all_whitespace = all(c in whitespace_chars for c in candidate)
+    if all_whitespace:
+        return True
+    
+    # Check if this is a pure non-whitespace sequence (allowed) 
+    no_whitespace = all(c not in whitespace_chars for c in candidate)
+    if no_whitespace:
+        return True
+    
+    # Mixed whitespace and non-whitespace is not allowed
+    # This rejects cases like: " the", "ing ", "a\tb", "\nhello", etc.
+    return False
+
+
 def build_candidate_set(corpus: List[str], L_max: int, M: int) -> Tuple[List[str], Counter]:
     """
-    Build the initial candidate set U_0 following the paper's formulation.
+    Build the initial candidate set U_0 with atomic whitespace handling.
     
     U_0 = {top M substrings} ∪ {all single codepoints}
+    
+    Enforces atomic whitespace principle: whitespace sequences are treated
+    as indivisible units, similar to repeated character sequences.
     
     Args:
         corpus: List of text segments
@@ -232,14 +294,21 @@ def build_candidate_set(corpus: List[str], L_max: int, M: int) -> Tuple[List[str
         T = len(x)
         # Count all substrings up to L_max
         for i in range(T):
-            # Single characters
+            # Single characters (always valid)
             freq[x[i]] += 1
-            # Multi-character substrings
+            
+            # Multi-character substrings (check whitespace coherence)
             for length in range(2, min(L_max, T - i) + 1):
-                freq[x[i:i + length]] += 1
+                candidate = x[i:i + length]
+                
+                # Only include candidates that maintain atomic whitespace
+                if is_whitespace_coherent(candidate):
+                    freq[candidate] += 1
 
-    # Top M multi-character substrings
-    multi_char_substrings = [u for u, _ in freq.most_common() if len(u) > 1][:M]
+    # Top M multi-character substrings (using raw frequencies - simpler approach)
+    multi_char_candidates = [(u, f) for u, f in freq.items() if len(u) > 1]
+    multi_char_candidates.sort(key=lambda x: x[1], reverse=True)
+    multi_char_substrings = [u for u, _ in multi_char_candidates[:M]]
     
     # All single codepoints
     single_codepoints = list({u for u in freq if len(u) == 1})
