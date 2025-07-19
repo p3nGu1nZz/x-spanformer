@@ -109,7 +109,21 @@ def load_corpus(files: List[Path]) -> List[str]:
 def build_candidate_set_with_output(corpus: List[str], L_max: int, M: int, out: Path) -> Tuple[List[str], Counter]:
     """
     Build candidate set and save output files for inspection.
-    Wrapper around the core build_candidate_set function.
+    
+    Following Section 3.1 of the paper:
+    U_0 = {top M substrings} ∪ {all single codepoints}
+    
+    This extracts all substrings up to length L_max, retains the top M by frequency,
+    and includes all individual codepoints to ensure base coverage.
+    
+    Args:
+        corpus: List of text segments from JSONL files
+        L_max: Maximum substring length (paper: L_max)
+        M: Number of top multi-character substrings to keep (paper: M)
+        out: Output directory for intermediate results
+        
+    Returns:
+        Tuple of (candidate_vocabulary_U_0, frequency_counter)
     """
     freq_dir = out / "full_freq"
     freq_dir.mkdir(parents=True, exist_ok=True)
@@ -143,7 +157,7 @@ def build_candidate_set_with_output(corpus: List[str], L_max: int, M: int, out: 
 
     return U_0, freq
 
-def save_vocab(path: Path, V: List[str], p_u: Dict[str, float]) -> None:
+def save_vocab(path: Path, V: List[str], p_u: Dict[str, float], stats: Dict) -> None:
     """Save the final vocabulary to JSONL format using the schema structure."""
     console.log(f"Saving vocab → {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,6 +166,20 @@ def save_vocab(path: Path, V: List[str], p_u: Dict[str, float]) -> None:
             # Create vocabulary piece record following the schema
             rec = {"piece": u, "prob": p_u[u]}
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    
+    # Save vocabulary statistics using VocabStats schema
+    stats_path = path.parent / "vocab_stats.json"
+    console.log(f"Saving vocab statistics → {stats_path}")
+    vocab_stats = VocabStats(
+        total_pieces=stats.get("total_pieces", len(V)),
+        baseline_ppl=stats.get("baseline_ppl", 0.0),
+        final_ppl=stats.get("final_ppl", 0.0), 
+        oov_rate=stats.get("oov_rate", 0.0),
+        em_iterations=stats.get("em_iterations", 0),
+        pruned_pieces=stats.get("pruned_pieces", 0)
+    )
+    with open(stats_path, "w", encoding="utf-8") as f:
+        f.write(vocab_stats.model_dump_json(indent=2))
 
 
 def main():
@@ -160,28 +188,35 @@ def main():
     out = args.outdir
     out.mkdir(parents=True, exist_ok=True)
 
-    # Pipeline stages following the paper's Algorithm 1
+    # Pipeline stages following Algorithm 1 from Section 3.1 of the paper:
+    # "Adaptive Unigram-LM Vocabulary Induction"
     console.log("[bold cyan]═══ X-Spanformer JSONL2VOCAB Pipeline ═══[/bold cyan]")
     console.log("[green]✔ Initializing vocabulary induction pipeline[/green]")
     
-    # Stage 1: Discover and load corpus
+    # Algorithm Step 1: Extract candidate substrings up to length L_max from corpus
     files = find_jsonl_files(args.indir)
     corpus = load_corpus(files)
     
-    # Stage 2: Build candidate set U_0
+    # Build initial vocabulary U_0 with frequency-based candidate selection
     U_0, freq = build_candidate_set_with_output(corpus, h["L_max"], h["M_candidates"], out)
     
     # Validate vocabulary completeness before proceeding
     validate_vocabulary_completeness(corpus, U_0)
     
-    # Stage 3: EM-based vocabulary induction with adaptive pruning
+    # Algorithm Steps 2-19: EM-based vocabulary induction with adaptive pruning
+    # - Initialize piece probabilities p^(0)(u) ∝ freq(u) 
+    # - Compute baseline perplexity PPL^(0) via Viterbi decoding
+    # - Alternate E-step (Viterbi segmentation) and M-step (probability updates)
+    # - Apply adaptive pruning with PPL and OOV constraints
     V_final, p_final, stats = induce_vocabulary(corpus, U_0, freq, h, out)
     
-    # Stage 4: Save final vocabulary
-    save_vocab(out / "vocab.jsonl", V_final, p_final)
+    # Save final vocabulary with statistics following VocabStats schema
+    save_vocab(out / "vocab.jsonl", V_final, p_final, stats)
 
     console.log(f"[bold green]✅ Vocabulary induction complete! → {out / 'vocab.jsonl'}[/bold green]")
     console.log(f"[dim]Final vocabulary size: {len(V_final)} pieces[/dim]")
+    console.log(f"[dim]Baseline PPL: {stats.get('baseline_ppl', 'N/A'):.2f}, Final PPL: {stats.get('final_ppl', 'N/A'):.2f}[/dim]")
+    console.log(f"[dim]OOV rate: {stats.get('oov_rate', 0.0):.4f}, EM iterations: {stats.get('em_iterations', 0)}[/dim]")
 
 
 if __name__ == "__main__":

@@ -257,9 +257,17 @@ class TestJsonl2VocabPipeline:
         """Test saving vocabulary to JSONL format."""
         vocab = ["a", "hello", "world"]
         probabilities = {"a": 0.3, "hello": 0.4, "world": 0.3}
-        
+        stats = {
+            "total_pieces": 3,
+            "baseline_ppl": 10.0,
+            "final_ppl": 8.5,
+            "oov_rate": 0.02,
+            "em_iterations": 5,
+            "pruned_pieces": 0
+        }
+
         output_file = self.output_dir / "test_vocab.jsonl"
-        jsonl2vocab.save_vocab(output_file, vocab, probabilities)
+        jsonl2vocab.save_vocab(output_file, vocab, probabilities, stats)
         
         assert output_file.exists()
         
@@ -350,8 +358,16 @@ class TestJsonl2VocabEdgeCases:
         output_file = self.tmp_dir / "new_dir" / "vocab.jsonl"
         vocab = ["a", "b"]
         probabilities = {"a": 0.5, "b": 0.5}
-        
-        jsonl2vocab.save_vocab(output_file, vocab, probabilities)
+        stats = {
+            "total_pieces": 2,
+            "baseline_ppl": 5.0,
+            "final_ppl": 4.8,
+            "oov_rate": 0.0,
+            "em_iterations": 3,
+            "pruned_pieces": 0
+        }
+
+        jsonl2vocab.save_vocab(output_file, vocab, probabilities, stats)
         
         assert output_file.exists()
         assert output_file.parent.exists()
