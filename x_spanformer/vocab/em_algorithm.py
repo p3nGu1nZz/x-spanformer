@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 MAX_WORKERS_LIMIT = 32  # Maximum number of workers allowed, chosen to prevent excessive resource usage
 WORKER_CPU_OFFSET = 4   # Additional workers to account for I/O-bound tasks
 
+# Constants for numerical stability
+OVERFLOW_PROTECTION_LIMIT = 500  # Conservative limit to prevent exp() overflow
+PERPLEXITY_CAP = 1000000.0  # Cap perplexity at 1M instead of inf for better numerical stability
+
 # Get optimal number of workers based on CPU cores
 MAX_WORKERS = min(MAX_WORKERS_LIMIT, (multiprocessing.cpu_count() or 1) + WORKER_CPU_OFFSET)
 
