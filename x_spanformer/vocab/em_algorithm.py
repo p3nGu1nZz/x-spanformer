@@ -464,7 +464,7 @@ async def compute_baseline_perplexity_parallel(
             logger.warning(f"Baseline perplexity calculation would overflow (exp_arg={avg_log_prob_per_piece:.2f})")
             logger.info(f"This indicates very low probability vocabulary pieces - using simplified calculation")
             # Use a more conservative calculation for very high perplexity
-            ppl = 1000000.0  # Cap at 1M instead of inf for better numerical stability
+            ppl = PERPLEXITY_CAP  # Cap at 1M instead of inf for better numerical stability
         elif avg_log_prob_per_piece == 0:
             ppl = 1.0  # exp(0) = 1
         else:
