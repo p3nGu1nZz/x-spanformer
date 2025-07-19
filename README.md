@@ -59,7 +59,7 @@ uv run -m x_spanformer.pipelines.pdf2jsonl \
 
 ### Stage 2: Vocabulary Induction
 
-Generate a hybrid Unigram-LM vocabulary from the JSONL segments:
+Generate a hybrid Unigram-LM vocabulary from the JSONL segments using the **Adaptive Unigram-LM Vocabulary Induction** algorithm:
 
 ```bash
 # Induce vocabulary from JSONL segments
@@ -68,7 +68,14 @@ uv run -m x_spanformer.pipelines.jsonl2vocab \
   -o data/vocab/out
 ```
 
-This implements the mathematical formulation from Section 3.1 of our paper, using EM + Viterbi segmentation with adaptive pruning based on perplexity and OOV thresholds.
+This implements the mathematical formulation from Section 3.1 of our paper (Algorithm 1), featuring:
+
+- **EM + Viterbi segmentation** with adaptive pruning based on perplexity and OOV thresholds
+- **Comprehensive statistics output** including baseline/final perplexity, OOV rates, and pruning metrics
+- **Schema-validated vocabulary pieces** using `VocabPiece` and `VocabStats` models
+- **Multi-stage artifact generation** for transparency and debugging
+
+The pipeline outputs both `vocab.jsonl` (final vocabulary with probabilities) and `vocab_stats.json` (comprehensive training statistics), enabling detailed analysis of the vocabulary induction process.
 
 Use the output as either raw training strings (for unsupervised Phase I) or compile with `oxbar` to produce labeled span records.
 

@@ -1,4 +1,20 @@
-# This pipeline inge## Overview
+# JSONL2Vocab Pipeline
+
+Following Algorithm 1 from Section 3.1 of the X-Spanformer paper, this pipeline ingests one or more JSONL files (recursively discovered in an input directory), extracts each record's text, and induces a hybrid Unigram-LM vocabulary via an EM + Viterbi procedure with adaptive pruning. It implements the mathematical formulation described in Section 3.1 of the X-Spanformer paper, writing per-stage artifacts under an output directory and emitting a final vocabulary as JSONL with comprehensive statistics.
+
+---
+
+## Overview
+
+This pipeline implements the **Adaptive Unigram-LM Vocabulary Induction** algorithm with the following stages:
+
+1. **Discover** all `*.jsonl` under `--in` (recursively).  
+2. **Load** each record's `raw` field using `PretrainRecord` schema validation.  
+3. **Count** all substrings up to length `L_max`; dump `full_freq.json`.  
+4. **Select** top `M` substrings + all single codepoints to form U₀; dump `candidates.txt`.  
+5. **EM-train** a Unigram LM with Viterbi-based segmentation, adaptively pruning low-probability pieces under perplexity and OOV thresholds; dump `final_probs.json`.  
+6. **Save** the final vocabulary (`piece` + `prob`) in `vocab.jsonl` using `VocabPiece` schema.
+7. **Output** comprehensive statistics in `vocab_stats.json` using `VocabStats` schema.ine inge## Overview
 
 Following Algorithm 1 from Section 3.1 of the X-Spanformer paper, this pipeline:
 
@@ -122,6 +138,17 @@ All per-stage files are written under the specified output directory (`--out`):
      {"piece": "X-SPANFORMER", "prob": 0.00056}
      {"piece": "SPAN-AWARE", "prob": 0.00032}
      …
+     ```
+   - `vocab_stats.json`: comprehensive statistics using `VocabStats` schema:
+     ```json
+     {
+       "total_pieces": 15000,
+       "baseline_ppl": 12.45,
+       "final_ppl": 10.23,
+       "oov_rate": 0.0015,
+       "em_iterations": 5,
+       "pruned_pieces": 2847
+     }
      ```
 
 ---

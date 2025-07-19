@@ -95,17 +95,17 @@ class TestVocabPiece:
         """Test that validation errors have clear messages."""
         # Missing piece
         with pytest.raises(ValidationError) as exc_info:
-            VocabPiece(prob=0.5)
+            VocabPiece(prob=0.5)  # type: ignore
         assert "piece" in str(exc_info.value)
         
         # Missing prob
         with pytest.raises(ValidationError) as exc_info:
-            VocabPiece(piece="test")
+            VocabPiece(piece="test")  # type: ignore
         assert "prob" in str(exc_info.value)
         
         # Invalid prob type
         with pytest.raises(ValidationError) as exc_info:
-            VocabPiece(piece="test", prob="not_a_number")
+            VocabPiece(piece="test", prob="not_a_number")  # type: ignore
         assert "prob" in str(exc_info.value)
 
 
@@ -307,13 +307,13 @@ class TestVocabSchemaEdgeCases:
         """Test both schemas handle missing required fields properly."""
         # VocabPiece missing piece
         with pytest.raises(ValidationError) as exc_info:
-            VocabPiece(prob=0.5)
+            VocabPiece(prob=0.5)  # type: ignore
         error_details = str(exc_info.value)
         assert "piece" in error_details and "Field required" in error_details
         
         # VocabStats missing required fields
         with pytest.raises(ValidationError) as exc_info:
-            VocabStats(total_pieces=1000)  # Missing many required fields
+            VocabStats(total_pieces=1000)  # type: ignore
         error_details = str(exc_info.value)
         assert "baseline_ppl" in error_details or "final_ppl" in error_details
 
