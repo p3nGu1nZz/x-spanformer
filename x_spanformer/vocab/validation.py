@@ -31,7 +31,8 @@ def validate_vocabulary_completeness(corpus: List[str], V: List[str]) -> None:
     
     missing_chars = corpus_chars - vocab_chars
     if missing_chars:
-        raise ValueError(f"Vocabulary missing required single codepoints: {sorted(missing_chars)}")
+        sorted_missing_chars = sorted(missing_chars)
+        raise ValueError(f"Vocabulary missing required single codepoints: {sorted_missing_chars}")
 
 
 def validate_probabilities(p_u: Dict[str, float]) -> None:
