@@ -89,7 +89,12 @@ async def chat(
 	temperature: float = 0.2
 ) -> str:
 	client = AsyncClient()
-	messages: List[Message] = conversation  # conversation already includes system prompt from DialogueManager
+	
+	# Build messages list with system prompt if provided
+	messages: List[Message] = []
+	if system:
+		messages.append({"role": "system", "content": system})
+	messages.extend(conversation)
 
 	# Reduced logging for better performance - only show essential info
 	c.print(f"[bold blue]Sending to {model} (T={temperature}):[/bold blue]")
@@ -101,7 +106,8 @@ async def chat(
 	response = await client.chat(
 		model=model,
 		messages=messages,
-		options={"temperature": temperature}
+		options={"temperature": temperature},
+		stream=False
 	)
 	content = response["message"]["content"]
 	
