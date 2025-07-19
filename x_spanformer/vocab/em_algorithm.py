@@ -458,7 +458,7 @@ async def compute_baseline_perplexity_parallel(
         logger.debug(f"Average log prob per piece: {avg_log_prob_per_piece:.6f}")
         
         # Safe exponentiation to avoid overflow errors
-        max_exp_arg = 500  # More conservative limit to prevent overflow
+        max_exp_arg = OVERFLOW_PROTECTION_LIMIT  # More conservative limit to prevent overflow
         
         if avg_log_prob_per_piece > max_exp_arg:
             logger.warning(f"Baseline perplexity calculation would overflow (exp_arg={avg_log_prob_per_piece:.2f})")
