@@ -26,8 +26,12 @@ from .core import (
 # Module-level logger - will inherit from pipeline setup
 logger = logging.getLogger(__name__)
 
+# Constants for worker configuration
+MAX_WORKERS_LIMIT = 32  # Maximum number of workers allowed, chosen to prevent excessive resource usage
+WORKER_CPU_OFFSET = 4   # Additional workers to account for I/O-bound tasks
+
 # Get optimal number of workers based on CPU cores
-MAX_WORKERS = min(32, (multiprocessing.cpu_count() or 1) + 4)
+MAX_WORKERS = min(MAX_WORKERS_LIMIT, (multiprocessing.cpu_count() or 1) + WORKER_CPU_OFFSET)
 
 
 def _process_segment_batch(segment_batch: List[str], V: List[str], p_u: Dict[str, float]) -> Counter:
