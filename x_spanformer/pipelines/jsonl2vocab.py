@@ -273,12 +273,22 @@ def save_vocab(path: Path, V: List[str], p_u: Dict[str, float], stats: Dict) -> 
     
     path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Save vocabulary pieces
-    vocab_size = len(V)
-    logger.info(f"Writing {vocab_size} vocabulary pieces...")
+    # Sort vocabulary pieces by probability (descending order - most probable first)
+    logger.info("Sorting vocabulary by probability (most probable first)...")
+    vocab_sorted = sorted(V, key=lambda u: p_u[u], reverse=True)
+    
+    vocab_size = len(vocab_sorted)
+    logger.info(f"Writing {vocab_size} vocabulary pieces (sorted by probability)...")
+    
+    # Log top few pieces for verification
+    logger.info("Top 5 most probable pieces:")
+    for i, u in enumerate(vocab_sorted[:5], 1):
+        display_u = repr(u)
+        prob = p_u[u]
+        logger.info(f"  {i}. {display_u:<15} (prob: {prob:.8f})")
     
     with open(path, "w", encoding="utf-8") as f:
-        for i, u in enumerate(V):
+        for i, u in enumerate(vocab_sorted):
             # Create vocabulary piece record following the schema
             rec = {"piece": u, "prob": p_u[u]}
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -286,7 +296,7 @@ def save_vocab(path: Path, V: List[str], p_u: Dict[str, float], stats: Dict) -> 
             if (i + 1) % 1000 == 0:
                 logger.debug(f"  Written {i + 1}/{vocab_size} pieces")
     
-    logger.info(f"Vocabulary saved successfully: {vocab_size} pieces")
+    logger.info(f"Vocabulary saved successfully: {vocab_size} pieces (sorted by probability)")
     
     # Save vocabulary statistics using VocabStats schema
     stats_path = path.parent / "vocab_stats.json"
