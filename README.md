@@ -1,3 +1,5 @@
+[![Python package](https://github.com/p3nGu1nZz/x-spanformer/actions/workflows/python-package.yml/badge.svg?branch=main)](https://github.com/p3nGu1nZz/x-spanformer/actions/workflows/python-package.yml)
+
 # 🧠 X-Spanformer
 
 **Tokenizer-free, span-aware transformer grounded in X-bar theory**  
