@@ -1,0 +1,14 @@
+\subsection{Future Benchmarks and Tasks}
+\label{sec:future-tasks}
+
+We outline evaluation pathways beyond the current architecture sketch, emphasizing both transferability and interpretability:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Downstream:} Apply X-Spanformer to named entity recognition (NER), abstractive summarization, latent syntax induction, and low-resource translation. Prior work has shown that span-based representations improve entity boundary detection \cite{li2020unified}, and that structured routing enhances summarization in data-scarce regimes \cite{bajaj2021long, ziegler2024craft}. Latent syntax models have also benefited from unsupervised span induction \cite{kim2019unsupervised}, suggesting that X-Spanformer's controller-guided spans may offer a viable inductive bias.
+  
+  \item \textbf{Structural transfer:} Warm-start span modules on synthetic corpora with known routing templates, then freeze or partially fine-tune only the task-specific decoder. This aligns with recent work on warm-starting and transfer learning for efficient adaptation \cite{dhole2025frozen, ziegler2024craft}, and may reduce overfitting in low-resource domains.
+
+  \item \textbf{Controller probing:} Freeze routing weights and inject either random or interpretable controller vectors \(\tilde{s}\) into downstream encoders. This enables causal probing of span semantics and disentanglement, similar to frozen transformer interventions in multimodal or multilingual settings \cite{zhang2023frozen, dhole2025frozen}.
+\end{itemize}
+
+These directions aim to validate the modularity and generalization capacity of X-Spanformer across both structured and unstructured tasks. We plan to release diagnostic notebooks and controller visualization tools to support reproducibility and community benchmarking.

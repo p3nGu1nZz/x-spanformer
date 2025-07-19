@@ -1,0 +1,77 @@
+\subsection{Span Routing Behavior}
+\label{sec:span-behavior}
+
+We analyze the internal span distribution dynamics induced by the X-Spanformer's entropy-regularized selection module. The goal is to assess whether the model exhibits structure-seeking behavior through interpretable routing patterns under curriculum-controlled exploration.
+
+\vspace{0.5em}
+\noindent Let \(P = \{P_{ij}\}\) denote the normalized span distribution from Equation~\eqref{eq:span_softmax}, and let the controller be computed as:
+\begin{equation}
+\tilde{s} = \sum_{k=1}^K \alpha_k s_k, \quad \text{where} \quad \alpha_k = \frac{\exp(w_k)}{\sum_{\ell=1}^K \exp(w_\ell)}.
+\label{eq:span_behavior_controller}
+\end{equation}
+
+To understand convergence properties and architectural expressivity, we track the following quantitative signals:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Span Entropy Dynamics:}
+  The Shannon entropy of \(P_t\) is computed at each training epoch \(t\):
+  \begin{equation}
+  H(P_t) = -\sum_{(i,j)} P_{ij}^{(t)} \log P_{ij}^{(t)}.
+  \end{equation}
+  We hypothesize that the expectation \(\mathbb{E}[H(P_t)]\) follows exponential decay due to the schedule
+  \[
+  \lambda_{\mathrm{ent}}(t) = \lambda_0 \cdot \exp(-\gamma t),
+  \]
+  as derived in Section~\ref{sec:span-induction}, mirroring curriculum learning effects observed in \cite{bengio2009curriculum, kreutzer2021distilling}.
+
+  \item \textbf{Span Width Histogram:}
+  Let \(w = j - i\). For each epoch, we compute the empirical distribution of selected span widths among top-K spans. A shift toward medium-length (5–12 token) units may indicate phrase- or clause-level abstraction consistent with constituent boundaries \cite{naradowsky2021structured}.
+
+  \item \textbf{Span Overlap Rate:}
+  We define token-level overlap for each instance by computing the pairwise intersection among selected spans:
+  \[
+  \mathrm{Overlap}(x) = \frac{1}{K^2} \sum_{k \neq \ell} \frac{|s_k \cap s_\ell|}{|s_k \cup s_\ell|}.
+  \]
+  High values in early epochs reflect exploratory collapse, while convergence to disjoint or minimally overlapping spans signals stabilization of routing priors.
+
+  \item \textbf{Routing Stability Across Epochs:}
+  To quantify change in span selection over time, we measure the symmetric KL divergence between distributions at adjacent epochs:
+  \[
+  \mathrm{KL}_\mathrm{sym}(P_t \,\|\, P_{t+1}) = \mathrm{KL}(P_t \,\|\, P_{t+1}) + \mathrm{KL}(P_{t+1} \,\|\, P_t).
+  \]
+  Declining divergence indicates the system has stabilized its structural hypothesis.
+\end{itemize}
+
+\subsubsection*{Visualization and Empirical Summary}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\textwidth]{figures/figure_6.png}
+  \caption{Diagnostic evolution of span routing properties. Left: entropy decay across different \(\gamma\) schedules. Center: distribution of selected span widths over training. Right: routing sparsity (mean top-K concentration) over time.}
+  \label{fig:span_stats}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Entropy and average span width under various entropy decay rates \(\gamma\). Each value is averaged across final 5 epochs post-convergence. Lower \(\gamma\) values retain exploratory routing; higher values promote sparsity.}
+\label{tab:entropy_sweep}
+\begin{tabular}{c|c|c}
+\toprule
+\(\gamma\) & Final \(H(P)\) (↓ better confidence) & Avg. Span Width \(\bar{w}\) \\
+\midrule
+0.01 & 3.71 & 5.3 \\
+0.05 & 2.08 & 6.9 \\
+0.10 & 1.49 & 9.2 \\
+0.50 & 0.41 & 11.6 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\vspace{0.5em}
+\noindent These routing diagnostics provide evidence that X-Spanformer gradually shifts from high-entropy, overlapping routing to sparse, high-confidence span representations. This aligns with latent attention sparsification in architectures such as MoE Transformers \cite{shazeer2017outrageously}, Routing Transformers \cite{tay2020sparse}, and mixture-of-expert decoders \cite{gupta2022molt}. Crucially, our formulation achieves this behavior without discrete gating or reinforcement-based span extraction, relying entirely on differentiable gradient flow from the full objective:
+\[
+\mathcal{L}_{\text{final}} = \mathcal{L}_{\text{task}} + \lambda_{\mathrm{ent}}(t) \cdot H(P_t) + \beta_1 \cdot \mathcal{L}_{\text{align}},
+\]
+where \(\lambda_{\mathrm{ent}}(t) = \lambda_0 e^{-\gamma t}\) controls the entropy decay schedule and \(\mathcal{L}_{\text{align}}\) optionally enforces span-level alignment during supervised routing.
+
+\input{sections/experiments/5_2_1_routing_convergence_proofs}

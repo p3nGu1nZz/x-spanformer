@@ -1,0 +1,35 @@
+\subsection{Ablation: Entropy, Pooling, and \texorpdfstring{$\beta_1$}{β₁}}
+\label{sec:ablation}
+
+We conduct a structured ablation to isolate the effect of key hyperparameters on routing behavior and downstream task performance. Specifically, we vary:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Entropy Decay Rate} \(\gamma \in \{0.01, 0.1, 0.5\}\): Controls the rate in the entropy regularization schedule
+  \begin{equation}
+  \lambda_{\mathrm{ent}}(t) = \lambda_0 e^{-\gamma t},
+  \label{eq:entropy_decay_exp}
+  \end{equation}
+  which governs routing sparsity and confidence evolution throughout training \cite{grandvalet2006entropy, pereyra2017regularizing}.
+
+  \item \textbf{Span Pooling Function} \(\mathrm{Pool} \in \{\mathrm{mean}, \mathrm{max}, \mathrm{gated}\}\): Aggregates token representations across selected span \((i, j)\). Gated pooling introduces a parameterized gate:
+  \begin{equation}
+  \text{Gated}(i, j) = g_{ij} \cdot \mathrm{max}(x_{i:j}) + (1 - g_{ij}) \cdot \mathrm{mean}(x_{i:j}),
+  \label{eq:gated_pooling}
+  \end{equation}
+  where \(g_{ij} = \sigma(\mathbf{w}^\top x_{i:j}^{\text{avg}} + b)\) is a sigmoid gate computed from the average span embedding \cite{kim2019unsupervised, zilliz2023pooling}.
+
+  \item \textbf{Span Alignment Loss Coefficient} \(\beta_1 \in [0.0, 1.5]\): Scales the auxiliary loss \(\mathcal{L}_{\text{align}}\) encouraging ground-truth span alignment. Higher values steer controller logits toward externally annotated spans \cite{liu2024structured}.
+\end{itemize}
+
+\input{sections/experiments/5_5_1_routing_algorithm}
+
+\subsubsection*{Gradient Interactions and Entropy Control}
+
+The combined influence of entropy and alignment on controller gradients is given by:
+\begin{equation}
+\nabla_{w_k^{(t)}} \mathcal{L}_{\text{final}} = \lambda_0 e^{-\gamma t} \cdot \nabla_{w_k} H(P_t) + \beta_1 \cdot \nabla_{w_k} \mathcal{L}_{\text{align}}.
+\label{eq:gradient_flow}
+\end{equation}
+Early in training, the entropy term dominates, encouraging exploratory and smooth distributions over candidate spans \cite{pereyra2017regularizing}. As \(\gamma\) increases, sharper annealing quickly reduces entropy, leading to peaked confidence and accelerated convergence. Meanwhile, \(\beta_1\) scales the alignment supervision, anchoring span selection in structural prior regions. This occurs in low-entropy regimes to prevent collapse onto degenerate spans \cite{liu2024structured}.
+
+\input{sections/experiments/5_5_2_annealing_proof}

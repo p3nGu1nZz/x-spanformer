@@ -1,0 +1,37 @@
+\subsubsection*{Routing Execution Loop}
+
+To contextualize the effect of these parameters, we present the routing and loss construction pipeline:
+
+\begin{algorithm}[H]
+\caption{Span Routing with Entropy Annealing and Alignment}
+\label{alg:span_routing}
+\begin{algorithmic}[1]
+\REQUIRE Input tokens $x = (x_1, \dots, x_T)$; epoch $t$; span candidate set $S = \{(i, j)\}$
+\REQUIRE Controller logits $w^{(t)} \in \mathbb{R}^{|S|}$; decay constants $\lambda_0$, $\gamma$; alignment weight $\beta_1$
+\vspace{0.25em}
+
+\STATE \textbf{Compute span probabilities:} $\alpha_k \gets \mathrm{softmax}(w_k^{(t)})$
+\STATE \textbf{Compute span entropy:} $H(P_t) \gets -\sum_k \alpha_k \log \alpha_k$
+\STATE \textbf{Anneal entropy coefficient:} $\lambda_{\mathrm{ent}}(t) \gets \lambda_0 e^{-\gamma t}$
+\STATE \textbf{Select top-$K$ spans:} $S_t \gets \text{TopK}(\alpha_k)$
+
+\FOR{each selected span $(i_k, j_k) \in S_t$}
+  \STATE Extract sub-tokens: $x_{i_k:j_k}$
+  \STATE Compute mean embedding: $\mu_k \gets \mathrm{mean}(x_{i_k:j_k})$
+  \STATE Compute max embedding: $\nu_k \gets \mathrm{max}(x_{i_k:j_k})$
+  \STATE Compute gating score: $g_k \gets \sigma(\mathbf{w}^\top \mu_k + b)$
+  \STATE \textbf{Pool span embedding:} $s_k \gets g_k \cdot \nu_k + (1 - g_k) \cdot \mu_k$
+\ENDFOR
+
+\STATE \textbf{Interpolate controller signal:} $\tilde{s} \gets \sum_k \alpha_k s_k$
+\STATE Inject controller at layer $\ell$: $h^\ell \gets f(x^\ell) + W^\ell \tilde{s}$
+
+\STATE \textbf{Compute task loss:} $\mathcal{L}_{\text{task}} \gets \text{CrossEntropy}(\text{output}, y)$
+\STATE \textbf{Compute optional alignment loss:} $\mathcal{L}_{\text{align}} \gets \text{RouteAlign}(\alpha_k, \text{gold spans})$
+\STATE \textbf{Assemble final loss:}
+\begin{equation}
+\mathcal{L}_{\text{final}} = \mathcal{L}_{\text{task}} + \lambda_{\mathrm{ent}}(t) \cdot H(P_t) + \beta_1 \cdot \mathcal{L}_{\text{align}}
+\label{eq:final_loss}
+\end{equation}
+\end{algorithmic}
+\end{algorithm}

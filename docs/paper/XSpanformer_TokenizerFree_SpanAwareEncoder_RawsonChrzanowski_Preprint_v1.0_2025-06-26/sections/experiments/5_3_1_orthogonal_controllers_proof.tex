@@ -1,0 +1,49 @@
+\begin{proposition}[Disentanglement under Orthogonal Controllers]
+\label{prop:orthogonal_fusion}
+Let \(\tilde{s}^{(1)}, \tilde{s}^{(2)} \in \mathbb{R}^d\) be orthogonal controller vectors such that \(\langle \tilde{s}^{(1)}, \tilde{s}^{(2)} \rangle = 0\), and let the layer \(\ell\) hidden state be modulated by additive controller fusion:
+\[
+h^\ell = f(x^\ell) + W_m^\ell \tilde{s},
+\]
+where \(W_m^\ell \in \mathbb{R}^{d' \times d}\) is the injection weight matrix for fusion mode \(m\), and \(f(\cdot)\) is the controller-independent component. Assume the final output logits are computed via a linear decoder:
+\[
+\mathcal{F}_m(x, \tilde{s}) = V h^L,
+\]
+where \(V \in \mathbb{R}^{C \times d'}\) projects to logits over \(C\) classes. If \(W_m^\ell\) is full rank and \(V W_m^\ell\) has spectral norm bounded below by \(\sqrt{\epsilon} > 0\), then:
+\[
+\left\| \mathcal{F}_m(x, \tilde{s}^{(1)}) - \mathcal{F}_m(x, \tilde{s}^{(2)}) \right\|_2^2 \geq \epsilon \cdot \left\| \tilde{s}^{(1)} - \tilde{s}^{(2)} \right\|_2^2.
+\]
+\end{proposition}
+
+\begin{proof}
+\textbf{Step 1:} Express the difference in output logits.
+We compute the difference in output logits:
+\[
+\Delta := \mathcal{F}_m(x, \tilde{s}^{(1)}) - \mathcal{F}_m(x, \tilde{s}^{(2)}) = V W_m^\ell (\tilde{s}^{(1)} - \tilde{s}^{(2)}).
+\]
+
+\textbf{Step 2:} Compute the squared norm.
+By the definition of the operator norm:
+\[
+\|\Delta\|_2^2 = \left\| V W_m^\ell (\tilde{s}^{(1)} - \tilde{s}^{(2)}) \right\|_2^2.
+\]
+
+\textbf{Step 3:} Apply the norm inequality for linear transformations.
+Since \(V W_m^\ell\) is a linear map from \(\mathbb{R}^d \to \mathbb{R}^C\), and \(\tilde{s}^{(1)} - \tilde{s}^{(2)}\) lies in \(\mathbb{R}^d\), we apply the norm inequality for linear transformations:
+\[
+\| \Delta \|_2^2 \geq \sigma_{\min}^2 \cdot \left\| \tilde{s}^{(1)} - \tilde{s}^{(2)} \right\|_2^2,
+\]
+where \(\sigma_{\min}\) is the smallest singular value of \(V W_m^\ell\).
+
+\textbf{Step 4:} Apply the spectral norm assumption.
+By assumption, \(V W_m^\ell\) is full-rank and has minimal singular value at least \(\sqrt{\epsilon}\), so:
+\[
+\sigma_{\min}(V W_m^\ell) \geq \sqrt{\epsilon}.
+\]
+
+\textbf{Step 5:} Conclude the bound.
+Therefore:
+\[
+\| \Delta \|_2^2 \geq \epsilon \cdot \left\| \tilde{s}^{(1)} - \tilde{s}^{(2)} \right\|_2^2.
+\]
+This completes the proof.
+\end{proof}

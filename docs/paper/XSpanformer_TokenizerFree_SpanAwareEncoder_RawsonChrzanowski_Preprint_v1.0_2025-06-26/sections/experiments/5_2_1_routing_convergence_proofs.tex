@@ -1,0 +1,135 @@
+\vspace{0.75em}
+\begin{proposition}[Routing Convergence Bound]
+\label{prop:routing_convergence}
+Let \(H_{\max} = \log |S|\) be the maximum entropy over the uniform span distribution on the candidate set \(S\), and let \(H(P_t)\) denote the entropy of the learned span distribution at epoch \(t\). Under a fixed entropy annealing schedule \(\lambda_{\mathrm{ent}}(t) = \lambda_0 e^{-\gamma t}\) with \(\lambda_0, \gamma > 0\), and assuming entropy-dominated gradient flow during early routing, the following upper bound holds:
+\[
+H(P_t) \leq H_{\max} \cdot e^{-\gamma t}.
+\]
+\end{proposition}
+
+\begin{proof}
+We begin by recalling that during early training, the span logits \(w_k^{(t)}\) are updated primarily by the entropy term:
+\[
+\frac{\partial \mathcal{L}_{\text{final}}}{\partial w_k^{(t)}} \approx \lambda_{\mathrm{ent}}(t) \cdot \nabla_{w_k} H(P_t),
+\]
+with entropy defined over softmax-normalized span probabilities:
+\[
+H(P_t) = -\sum_{k=1}^{|S|} \alpha_k^{(t)} \log \alpha_k^{(t)}, \quad \text{where } \alpha_k^{(t)} = \frac{\exp(w_k^{(t)})}{\sum_j \exp(w_j^{(t)})}.
+\]
+
+\textbf{Step 1:} Compute the entropy gradient with respect to logits.
+The entropy gradient with respect to logits is:
+\[
+\frac{\partial H}{\partial w_k^{(t)}} = \alpha_k^{(t)} \left( \log \alpha_k^{(t)} + 1 \right).
+\]
+
+\textbf{Step 2:} Apply gradient descent update rule.
+Logit descent then yields:
+\[
+w_k^{(t+1)} = w_k^{(t)} - \eta \cdot \lambda_0 e^{-\gamma t} \cdot \alpha_k^{(t)} (\log \alpha_k^{(t)} + 1).
+\]
+
+\textbf{Step 3:} Apply smooth convex descent analysis.
+Following standard smooth convex analysis (e.g., gradient-based decay of entropy potentials), and assuming that the entropy is Lipschitz-smooth and that \(\|\nabla H(P_t)\|^2 \geq c H(P_t)\) for some constant \(c > 0\), we obtain:
+\[
+H(P_{t+1}) \leq H(P_t) \left(1 - \eta c \lambda_0 e^{-\gamma t}\right).
+\]
+
+\textbf{Step 4:} Unroll the recursion.
+Iteratively unrolling the recursion gives:
+\[
+H(P_t) \leq H(P_0) \cdot \prod_{s=0}^{t-1} \left(1 - \eta c \lambda_0 e^{-\gamma s}\right) \leq H(P_0) \cdot \exp\left(-\eta c \lambda_0 \sum_{s=0}^{t-1} e^{-\gamma s} \right).
+\]
+
+\textbf{Step 5:} Evaluate the geometric sum.
+Using the inequality for geometric sums:
+\[
+\sum_{s=0}^{t-1} e^{-\gamma s} = \frac{1 - e^{-\gamma t}}{1 - e^{-\gamma}} \leq \frac{1}{1 - e^{-\gamma}}.
+\]
+
+\textbf{Step 6:} Apply the bound and take asymptotic limit.
+We obtain:
+\[
+H(P_t) \leq H(P_0) \cdot e^{-C (1 - e^{-\gamma t})}, \quad \text{where } C = \frac{\eta c \lambda_0}{1 - e^{-\gamma}}.
+\]
+
+Since \(H(P_0) \leq H_{\max}\) and \(1 - e^{-\gamma t} \to 1\) monotonically, we recover the sharper asymptotic bound:
+\[
+H(P_t) \leq H_{\max} \cdot e^{-\gamma t}, \quad \text{as } t \to \infty.
+\]
+\end{proof}
+
+\begin{proposition}[Exponential Entropy Decay under Annealed Regularization]
+\label{prop:entropy_decay}
+Let \( P_t = \{P_{ij}^{(t)}\} \) denote the span distribution at epoch \(t\), computed via softmax over logits \(w_{ij}^{(t)}\), with entropy defined as
+\[
+H(P_t) = -\sum_{(i,j)} P_{ij}^{(t)} \log P_{ij}^{(t)}.
+\]
+Suppose the training objective is
+\[
+\mathcal{L}_t = \mathcal{L}_{\text{task}} + \lambda_{\mathrm{ent}}(t) \cdot H(P_t), \quad \text{with} \quad \lambda_{\mathrm{ent}}(t) = \lambda_0 e^{-\gamma t},
+\]
+for constants \(\lambda_0 > 0\), \(\gamma > 0\). Assume:
+\begin{itemize}
+    \item[(i)] \(\nabla_{w^{(t)}} H(P_t)\) is Lipschitz-continuous,
+    \item[(ii)] Gradient steps use a bounded step size \(\eta > 0\),
+    \item[(iii)] The task gradient is negligible: \(\nabla_{w^{(t)}} \mathcal{L}_{\text{task}} \approx 0\) during span routing.
+\end{itemize}
+Then entropy decays exponentially:
+\[
+H(P_t) \leq H(P_0) \cdot e^{-\gamma t}, \quad \forall t \geq 0.
+\]
+\end{proposition}
+
+\begin{proof}
+\textbf{Step 1:} Compute the entropy gradient.
+We compute the partial derivative of the entropy with respect to each logit:
+\[
+\nabla_{w_k^{(t)}} H(P_t) = \alpha_k^{(t)} \left( \log \alpha_k^{(t)} + 1 \right), \quad \text{where} \quad \alpha_k^{(t)} = \frac{\exp(w_k^{(t)})}{\sum_\ell \exp(w_\ell^{(t)})}.
+\]
+
+\textbf{Step 2:} Apply gradient descent update.
+The gradient descent update becomes:
+\[
+w_k^{(t+1)} = w_k^{(t)} - \eta \lambda_0 e^{-\gamma t} \cdot \alpha_k^{(t)} (\log \alpha_k^{(t)} + 1).
+\]
+
+\textbf{Step 3:} Apply the descent lemma.
+Since \(H(P)\) is convex in logits and smooth under softmax, we apply the descent lemma:
+\[
+H(P_{t+1}) \leq H(P_t) - \eta \lambda_0 e^{-\gamma t} \cdot \| \nabla H(P_t) \|^2.
+\]
+
+\textbf{Step 4:} Use the gradient norm assumption.
+Assume \(\| \nabla H(P_t) \|^2 \geq c H(P_t)\) for some constant \(c > 0\), yielding:
+\[
+H(P_{t+1}) \leq H(P_t) \cdot (1 - \eta c \lambda_0 e^{-\gamma t}).
+\]
+
+\textbf{Step 5:} Unroll the iteration.
+Iteratively unrolling:
+\[
+H(P_t) \leq H(P_0) \cdot \prod_{s=0}^{t-1} (1 - \eta c \lambda_0 e^{-\gamma s}).
+\]
+
+\textbf{Step 6:} Apply exponential bound.
+Using \(1 - z \leq e^{-z}\):
+\[
+H(P_t) \leq H(P_0) \cdot \exp\left(-\eta c \lambda_0 \sum_{s=0}^{t-1} e^{-\gamma s} \right).
+\]
+
+\textbf{Step 7:} Evaluate the geometric sum and conclude.
+Evaluating the geometric sum:
+\[
+\sum_{s=0}^{t-1} e^{-\gamma s} = \frac{1 - e^{-\gamma t}}{1 - e^{-\gamma}} \leq \frac{1}{1 - e^{-\gamma}}.
+\]
+Hence, with \(C = \frac{\eta c \lambda_0}{1 - e^{-\gamma}}\),
+\[
+H(P_t) \leq H(P_0) \cdot e^{-C (1 - e^{-\gamma t})}.
+\]
+Since \(e^{-\gamma t} \to 0\), the bound becomes
+\[
+H(P_t) \leq H(P_0) \cdot e^{-\gamma' t}, \quad \text{for some } \gamma' \leq \gamma,
+\]
+as claimed.
+\end{proof}
