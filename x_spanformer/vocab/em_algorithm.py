@@ -9,6 +9,7 @@ from typing import List, Dict, Tuple, Optional
 from collections import Counter
 from pathlib import Path
 import json
+import logging
 
 from .core import (
     viterbi_segment, 
@@ -16,6 +17,9 @@ from .core import (
     compute_baseline_perplexity,
     compute_corpus_coverage
 )
+
+# Module-level logger - will inherit from pipeline setup
+logger = logging.getLogger(__name__)
 
 
 def initialize_probabilities(V: List[str], freq: Counter) -> Dict[str, float]:
@@ -34,8 +38,15 @@ def initialize_probabilities(V: List[str], freq: Counter) -> Dict[str, float]:
     total_freq = sum(freq[u] for u in V)
     if total_freq == 0:
         raise ValueError("Total frequency is zero - cannot initialize probabilities")
-        
-    return {u: freq[u] / total_freq for u in V}
+    
+    probs = {u: freq[u] / total_freq for u in V}
+    
+    # Log probability statistics
+    non_zero_probs = [p for p in probs.values() if p > 0]
+    if non_zero_probs:
+        logger.debug(f"Prob range: {min(non_zero_probs):.6f} to {max(non_zero_probs):.6f}")
+    
+    return probs
 
 
 def em_iteration(corpus: List[str], V: List[str], p_u: Dict[str, float]) -> Dict[str, float]:
@@ -52,7 +63,14 @@ def em_iteration(corpus: List[str], V: List[str], p_u: Dict[str, float]) -> Dict
     """
     # E-step: Compute γ^(t)(u|x) via Viterbi segmentation
     counts = Counter()
-    for x in corpus:
+    
+    # Track progress through corpus segments
+    progress_interval = max(1, len(corpus) // 10)  # Log every 10% of progress
+    for i, x in enumerate(corpus):
+        if i % progress_interval == 0 or i == len(corpus) - 1:
+            progress_pct = (i + 1) / len(corpus) * 100
+            logger.info(f"    E-step progress: {i+1:,}/{len(corpus):,} segments ({progress_pct:.1f}%)")
+        
         segmentation = viterbi_segment(x, V, p_u)
         for piece in segmentation:
             counts[piece] += 1
@@ -60,8 +78,10 @@ def em_iteration(corpus: List[str], V: List[str], p_u: Dict[str, float]) -> Dict
     # M-step: Update probabilities p^(t+1)(u) 
     total_counts = sum(counts.values())
     if total_counts > 0:
-        return {u: counts.get(u, 0) / total_counts for u in V}
+        updated_probs = {u: counts.get(u, 0) / total_counts for u in V}
+        return updated_probs
     else:
+        logger.warning("M-step: No counts generated, returning original probabilities")
         return p_u.copy()
 
 
@@ -93,7 +113,11 @@ def adaptive_pruning(
     current_ppl_updated = current_ppl
     
     # First, automatically remove pieces with zero probability
+    zero_prob_pieces = [u for u in V if p_next[u] <= 0]
     V_pruned = [u for u in V_pruned if p_next[u] > 0]
+    
+    if zero_prob_pieces:
+        logger.debug(f"Removed {len(zero_prob_pieces):,} pieces with zero probability")
     
     # If we removed pieces, renormalize probabilities
     if len(V_pruned) < len(V):
@@ -103,13 +127,21 @@ def adaptive_pruning(
         else:
             # All pieces have zero probability - keep original vocabulary
             V_pruned = V.copy()
+            logger.warning("All pieces have zero probability, keeping original vocabulary")
     
     # Consider removing pieces with p^(t+1)(u) < ε
     candidates_to_prune = [u for u in V_pruned if p_next[u] < eps]
     
+    if not candidates_to_prune:
+        logger.debug(f"No candidates below threshold {eps:.6f} for pruning")
+        return V_pruned, current_ppl_updated
+        
+    logger.debug(f"Evaluating {len(candidates_to_prune):,} pruning candidates")
+    
     # Precompute the set of all characters in the corpus
     corpus_chars = set(c for x in corpus for c in x)
     
+    pruned_count = 0
     for u in candidates_to_prune:
         # Tentative removal: V' = V \ {u}
         V_prime = [v for v in V_pruned if v != u]
@@ -139,6 +171,10 @@ def adaptive_pruning(
         if ppl_increase < tau_ppl and oov_prime <= delta_oov:
             V_pruned = V_prime
             current_ppl_updated = ppl_prime
+            pruned_count += 1
+    
+    if pruned_count > 0:
+        logger.debug(f"Pruned {pruned_count:,} additional pieces")
     
     return V_pruned, current_ppl_updated
 
@@ -168,6 +204,9 @@ def induce_vocabulary(
     Returns:
         Tuple of (final_vocabulary, final_probabilities, statistics)
     """
+    logger.info("Starting EM-based vocabulary induction")
+    logger.info(f"Corpus: {len(corpus):,} segments, Vocabulary: {len(V):,} candidates")
+    
     # Store initial vocabulary size for statistics
     V_init = V.copy()
     
@@ -176,19 +215,28 @@ def induce_vocabulary(
     eps = hyperparams["min_piece_prob"]
     tau_ppl = hyperparams["delta_perplexity"]
     delta_oov = hyperparams["delta_oov"]
+    
+    logger.info(f"Hyperparameters: T_max={T_max}, min_prob={eps}, delta_ppl={tau_ppl}, delta_oov={delta_oov}")
 
     # Initialize piece probabilities
+    logger.info("Step 1: Initializing probabilities...")
     p_u = initialize_probabilities(V, freq)
+    non_zero_initial = sum(1 for p in p_u.values() if p > 0)
+    logger.info(f"  → {non_zero_initial:,}/{len(V):,} pieces initialized")
 
     # Compute baseline perplexity
+    logger.info("Step 2: Computing baseline perplexity...")
     baseline_ppl = compute_baseline_perplexity(corpus, V, p_u)
     _, baseline_oov = compute_pruning_perplexity_and_oov(corpus, V, p_u)
+    logger.info(f"  → Baseline: PPL={baseline_ppl:.2f}, OOV={baseline_oov:.4f}")
 
     current_ppl = baseline_ppl
     final_iteration = 0
     
     # EM iterations
+    logger.info(f"Step 3: Starting EM iterations (max {T_max})...")
     for iteration in range(1, T_max + 1):
+        logger.info(f"  Iteration {iteration}/{T_max}: {len(V):,} pieces")
         final_iteration = iteration
         
         # EM iteration
@@ -198,12 +246,14 @@ def induce_vocabulary(
         V, current_ppl = adaptive_pruning(
             corpus, V, p_next, current_ppl, eps, tau_ppl, delta_oov
         )
+        logger.info(f"  → After pruning: {len(V):,} pieces, PPL={current_ppl:.2f}")
 
         # Update probabilities for next iteration
         # Only keep probabilities for remaining vocabulary pieces
         p_u = {u: p_next[u] for u in V if u in p_next}
 
     # Final vocabulary statistics
+    logger.info("Computing final statistics...")
     final_coverage = compute_corpus_coverage(corpus, V, p_u)
     final_ppl, final_oov_rate = compute_pruning_perplexity_and_oov(corpus, V, p_u)
     
@@ -217,6 +267,9 @@ def induce_vocabulary(
         "pruned_pieces": len(V_init) - len(V),
         "baseline_oov": baseline_oov
     }
+    
+    logger.info(f"EM complete: {len(V_init):,} → {len(V):,} pieces ({final_iteration} iterations)")
+    logger.info(f"Final metrics: PPL {baseline_ppl:.2f} → {final_ppl:.2f}, OOV {baseline_oov:.4f} → {final_oov_rate:.4f}")
     
     # Save intermediate results if output directory provided
     if output_dir:

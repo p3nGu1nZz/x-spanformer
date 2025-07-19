@@ -7,8 +7,12 @@ Section 3.1 of the X-Spanformer paper.
 """
 
 import math
+import logging
 from typing import List, Dict, Set, Tuple
 from collections import Counter
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 
 def truncate_string(s: str, max_len: int) -> str:
@@ -123,7 +127,13 @@ def compute_baseline_perplexity(corpus: List[str], V: List[str], p_u: Dict[str, 
     total_pieces = 0  # N_p^(0)
     total_log_prob = 0.0  # L^(0) (will be negative)
     
-    for x in corpus:
+    # Track progress through corpus segments
+    progress_interval = max(1, len(corpus) // 20)  # Log every 5% of progress
+    for i, x in enumerate(corpus):
+        if i % progress_interval == 0 or i == len(corpus) - 1:
+            progress_pct = (i + 1) / len(corpus) * 100
+            logger.info(f"    Progress: {i+1:,}/{len(corpus):,} segments ({progress_pct:.1f}%)")
+        
         segmentation = viterbi_segment(x, V, p_u)
         total_pieces += len(segmentation)
         
@@ -157,12 +167,20 @@ def compute_pruning_perplexity_and_oov(corpus: List[str], V: List[str], p_u: Dic
     Returns:
         Tuple of (perplexity, oov_rate)
     """
+    logger.info(f"Computing pruning perplexity and OOV rate for {len(corpus):,} segments")
+    
     total_pieces = 0  # N_p'
     total_log_prob = 0.0  # L' (will be negative)
     total_codepoints = 0  # N_t
     uncovered_positions = 0  # N_uncov'
     
-    for x in corpus:
+    # Track progress through corpus segments  
+    progress_interval = max(1, len(corpus) // 20)  # Log every 5% of progress
+    for i, x in enumerate(corpus):
+        if i % progress_interval == 0 or i == len(corpus) - 1:
+            progress_pct = (i + 1) / len(corpus) * 100
+            logger.info(f"  Pruning perplexity progress: {i+1:,}/{len(corpus):,} segments ({progress_pct:.1f}%)")
+            
         segmentation = viterbi_segment(x, V, p_u)
         coverage = compute_coverage(x, segmentation)
         
@@ -184,6 +202,7 @@ def compute_pruning_perplexity_and_oov(corpus: List[str], V: List[str], p_u: Dic
     ppl = math.exp(-total_log_prob / total_pieces) if total_pieces > 0 else float('inf')
     oov_rate = uncovered_positions / total_codepoints if total_codepoints > 0 else 0.0
     
+    logger.info(f"Pruning metrics complete: perplexity={ppl:.2f}, OOV rate={oov_rate:.4f}")
     return ppl, oov_rate
 
 
