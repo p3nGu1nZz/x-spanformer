@@ -1,0 +1,24 @@
+\subsection{Training Hyperparameters}
+\label{sec:hyperparams}
+
+\begin{table}[H]
+	\centering
+	\begin{tabular}{@{}lcc@{}}
+		\toprule
+		Parameter & Value & Description \\
+		\midrule
+		Optimizer & AdamW & with decoupled weight decay \\
+		Learning rate schedule & Cosine decay & with 10\% warmup \\
+		Initial LR & 1e-4 & base LR used for all modules \\
+		Dropout & 0.1 & applied to all nonlinearity layers \\
+		Max grad norm & 1.0 & gradient clipping threshold\footnote{Gradient clipping prevents exploding gradients during joint optimization of span scorer and controller networks.} \\
+		Epochs & 50 & full fine-tuning duration\footnote{Early stopping applied if validation perplexity does not improve for 5 consecutive epochs.} \\
+		Batch size & 64 & across all stages\footnote{Effective batch size maintained through gradient accumulation when memory-constrained on sequences $>$ 2048 tokens.} \\
+		Span width $w_{\max}$ & 10 & max width considered per token \\
+		Entropy $\lambda_0$ & 1.0 & initial entropy coefficient \\
+		Decay $\gamma$ & 0.1 & exponential decay rate \\
+		Span pooling strategy & Gated self-attention & with key-query masking and layer norm \\
+		\bottomrule
+	\end{tabular}
+	\caption{Hyper-parameters used in all experiments. Span embeddings are pooled using \texttt{Pool}$(x_{i:j})$, which may implement mean, max, or gated self-attention over the selected token embeddings.}
+\end{table}

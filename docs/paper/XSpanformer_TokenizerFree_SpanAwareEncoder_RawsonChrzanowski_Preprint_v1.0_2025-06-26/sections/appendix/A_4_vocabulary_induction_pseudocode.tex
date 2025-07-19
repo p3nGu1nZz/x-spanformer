@@ -1,0 +1,26 @@
+\subsection{Vocabulary Induction Pseudocode}
+\label{sec:induction-pseudocode}
+
+\begin{algorithm}[H]
+	\caption{Hybrid Unigram‐LM Vocabulary Induction (detailed)}
+	\label{alg:induction-detailed}
+	\begin{algorithmic}[1]
+		\STATE Extract all substrings up to length $L_{\max}$; retain top $M$ by frequency and all codepoints
+		\STATE Initialize $p^{(0)}(u) \propto \mathrm{freq}(u)$
+		\STATE Compute baseline perplexity $\mathrm{PPL}^{(0)} = \exp(L^{(0)}/N_p^{(0)})$ via Viterbi over $\mathcal X$
+		\FOR{$t=0$ \TO $T_{\max}$}
+		\STATE \textbf{E-step:} Viterbi decode $\mathrm{seg}^*_t(x)$ for each $x$
+		\STATE Collect counts $\gamma^{(t)}(u)\!=\!\sum_x\sum_{v\in\mathrm{seg}^*_t(x)}\mathbf1_{v=u}$
+		\STATE \textbf{M-step:} $p^{(t+1)}(u)\!=\!\gamma^{(t)}(u)\big/\sum_v\gamma^{(t)}(v)$
+		\FOR{each $u$ with $p^{(t+1)}(u)<\epsilon$}
+		\STATE Form $V' = V\setminus\{u\}$ and Viterbi decode $\mathrm{seg}^*_{V'}(x)$
+		\STATE Compute $L', N'_p, N'_{\mathrm{uncov}}$ as in Sec.~\ref{sec:vocab-induction}
+		\IF{$\exp(L'/N'_p)-\mathrm{PPL}^{(t)}<\tau_{\mathrm{ppl}}$ and $N'_{\mathrm{uncov}}/N_t\le\delta_{\mathrm{oov}}$}
+		\STATE Accept: $V\leftarrow V'$
+		\ENDIF
+		\ENDFOR
+		\STATE Update $\mathrm{PPL}^{(t+1)}$ on current $V$
+		\ENDFOR
+		\STATE \textbf{Return} $V$ and $\{p(u)\}$
+	\end{algorithmic}
+\end{algorithm}

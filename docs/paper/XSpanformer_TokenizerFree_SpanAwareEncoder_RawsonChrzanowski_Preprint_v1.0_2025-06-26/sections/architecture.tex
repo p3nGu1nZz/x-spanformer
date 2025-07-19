@@ -1,19 +1,22 @@
 \section{Architecture}
+\label{sec:architecture}
 
 This section formalizes the modular components of X-Spanformer and their interactions within the segmentation pipeline.  Each architectural unit is motivated, given a precise mathematical formulation, and illustrated with pseudocode where appropriate.  We conclude with strategies for integrating the fused span controller into standard transformer encoders and analyze runtime complexity.
 
 X-Spanformer begins with a hybrid Unigram-LM vocabulary\footnote{Learned via EM over substrings up to length \(L_{\max}\); see Sec.~\ref{sec:vocab-induction} for details.} that replaces hard token boundaries with soft, probabilistic segmentation.  A custom ONNX operator ingests raw Unicode codepoints of length \(T\) and computes a probability matrix  
-\[
+\begin{equation}
 P \;\in\;\mathbb{R}^{T\times V}, 
 \quad
 P_{t,i} = \Pr(\text{piece }u_i\text{ starts at position }t),
-\]
+\label{eq:prob_matrix}
+\end{equation}
 where \(V\) is the induced vocabulary size.  We embed these soft piece probabilities via  
-\[
+\begin{equation}
 H^0 = P\,W_{\mathrm{emb}},
 \quad
 W_{\mathrm{emb}}\in\mathbb{R}^{V\times d},
-\]
+\label{eq:seed_embeddings}
+\end{equation}
 yielding seed embeddings \(H^0\in\mathbb{R}^{T\times d}\).  From these low-level vectors, the model:
 
 \begin{itemize}

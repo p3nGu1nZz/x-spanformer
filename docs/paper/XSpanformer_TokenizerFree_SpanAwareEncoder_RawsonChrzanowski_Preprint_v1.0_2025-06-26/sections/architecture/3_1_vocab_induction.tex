@@ -21,7 +21,7 @@ Traditional subword tokenizers often fragment whitespace sequences or create sub
 
 \paragraph{Strict Whitespace Separation}
 
-We enforce that whitespace and non-whitespace characters never mix within a single token, using Python's standard \texttt{string.whitespace} definition that includes all Unicode whitespace control characters: \texttt{\{' ', '\textbackslash t', '\textbackslash n', '\textbackslash r', '\textbackslash x0b', '\textbackslash x0c'\}}. This creates two distinct classes of valid candidates:
+We enforce that whitespace and non-whitespace characters never mix within a single token, using Python's standard \texttt{string.whitespace} definition\footnote{Python's \texttt{string.whitespace} includes all ASCII whitespace characters: space (\\u0020), tab (\\u0009), newline (\\u000a), vertical tab (\\u000b), form feed (\\u000c), and carriage return (\\u000d).} that includes all Unicode whitespace control characters: \texttt{\{' ', '\textbackslash t', '\textbackslash n', '\textbackslash r', '\textbackslash x0b', '\textbackslash x0c'\}}. This creates two distinct classes of valid candidates:
 
 \begin{align}
 \mathcal{W} &= \{\underbrace{\text{ws} \cdots \text{ws}}_{k \text{ times}} \mid \text{ws} \in \mathcal{C}_w, k \geq 1\} \quad\text{(pure whitespace)} \\
@@ -74,10 +74,11 @@ At each EM iteration \(t\), we alternate:
 \paragraph{E-step:}
 
 For each sequence \(x\in\mathcal X\), we compute the posterior usage mass \(\gamma^{(t)}(u \mid x)\) for every piece \(u\in \mathcal U_t\). Since enumerating all segmentations of \(x\) is intractable, we approximate using the single best segmentation:
-\[
+\begin{equation}
 \mathrm{seg}^{*}(x)
 = \arg\max_{\mathrm{seg}} \prod_{v\in\mathrm{seg}} p^{(t)}(v),
-\]
+\label{eq:viterbi_decode}
+\end{equation}
 obtained via Viterbi decoding \cite{kudo2018sentencepiece}. We then compute:
 \[
 \gamma^{(t)}(u \mid x)
@@ -87,25 +88,27 @@ obtained via Viterbi decoding \cite{kudo2018sentencepiece}. We then compute:
 \paragraph{M-step:}
 
 We re-estimate the piece probabilities as:
-\[
+\begin{equation}
 p^{(t+1)}(u)
 = \frac{
 	\sum_{x \in \mathcal X} \gamma^{(t)}(u \mid x)
 }{
 	\sum_{v \in \mathcal U_t} \sum_{x \in \mathcal X} \gamma^{(t)}(v \mid x)
 },
-\]
+\label{eq:m_step_update}
+\end{equation}
 which reduces to relative frequency over the Viterbi segmentations.
 
 \subsubsection{Baseline Perplexity}
 
 To benchmark compressibility before pruning, we compute the initial corpus perplexity using piece-level normalization for consistency with the pruning criterion:
-\[
+\begin{equation}
 \mathrm{PPL}^{(0)}
 = \exp\left(
 \frac{L^{(0)}}{N_{p}^{(0)}}
 \right),
-\]
+\label{eq:baseline_perplexity}
+\end{equation}
 where:
 \[
 L^{(0)} = -\sum_{x\in\mathcal X}\;\sum_{v\in\mathrm{seg}^{*}(x)}\log p^{(0)}(v)
@@ -119,12 +122,6 @@ and \(\mathrm{seg}^{*}(x)\) is the Viterbi segmentation under \(p^{(0)}\).
 
 \paragraph{Mathematical Consistency Note:} 
 This piece-level normalization ensures that the baseline perplexity \(\mathrm{PPL}^{(0)}\) and pruning perplexity \(\mathrm{PPL}'\) use the same normalization scheme, enabling meaningful comparison in the pruning criterion \(\mathrm{PPL}' - \mathrm{PPL}^{(t)} < \tau_{\mathrm{ppl}}\). An alternative sequence-level baseline would divide by \(|\mathcal X|\) instead of \(N_{p}^{(0)}\), but this would make the pruning comparison mathematically invalid since \(\mathrm{PPL}'\) uses piece-level normalization.
-
-
-
-
-
-
 
 \subsubsection{Adaptive Pruning by PPL and OOV}
 
@@ -180,14 +177,6 @@ We accept the removal \(u\) if and only if both
 
 This criterion guarantees that any pruning step degrades the model’s average piece‐level log‐likelihood by at most \(\tau_{\mathrm{ppl}}\) and introduces no more than \(\delta_{\mathrm{oov}}\) uncovered codepoint positions.
 
-
-
-
-
-
-
-
-
 \subsubsection{Existence and Monotonicity Proposition}
 
 Define the feasible set:
@@ -211,50 +200,81 @@ Define the feasible set:
 \end{proposition}
 
 \begin{proof}
-	\textbf{Step 1: Existence}
+	We prove both non-emptiness of the feasible set and the monotonicity property through a constructive approach.
 	
-	Choose \(V = \mathcal U_0\), the full candidate set.
+	\textbf{Step 1: Existence (Non-emptiness)}
 	
-	Since \(V\) includes all substrings and individual codepoints:
+	We show that \(\mathcal F(\tau,\delta) \neq \emptyset\) for any \(\tau,\delta \ge 0\) by constructing an explicit member.
+	
+	Choose \(V = \mathcal U_0\), the full candidate set containing all extracted substrings and individual codepoints.
+	
+	\emph{Substep 1.1: OOV Analysis}
+	
+	By construction of \(\mathcal U_0\), every individual codepoint is included. For any sequence \(x \in \mathcal X\) and position \(i \in \{1,\ldots,|x|\}\), the character \(x_i\) satisfies \(x_i \in \mathcal U_0\). Therefore, Viterbi decoding can always fall back to single-character segmentation:
 	\[
-	\mathrm{OOV}(V) = 0,
-	\quad
-	\mathrm{PPL}(V) = \mathrm{PPL}^{(0)}.
+	\mathrm{seg}^{*}(x) = [x_1, x_2, \ldots, x_{|x|}] \text{ is always feasible under } \mathcal U_0
 	\]
 	
-	Therefore, for any \(\tau,\delta \ge 0\),
+	This guarantees complete coverage:
 	\[
-	\mathrm{PPL}(V) \le \mathrm{PPL}^{(0)} + \tau,
-	\quad
-	\mathrm{OOV}(V) \le \delta,
-	\quad
-	\Rightarrow
-	V \in \mathcal F(\tau,\delta).
+	\mathrm{cover}_{\mathcal U_0}(x) = \{1, 2, \ldots, |x|\} \text{ for all } x \in \mathcal X
 	\]
 	
-	\textbf{Step 2: Monotonicity}
-	
-	Let \(V \in \mathcal F(\tau,\delta)\), and suppose \(\tau' \ge \tau\), \(\delta' \ge \delta\). Then:
+	Hence:
 	\[
-	\mathrm{PPL}(V) \le \mathrm{PPL}^{(0)} + \tau \le \mathrm{PPL}^{(0)} + \tau',
-	\quad
-	\mathrm{OOV}(V) \le \delta \le \delta',
-	\quad
-	\Rightarrow
-	V \in \mathcal F(\tau',\delta').
+	N_{\mathrm{uncov}} = \sum_{x\in\mathcal X}\;\sum_{i=1}^{|x|} \mathbf1\bigl(i\not\in \mathrm{cover}_{\mathcal U_0}(x)\bigr) = 0
 	\]
 	
-	Thus:
+	Therefore: \(\mathrm{OOV}(\mathcal U_0) = \frac{N_{\mathrm{uncov}}}{N_{t}} = 0\)
+	
+	\emph{Substep 1.2: Perplexity Analysis}
+	
+	The baseline perplexity \(\mathrm{PPL}^{(0)}\) is computed using the full vocabulary \(\mathcal U_0\) with initial probability estimates \(p^{(0)}\). Since we use the same vocabulary:
 	\[
-	\mathcal F(\tau,\delta) \subseteq \mathcal F(\tau',\delta').
+	\mathrm{PPL}(\mathcal U_0) = \mathrm{PPL}^{(0)}
 	\]
 	
-	\textbf{Step 3: Minimality}
+	\emph{Substep 1.3: Feasibility Verification}
 	
-	Since \(\mathcal F(\tau,\delta) \subseteq \mathcal F(\tau',\delta')\),
+	For any \(\tau,\delta \ge 0\):
+	\begin{align}
+	\mathrm{PPL}(\mathcal U_0) = \mathrm{PPL}^{(0)} &\le \mathrm{PPL}^{(0)} + \tau \\
+	\mathrm{OOV}(\mathcal U_0) = 0 &\le \delta
+	\end{align}
+	
+	Therefore: \(\mathcal U_0 \in \mathcal F(\tau,\delta)\), proving non-emptiness.
+	
+	\textbf{Step 2: Monotonicity (Subset Inclusion)}
+	
+	Let \(\tau' \ge \tau\) and \(\delta' \ge \delta\). We show \(\mathcal F(\tau,\delta) \subseteq \mathcal F(\tau',\delta')\).
+	
+	Take any \(V \in \mathcal F(\tau,\delta)\). By definition of feasible sets:
+	\begin{align}
+	\mathrm{PPL}(V) &\le \mathrm{PPL}^{(0)} + \tau \\
+	\mathrm{OOV}(V) &\le \delta
+	\end{align}
+	
+	Since \(\tau' \ge \tau\) and \(\delta' \ge \delta\):
+	\begin{align}
+	\mathrm{PPL}(V) &\le \mathrm{PPL}^{(0)} + \tau \le \mathrm{PPL}^{(0)} + \tau' \\
+	\mathrm{OOV}(V) &\le \delta \le \delta'
+	\end{align}
+	
+	Therefore: \(V \in \mathcal F(\tau',\delta')\), establishing the inclusion.
+	
+	\textbf{Step 3: Minimality (Optimal Vocabulary Size)}
+	
+	From Step 2, we have the subset relation:
 	\[
-	\min_{V \in \mathcal F(\tau',\delta')} |V| \le \min_{V \in \mathcal F(\tau,\delta)} |V|.
+	\mathcal F(\tau,\delta) \subseteq \mathcal F(\tau',\delta')
 	\]
+	
+	Since \(\mathcal F(\tau,\delta)\) is a non-empty subset of \(\mathcal F(\tau',\delta')\), the minimum vocabulary size over the larger set cannot exceed the minimum over the smaller set:
+	\[
+	\min_{V \in \mathcal F(\tau',\delta')} |V| \le \min_{V \in \mathcal F(\tau,\delta)} |V|
+	\]
+	
+	This completes the proof of monotonicity in optimal vocabulary size with respect to constraint relaxation.
 \end{proof}
 
 \subsubsection{Algorithm: Adaptive Vocabulary Induction}

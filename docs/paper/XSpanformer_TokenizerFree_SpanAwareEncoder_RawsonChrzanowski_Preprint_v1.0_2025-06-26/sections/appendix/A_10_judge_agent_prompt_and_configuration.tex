@@ -1,0 +1,109 @@
+\subsection{Judge Agent Prompt and Configuration}
+\label{sec:judge-agent-config}
+
+To automate quality filtering of OCR‐extracted segments, we deploy an LLM‐based judge agent. Below are the exact prompts and YAML configuration.
+
+\paragraph{System Prompt}
+\begin{verbatim}
+	You are a data quality evaluator for X-Spanformer training data. You assess text segments
+	for their suitability as training examples for a tokenizer-free, span-aware encoder.
+	
+	Evaluate segments based on:
+	- Structural clarity: Can meaningful spans be identified (words, phrases, code constructs)?
+	- Compositional value: Does it contain learnable patterns for span segmentation?
+	- Training utility: Is it clean, coherent, and representative of target domains (code,
+	natural language, or mixed)?
+	
+	Decision criteria:
+	- Score >= {{ threshold }}: Status should be "keep"
+	- Score <  {{ threshold }}: Status should be "discard"
+	
+	Output format (exactly 4 lines):
+	Score: (float 0.0-1.0, where 1.0 = excellent training data)
+	Status: keep | discard
+	Type:   natural | code | mixed
+	Reason: brief explanation focusing on structural/training value
+	
+	Be selective – only "keep" segments with clear structural patterns that will help the
+	model learn span segmentation and composition.
+\end{verbatim}
+
+\paragraph{User Prompt}
+\begin{verbatim}
+	Evaluate this text segment as potential training data for X-Spanformer (tokenizer-free,
+	span-aware model).
+	
+	Consider:
+	- Does it have clear structural elements that can be segmented into meaningful spans?
+	- Is it clean and well-formed for training purposes?
+	- Does it represent valuable patterns for learning span composition?
+	- What type of content is this?
+	
+	Decision criteria:
+	- Score >= {{ threshold }}: Status should be "keep"
+	- Score <  {{ threshold }}: Status should be "discard"
+	
+	Content types:
+	- "natural": Natural language text (prose, articles, documentation)
+	- "code":     Programming code, markup, configuration files
+	- "mixed":    Combined natural language and code elements
+	
+	Text segment:
+	---
+	{{ text }}
+	---
+	
+	Respond in exactly 4 lines:
+	Score:  0.0-1.0
+	Status: keep | discard
+	Type:   natural | code | mixed
+	Reason: brief structural assessment
+\end{verbatim}
+
+\paragraph{Judge Configuration (YAML)}
+\begin{verbatim}
+	agent_type: judge
+	
+	model:
+	name: phi4-mini
+	temperature: 0.2
+	max_context_tokens: 131072
+	max_turn_tokens: 4096
+	
+	processor:
+	max_raw_length: 512
+	
+	dialogue:
+	max_turns: 12
+	memory_limit: 24
+	trim_strategy: rolling
+	
+	judge:
+	model_name: phi4-mini
+	temperature: 0.2
+	max_retries: 3
+	judges: 5
+	threshold: 0.69
+	
+	regex_filters:
+	- pattern: "^[\\s\\n\\r]*$"
+	reason: "empty or whitespace-only content"
+	- pattern: "^[^a-zA-Z0-9]{10,}$"
+	reason: "content with only symbols/punctuation"
+	
+	templates:
+	system: judge_system
+	judge:  segment_judge
+	
+	format:
+	expected_fields: [ score, status, reason ]
+	strict_line_count: 3
+	parse_strategy:     regex
+	
+	logging:
+	verbosity:            debug
+	track_consensus:      true
+	return_all_passes:    false
+	log_queries:          true
+	log_responses:        true
+\end{verbatim}

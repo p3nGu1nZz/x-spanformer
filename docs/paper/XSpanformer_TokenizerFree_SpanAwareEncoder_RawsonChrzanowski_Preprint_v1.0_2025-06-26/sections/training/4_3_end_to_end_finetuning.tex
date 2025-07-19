@@ -21,12 +21,20 @@ where
 \(\mathcal{L}_{\mathrm{span}} = \mathrm{KL}\bigl(P_{\mathrm{gold}}\Vert P_{\theta}\bigr)\) aligns the induced span distribution \(P_\theta\) with any available span supervision, and  
 \(H(P)\) is the Shannon entropy of \(P_\theta\).  
 The entropy coefficient is annealed only after the Phase I transition epoch \(T_1\):
-\[
+\begin{equation}
 \lambda_{\mathrm{ent}}(t)
 = \lambda_{0}\,\exp\bigl(-\gamma\,(t - T_1)\bigr)\,\mathbf{1}_{t > T_1},
 \label{eq:entropy_schedule}
-\]
+\end{equation}
 ensuring continued but diminishing exploration during fine‐tuning.
+
+\textbf{Mathematical Properties of the Annealing Schedule:}
+\begin{enumerate}[leftmargin=1.5em]
+\item \emph{Continuity at Transition:} \(\lim_{t \to T_1^+} \lambda_{\mathrm{ent}}(t) = \lambda_0\)
+\item \emph{Monotonic Decay:} For \(t > T_1\), \(\frac{d\lambda_{\mathrm{ent}}}{dt} = -\gamma \lambda_0 \exp(-\gamma(t-T_1)) < 0\)
+\item \emph{Asymptotic Behavior:} \(\lim_{t \to \infty} \lambda_{\mathrm{ent}}(t) = 0\)
+\end{enumerate}
+This exponential decay balances initial exploration (\(\lambda_0\)) with eventual exploitation (convergence to 0).
 
 \subsubsection{Training Algorithm}
 \label{sec:training-algorithm}

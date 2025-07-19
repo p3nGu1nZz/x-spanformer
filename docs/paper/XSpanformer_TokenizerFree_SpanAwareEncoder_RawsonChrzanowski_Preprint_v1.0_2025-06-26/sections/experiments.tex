@@ -16,14 +16,31 @@ Unlike traditional benchmark-driven evaluations, our methodology emphasizes stru
   \item \(\mathcal{D} = \{(x^{(i)}, y^{(i)})\}_{i=1}^{N}\): training corpus with optional supervision;
   \item \(f_\theta\): differentiable span scorer;
   \item \(g_\phi\): controller aggregator;
-  \item \(\tilde{s}\): controller vector, computed as a relevance-weighted sum over pooled span embeddings:
+  \item \(\tilde{s}\): controller vector, computed as a relevance-weighted sum over pooled span embeddings. The construction proceeds in two steps:
+  
+  \emph{Step 1: Relevance Score Computation}
+  For each selected span \(k \in \{1,\ldots,K\}\), we compute a relevance score \(w_k\) based on the span embedding \(s_k\), span length \(\delta_k\), and confidence measure \(\mathrm{conf}_k\):
   \begin{equation}
-  \tilde{s} = \sum_{k=1}^{K} \alpha_k s_k
-  \end{equation}
-  \begin{equation}
-  \alpha_k = \frac{\exp(w_k)}{\sum_{\ell=1}^{K} \exp(w_\ell)}, \quad
   w_k = g_\phi(s_k, \delta_k, \mathrm{conf}_k)
   \end{equation}
+  where \(g_\phi\) is a learned aggregator network parameterized by \(\phi\).
+  
+  \emph{Step 2: Softmax Normalization and Weighted Sum}
+  The relevance scores are normalized via softmax to obtain attention weights:
+  \begin{equation}
+  \alpha_k = \frac{\exp(w_k)}{\sum_{\ell=1}^{K} \exp(w_\ell)}, \quad k = 1,\ldots,K
+  \label{eq:attention_weights}
+  \end{equation}
+  
+  Note that \(\sum_{k=1}^K \alpha_k = 1\) and \(\alpha_k \ge 0\) for all \(k\), forming a probability distribution over spans.
+  
+  The final controller vector is computed as:
+  \begin{equation}
+  \tilde{s} = \sum_{k=1}^{K} \alpha_k s_k
+  \label{eq:controller_vector}
+  \end{equation}
+  
+  This construction ensures that \(\tilde{s}\) lies in the convex hull of the span embeddings \(\{s_k\}_{k=1}^K\).
   \item \(\psi\): transformer parameters.
 \end{itemize}
 
@@ -35,7 +52,12 @@ Model optimization proceeds via the composite loss:
 where:
 \begin{itemize}[leftmargin=1.8em]
     \item \(\mathcal{L}_{\text{task}}\): task-aligned objective (e.g., cross-entropy, contrastive alignment);
-    \item \(\mathcal{L}_{\text{span}} = \mathrm{KL}(\hat{P}_{\text{gold}} \,\|\, P)\): span KL alignment;
+    \item \(\mathcal{L}_{\text{span}}\): span KL alignment term, which encourages the learned span distribution \(P\) to match supervised gold spans \(\hat{P}_{\text{gold}}\). This is formulated as the Kullback-Leibler divergence:
+    \begin{equation}
+    \mathcal{L}_{\text{span}} = \mathrm{KL}(\hat{P}_{\text{gold}} \,\|\, P) = \sum_{(i,j)} \hat{P}_{\text{gold}}(i,j) \log \frac{\hat{P}_{\text{gold}}(i,j)}{P(i,j)}
+    \label{eq:kl_span}
+    \end{equation}
+    where the sum is over all valid span positions \((i,j)\) with \(1 \le i < j \le T\). This term is non-negative and equals zero if and only if \(P = \hat{P}_{\text{gold}}\) almost everywhere.
     \item \(\mathcal{L}_{\text{ent}} = - \lambda_{\text{ent}} H(P)\): entropy regularization term.
 \end{itemize}
 

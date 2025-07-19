@@ -36,7 +36,7 @@ with an annealing schedule
 	= \lambda_0\,e^{-\gamma t},
 	\label{eq:entropy_decay}
 \end{equation}
-where \(t\) indexes training epochs, \(\lambda_0>0\) is the initial weight, and \(\gamma>0\) the decay rate.  This follows entropy regularization principles \cite{grandvalet2005semi,pereyra2017regularizing} and curriculum learning schedules \cite{bengio2009curriculum,kreutzer2021distilling}.
+where \(t\) indexes training epochs, \(\lambda_0>0\) is the initial weight\footnote{We set $\lambda_0 = 1.0$ to ensure equal weighting between span entropy and task loss during initial exploration phases.}, and \(\gamma>0\) the decay rate\footnote{Decay rate $\gamma = 0.1$ provides gradual sparsification over 50 epochs, balancing exploration with convergence to interpretable spans.}.  This follows entropy regularization principles \cite{grandvalet2005semi,pereyra2017regularizing} and curriculum learning schedules \cite{bengio2009curriculum,kreutzer2021distilling}.
 
 \begin{proposition}[Maximum Entropy of Uniform Span Distribution]
 	\label{prop:span_entropy_bound}

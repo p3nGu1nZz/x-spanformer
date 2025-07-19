@@ -1,0 +1,16 @@
+\subsection{Formal Proofs}
+\label{sec:proofs}
+
+\emph{Proof of Feasibility and Monotonicity} (Proposition in Sec.~\ref{sec:vocab-induction}).  
+\[
+V_0=\mathcal U_0\implies\mathrm{PPL}(V_0)=\mathrm{PPL}^{(0)},\;
+\mathrm{OOV}(V_0)=0,
+\]
+so $V_0\in\mathcal F(\tau,\delta)$ for any $\tau,\delta\ge0$.  If $\tau'\ge\tau,\delta'\ge\delta$, then for $V\in\mathcal F(\tau,\delta)$,
+\[
+\mathrm{PPL}(V)\le \mathrm{PPL}^{(0)}+\tau\le \mathrm{PPL}^{(0)}+\tau',
+\quad
+\mathrm{OOV}(V)\le\delta\le\delta',
+\quad\implies V\in\mathcal F(\tau',\delta'),
+\]
+establishing $\mathcal F(\tau,\delta)\subseteq\mathcal F(\tau',\delta')$ and the minimality relation.
