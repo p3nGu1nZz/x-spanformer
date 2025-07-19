@@ -129,7 +129,7 @@ def compute_baseline_perplexity(corpus: List[str], V: List[str], p_u: Dict[str, 
     total_log_prob = 0.0  # L^(0) (will be negative)
     
     # Track progress through corpus segments
-    progress_interval = max(1, len(corpus) // 20)  # Log every 5% of progress
+    progress_interval = max(1, len(corpus) // 20)  # Log approximately every 5% of total items
     for i, x in enumerate(corpus):
         if i % progress_interval == 0 or i == len(corpus) - 1:
             progress_pct = (i + 1) / len(corpus) * 100
