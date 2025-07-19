@@ -11,6 +11,13 @@ from typing import List, Dict, Set, Tuple
 from collections import Counter
 
 
+def truncate_string(s: str, max_len: int) -> str:
+    """Truncate string for display purposes."""
+    if len(s) <= max_len:
+        return s
+    return s[:max_len-3] + "..."
+
+
 def viterbi_segment(x: str, V: List[str], p_u: Dict[str, float]) -> List[str]:
     """
     Viterbi segmentation following the paper's formulation.

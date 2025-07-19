@@ -220,7 +220,8 @@ class TestRichUtilsEdgeCases:
         """Test summary panel with None values."""
         with patch.object(rich_utils.console, 'print') as mock_print:
             # Should handle None values gracefully without crashing
-            rich_utils.display_summary_panel(None, None, None)
+            # Type ignore since we're testing edge case handling
+            rich_utils.display_summary_panel(None, None, None)  # type: ignore
             mock_print.assert_called()
     
     def test_rich_log_non_string_keys(self):

@@ -5,6 +5,7 @@ This module provides validation functions to ensure the vocabulary and
 segmentation processes meet the requirements specified in the X-Spanformer paper.
 """
 
+import math
 from typing import List, Dict, Set, Union
 from .core import viterbi_segment, compute_coverage
 
