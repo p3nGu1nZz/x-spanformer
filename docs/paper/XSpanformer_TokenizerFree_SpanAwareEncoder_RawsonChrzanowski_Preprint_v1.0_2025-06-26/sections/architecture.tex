@@ -1,19 +1,22 @@
 \section{Architecture}
+\label{sec:architecture}
 
 This section formalizes the modular components of X-Spanformer and their interactions within the segmentation pipeline.  Each architectural unit is motivated, given a precise mathematical formulation, and illustrated with pseudocode where appropriate.  We conclude with strategies for integrating the fused span controller into standard transformer encoders and analyze runtime complexity.
 
 X-Spanformer begins with a hybrid Unigram-LM vocabulary\footnote{Learned via EM over substrings up to length \(L_{\max}\); see Sec.~\ref{sec:vocab-induction} for details.} that replaces hard token boundaries with soft, probabilistic segmentation.  A custom ONNX operator ingests raw Unicode codepoints of length \(T\) and computes a probability matrix  
-\[
+\begin{equation}
 P \;\in\;\mathbb{R}^{T\times V}, 
 \quad
 P_{t,i} = \Pr(\text{piece }u_i\text{ starts at position }t),
-\]
+\label{eq:prob_matrix}
+\end{equation}
 where \(V\) is the induced vocabulary size.  We embed these soft piece probabilities via  
-\[
+\begin{equation}
 H^0 = P\,W_{\mathrm{emb}},
 \quad
 W_{\mathrm{emb}}\in\mathbb{R}^{V\times d},
-\]
+\label{eq:seed_embeddings}
+\end{equation}
 yielding seed embeddings \(H^0\in\mathbb{R}^{T\times d}\).  From these low-level vectors, the model:
 
 \begin{itemize}
@@ -26,13 +29,13 @@ yielding seed embeddings \(H^0\in\mathbb{R}^{T\times d}\).  From these low-level
 Span-level augmentation parallels auxiliary token insertion in models like SpanBERT \cite{joshi2020spanbert} but operates on soft, overlapping spans rather than hard subwords.  All modules—from boundary scoring to controller fusion—are fully differentiable and trained end-to-end with the downstream encoder.
 
 % New subsection: vocabulary induction
-\input{architecture/3_0_dataset_extraction}
-\input{architecture/3_1_vocab_induction}
-\input{architecture/3_2_seed_embeddings}
-\input{architecture/3_3_span_predictor}
-\input{architecture/3_4_length_estimator}
-\input{architecture/3_5_modality_typing}
-\input{architecture/3_6_span_embedding}
-\input{architecture/3_7_controller_fusion}
-\input{architecture/3_8_span_interpolation}
-\input{architecture/3_9_runtime_complexity}
+\input{sections/architecture/3_0_dataset_extraction}
+\input{sections/architecture/3_1_vocab_induction}
+\input{sections/architecture/3_2_seed_embeddings}
+\input{sections/architecture/3_3_span_predictor}
+\input{sections/architecture/3_4_length_estimator}
+\input{sections/architecture/3_5_modality_typing}
+\input{sections/architecture/3_6_span_embedding}
+\input{sections/architecture/3_7_controller_fusion}
+\input{sections/architecture/3_8_span_interpolation}
+\input{sections/architecture/3_9_runtime_complexity}

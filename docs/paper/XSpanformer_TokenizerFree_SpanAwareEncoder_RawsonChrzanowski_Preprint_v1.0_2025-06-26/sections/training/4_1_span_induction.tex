@@ -1,0 +1,91 @@
+\subsection{Span Induction with Entropic Regularization}
+\label{sec:span-induction}
+
+Starting from contextualized embeddings \(H\in\mathbb{R}^{T\times d}\), we define the set of contiguous spans of maximum width \(w_{\max}\):
+\begin{equation}
+	S = \bigl\{(i,j)\;\big|\;1\le i<j\le \min(i+w_{\max},T)\bigr\}.
+	\label{eq:contiguous_span_set}
+\end{equation}
+Each span \((i,j)\in S\) is pooled to a fixed-length vector
+\[
+v_{ij} = \mathrm{Pool}\bigl(H[i:j]\bigr)\in\mathbb{R}^d,
+\]
+and scored by a small induction network \(f_{\mathrm{ind}}:\mathbb{R}^d\to\mathbb{R}\):
+\[
+w_{ij} = f_{\mathrm{ind}}(v_{ij}).
+\]
+We normalize these logits to obtain a distribution over spans:
+\begin{equation}
+	P_{ij}
+	= \frac{\exp(w_{ij})}
+	{\sum_{(a,b)\in S}\exp(w_{ab})}.
+	\label{eq:span_softmax}
+\end{equation}
+
+To prevent early collapse into a few high–confidence spans, we add a temperature–weighted entropy penalty:
+\begin{equation}
+	\mathcal{L}_{\mathrm{ent}}
+	= -\lambda_{\mathrm{ent}}(t)\;H(P),
+	\quad
+	H(P) = -\sum_{(i,j)\in S}P_{ij}\log P_{ij},
+	\label{eq:entropy_term}
+\end{equation}
+with an annealing schedule
+\begin{equation}
+	\lambda_{\mathrm{ent}}(t)
+	= \lambda_0\,e^{-\gamma t},
+	\label{eq:entropy_decay}
+\end{equation}
+where \(t\) indexes training epochs, \(\lambda_0>0\) is the initial weight\footnote{We set $\lambda_0 = 1.0$ to ensure equal weighting between span entropy and task loss during initial exploration phases.}, and \(\gamma>0\) the decay rate\footnote{Decay rate $\gamma = 0.1$ provides gradual sparsification over 50 epochs, balancing exploration with convergence to interpretable spans.}.  This follows entropy regularization principles \cite{grandvalet2005semi,pereyra2017regularizing} and curriculum learning schedules \cite{bengio2009curriculum,kreutzer2021distilling}.
+
+\begin{proposition}[Maximum Entropy of Uniform Span Distribution]
+	\label{prop:span_entropy_bound}
+	Let \(|S|=N\).  Then the entropy \(H(P)\) in Equation~\eqref{eq:entropy_term} is maximized when
+	\begin{equation}
+		P_{ij} = \frac{1}{N}
+		\quad\forall\,(i,j)\in S,
+		\label{eq:uniform_P}
+	\end{equation}
+	yielding
+	\begin{equation}
+		H_{\max}(P) = \log N.
+		\label{eq:max_entropy}
+	\end{equation}
+\end{proposition}
+\begin{proof}
+	We maximize the entropy function
+	\[
+	H(P) = -\sum_{(i,j)\in S} P_{ij} \log P_{ij}
+	\]
+	subject to the normalization constraint \(\sum_{(i,j)\in S} P_{ij} = 1\) and non-negativity \(P_{ij} \geq 0\).
+	
+	\textbf{Step 1:} Construct the Lagrangian functional.
+	\[
+	\mathcal{L}(P, \lambda) = -\sum_{(i,j)\in S} P_{ij} \log P_{ij} + \lambda\left(\sum_{(i,j)\in S} P_{ij} - 1\right)
+	\]
+	
+	\textbf{Step 2:} Compute the first-order optimality condition for \(P_{kl}\) where \((k,l) \in S\).
+	\[
+	\frac{\partial \mathcal{L}}{\partial P_{kl}} = -\log P_{kl} - 1 + \lambda = 0
+	\]
+	
+	\textbf{Step 3:} Solve for \(P_{kl}\).
+	\[
+	\log P_{kl} = \lambda - 1 \quad \Rightarrow \quad P_{kl} = e^{\lambda - 1}
+	\]
+	
+	\textbf{Step 4:} Since this relation holds for every \((k,l) \in S\), all probabilities are equal: \(P_{ij} = c\) for some constant \(c = e^{\lambda - 1}\).
+	
+	\textbf{Step 5:} Apply the normalization constraint.
+	\[
+	\sum_{(i,j)\in S} P_{ij} = \sum_{(i,j)\in S} c = |S| \cdot c = N \cdot c = 1
+	\]
+	Therefore, \(c = \frac{1}{N}\), which gives \(P_{ij} = \frac{1}{N}\) for all \((i,j) \in S\).
+	
+	\textbf{Step 6:} Substitute into the entropy expression.
+	\[
+	H_{\max}(P) = -\sum_{(i,j)\in S} \frac{1}{N} \log\left(\frac{1}{N}\right) = -\frac{N}{N} \log\left(\frac{1}{N}\right) = -\log\left(\frac{1}{N}\right) = \log N
+	\]
+\end{proof}
+
+\noindent\textbf{Remark.} Early in training, a high \(\lambda_{\mathrm{ent}}(t)\) encourages broad span exploration.  As \(\lambda_{\mathrm{ent}}(t)\) decays, the model concentrates probability mass on a sparse set of high‐salience spans, facilitating convergence to meaningful structural units.

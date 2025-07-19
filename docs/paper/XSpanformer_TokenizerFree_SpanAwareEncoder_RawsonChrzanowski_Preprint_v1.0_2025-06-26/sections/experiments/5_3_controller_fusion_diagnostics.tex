@@ -1,0 +1,51 @@
+\subsection{Controller Fusion Diagnostics}
+\label{sec:controller-diagnostics}
+
+To evaluate the semantic precision and interpretability of controller integration, we analyze three distinct injection mechanisms: (1) prefix token interpolation, (2) additive attention biasing, and (3) gated residual modulation. Each scheme receives identical controller input \(\tilde{s}\), formed via:
+\[
+\tilde{s} = \sum_{k=1}^K \alpha_k s_k, \quad \alpha_k = \frac{\exp(w_k)}{\sum_{\ell=1}^K \exp(w_\ell)}.
+\]
+
+Let \(\mathcal{F}_m(\cdot, \tilde{s})\) denote the model with injection mode \(m \in \{\mathrm{prefix}, \mathrm{bias}, \mathrm{gate}\}\). For fixed input \(x\), we study the perturbation and propagation effects caused by controller fusion.
+
+\subsubsection*{Injection Influence}
+
+We define influence magnitude as the \(L_2\) norm of the difference in output logits between the controller-injected and controller-ablated models:
+\[
+\Delta^{(m)}(x) = \left\| \mathcal{F}_m(x, \tilde{s}) - \mathcal{F}_m(x, \mathbf{0}) \right\|_2.
+\]
+
+This is computed layerwise to identify zones of concentrated influence and injection saturation. Stronger deviations at higher layers imply delayed controller fusion, whereas front-loaded shifts suggest syntactic modulation.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{figures/figure_7.png}
+  \caption{Layerwise controller influence heatmap across injection modes. Prefix tuning shifts early logits; gating modulates mid-depth; attention bias generates scattered low-intensity changes.}
+  \label{fig:controller_comparison}
+\end{figure}
+
+\subsubsection*{Layerwise Traceability}
+
+For each mode, we analyze the cross-attention matrix \(A_\ell \in \mathbb{R}^{T \times T}\) for layer \(\ell\) with and without controller conditioning. We compute the Frobenius deviation:
+\[
+\delta_\ell^{(m)} = \left\| A_\ell^{(\tilde{s})} - A_\ell^{(\mathbf{0})} \right\|_F.
+\]
+This reflects how controller information realigns global attention. Qualitative visualizations of \(A_\ell\) reveal syntactic shifts in focal connectivity—e.g., subject-verb alignment influenced by downstream semantic intent.
+
+\subsubsection*{Mode Disambiguation}
+
+To quantify controller disambiguation across routing paths, we measure variance between induced representations under different interpolation vectors \(\tilde{s}^{(1)} \ne \tilde{s}^{(2)}\), derived from two distinct span combinations \(S^{(1)}, S^{(2)}\). Let \(h_{\text{final}}^{(m, i)}\) be the layer \(L\) hidden state under controller vector \(\tilde{s}^{(i)}\) with mode \(m\), then:
+\[
+\mathrm{D}_{\text{route}}^{(m)} = \mathbb{E}_{x \sim \mathcal{D}} \left[ \left\| h_{\text{final}}^{(m, 1)}(x) - h_{\text{final}}^{(m, 2)}(x) \right\|_2 \right].
+\]
+
+A higher \(\mathrm{D}_{\text{route}}^{(m)}\) implies that controller fusion more effectively channels distinct routing hypotheses into separable downstream representations.
+
+\vspace{0.75em}
+\noindent\textbf{Gated Probe Interventions.} Following the probing methodology in \cite{vig2020investigating}, we optionally perform controller swap experiments:
+\[
+\tilde{s}_{\text{content}} \leftarrow \tilde{s}_{\text{confound}}, \quad \text{while keeping } x \text{ fixed}.
+\]
+This tests whether the model's behavior aligns more with structural routing or surface-level tokens, revealing how \(\tilde{s}\) perturbs token importance.
+
+\input{sections/experiments/5_3_1_orthogonal_controllers_proof}

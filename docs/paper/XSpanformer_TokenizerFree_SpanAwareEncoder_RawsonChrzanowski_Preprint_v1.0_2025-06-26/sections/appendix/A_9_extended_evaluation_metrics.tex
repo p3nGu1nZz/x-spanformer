@@ -1,0 +1,10 @@
+\subsection{Extended Evaluation Metrics}
+\label{sec:extended-metrics}
+
+In addition to the main metrics, we measured:
+\begin{itemize}[leftmargin=1.5em]
+	\item Memory footprint: peak GPU RAM during inference.
+	\item Throughput: tokens/sec on batch size 32 across corpora.
+	\item Segmentation consistency: IOU overlap\footnote{Intersection over Union (IoU) computed as $|\text{spans}_1 \cap \text{spans}_2| / |\text{spans}_1 \cup \text{spans}_2|$ to measure span boundary agreement across random seeds.} of spans across runs with different seeds.
+	\item Compression entropy: average per-token entropy before and after pruning\footnote{Entropy measured as $H = -\sum_i p_i \log p_i$ over span probability distributions, quantifying information compression achieved by span selection.}.
+\end{itemize}

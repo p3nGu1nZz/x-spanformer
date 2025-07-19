@@ -179,12 +179,12 @@ dist
 # Batch 1
 data/pretraining/out/csv/*
 data/pretraining/out/jsonl/*/*
-data/pretraining/out/jsonl/discard*
 
 # Batch 2
 data/pretraining2/out/csv/*
 data/pretraining2/out/jsonl/*/*
-data/pretraining2/out/jsonl/discard*
+
+# Vocab
 data/vocab/out/candidates/*
 data/vocab/out/full_freq/*
 data/vocab/out/pruning/*

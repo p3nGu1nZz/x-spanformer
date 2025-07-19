@@ -1,0 +1,16 @@
+\subsection{Qualitative Segmentation Examples}
+\label{sec:qual-examples}
+
+\begin{table}[H]
+	\centering
+	\begin{tabular}{@{}p{0.4\linewidth}p{0.5\linewidth}@{}}
+		\toprule
+		Input & Top-3 Predicted Spans \\
+		\midrule
+		"def compute\_sum(x, y):"       & [def] [compute\_sum] [(x,] [y):] \\
+		"<html><body>Welcome!"         & [<html>] [<body>] [Welcome] [!] \\
+		"Bonjour, comment ça va ?"      & [Bonjour] [,] [comment] [ça] [va] [?]\footnote{French example meaning "Hello, how are you?" demonstrates cross-lingual span boundary detection without language-specific preprocessing.} \\
+		\bottomrule
+	\end{tabular}
+	\caption{Example segments with overlapping, variable-length spans and modality typing (code vs.\ punctuation vs.\ word).}
+\end{table}

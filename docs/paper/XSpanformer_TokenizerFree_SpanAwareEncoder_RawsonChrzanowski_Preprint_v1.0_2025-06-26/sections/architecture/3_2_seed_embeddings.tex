@@ -1,0 +1,36 @@
+\subsection{Seed Embeddings and Candidate Set}
+\label{sec:seed-embeddings}
+
+The X-Spanformer pipeline begins with a sequence of \(T\) raw Unicode codepoints. We apply our custom Unigram‐LM operator (Sec.~\ref{sec:vocab-induction}), implemented as an ONNX custom op, to compute soft piece probabilities over the induced vocabulary \(V\):
+\[
+P \;\in\;\mathbb{R}^{T\times V},
+\quad
+P_{t,i} = \Pr\bigl(\text{piece }u_i\text{ starts at position }t\bigr).
+\]
+The vocabulary \(V\) comprises all single codepoints plus the final entropy‐ and perplexity‐pruned subword fragments.
+
+These probabilities are embedded via a single matrix multiplication:
+\[
+H^0 = P\,W_{\mathrm{emb}},
+\quad
+W_{\mathrm{emb}}\in\mathbb{R}^{V\times d},
+\]
+yielding initial seed embeddings \(H^0\in\mathbb{R}^{T\times d}\) for each input position.
+
+\subsubsection{Contextual Encoder: Convolutional Pathway}
+
+To enrich these seed embeddings with contextual structure, we apply a lightweight convolutional encoder\footnote{We use dilated 1D convolutions with kernel sizes [3, 5, 7] and dilation rates [1, 2, 4] to capture multi-scale local patterns without quadratic complexity.} to produce the final representation \(H\in\mathbb{R}^{T\times d}\):
+\[
+H = \mathrm{ConvNet}(H^0),\quad \text{cost }O(T d^2).
+\]
+This encoder employs stacked or dilated 1D convolutions \cite{tay2021charformer}, providing fixed-window receptive fields that are tuned to capture short-range compositional patterns. By avoiding the quadratic complexity of self-attention, the convolutional encoder ensures scalability across long codepoint sequences and maintains a runtime that is linear in the input length.
+
+The design choice to adopt convolutional contextualization reflects the architectural goal of high-throughput segmentation in real-time or resource-constrained settings. While transformer-based encoders offer richer modeling of long-distance dependencies \cite{vaswani2017attention}, their runtime limits applicability for streaming inputs or modular deployments. In contrast, convolutional filters preserve local positional regularities critical for span induction—such as those arising in identifiers, literals, or markup—and enable reproducible, interpretable segmentation across diverse modalities. Empirical evidence on synthetic benchmarks further suggests that this encoder achieves robust span localization without sacrificing structural fidelity \cite{rawson2025streammix}.
+
+\subsubsection{Span Candidate Enumeration}
+
+Given the contextualized sequence \(H\), we enumerate all contiguous span candidates:
+\[
+C = \{(i,j)\mid 1 \le i < j \le T,\quad j - i + 1 \le w_{\max}\}.
+\]
+This restricts span width to \(w_{\max}\), reducing total candidates from quadratic to linear scale: \(|C| = O(T\,w_{\max})\). Each span \((i,j)\) corresponds to the subsequence \([h_i,\dots,h_j]\), which is passed to the boundary scorer and length filter in subsequent modules. The candidate set remains compatible with global-attention filtering and sparse attention schemes \cite{joshi2020spanbert,tay2021charformer}, ensuring scalability and modularity in downstream processing.

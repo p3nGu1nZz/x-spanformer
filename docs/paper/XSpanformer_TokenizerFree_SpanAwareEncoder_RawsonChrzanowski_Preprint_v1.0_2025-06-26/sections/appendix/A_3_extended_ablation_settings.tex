@@ -1,0 +1,10 @@
+\subsection{Extended Ablation Settings}
+\label{sec:ablation-settings}
+
+\begin{itemize}[leftmargin=1.5em]
+	\item \textbf{Fusion head variants}: Compared \texttt{MLP(w)} vs.\ \texttt{LayerNorm(MLP)} for $\alpha_k$ scoring; gated units improved stability in low-entropy regimes.
+	\item \textbf{Routing depth}: Explored controller depth $d_c \in \{1,2,3\}$; performance plateaued beyond $d_c=2$.
+	\item \textbf{Gradient gating}: Evaluated freezing the span scorer for the first 5 epochs to stabilize $\mathcal{L}_{\mathrm{ent}}$ decay; small trade-offs observed.
+	\item \textbf{Span type probing}: Used auxiliary decoders (e.g., NER, chunking) to generate $\hat{P}_{\mathrm{gold}}$ in Equation~\eqref{eq:kl_span}; yielded slight gains in low-resource settings.
+	\item \textbf{Pooling alternatives}: Replaced gated attention with mean or max pooling; gated attention retained superior semantic alignment (measured via cosine similarity to label embeddings).
+\end{itemize}

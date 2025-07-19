@@ -1,0 +1,91 @@
+\subsection{Span Interpolation for Overlap Resolution}
+\label{sec:span-interpolation}
+
+After filtering, we obtain a set of overlapping span embeddings \(\{s_{ij}\}_{(i,j)\in S'}\subset\mathbb{R}^d\). Rather than injecting each span separately, we compute a single fused controller vector \(\tilde{s}\in\mathbb{R}^d\) via relevance‐weighted interpolation.
+
+\subsubsection{Soft Interpolation}
+
+For each span \((i,j)\in S'\), we define its relevance logit:
+\begin{equation}
+	w_{ij} = f_{\mathrm{score}}\bigl(
+	s_{ij},\;
+	\phi(\delta_{ij}),\;
+	p^{\mathrm{mod}}_{ij},\;
+	H^{\mathrm{mod}}_{ij},\;
+	\log c_{ij}
+	\bigr),
+	\label{eq:relevance_score}
+\end{equation}
+where:
+- \(\delta_{ij} = j - i + 1\),
+- \(\phi(\delta_{ij})\in\mathbb{R}^D\) is a learned embedding,
+- \(p^{\mathrm{mod}}_{ij}\in\Delta^M\) is the modality distribution,
+- \(H^{\mathrm{mod}}_{ij}\) is entropy (Sec.~\ref{sec:modality-typing}),
+- \(c_{ij} = p^s_i\,p^e_j\) is the boundary confidence.
+
+We normalize via softmax:
+\begin{equation}
+	\alpha_{ij} = \frac{\exp(w_{ij})}{\sum_{(p,q)\in S'}\exp(w_{pq})},
+	\quad
+	\tilde{s} = \sum_{(i,j)\in S'} \alpha_{ij}\,s_{ij}.
+	\label{eq:span_interp}
+\end{equation}
+
+This formulation parallels soft-attention in retrieval-augmented models \cite{guu2020retrieval,izacard2020distilling} and expert fusion \cite{arora2022exsum}.
+
+\subsubsection{Theoretical Properties}
+
+\begin{proposition}[Span Interpolation: Equivariance, Differentiability, Convexity, Boundedness]
+	Let \(S' = \{(i,j)\}\) be any ordered span set with embeddings \(\{s_{ij}\in\mathbb{R}^d\}\) and scores \(\{w_{ij}\in\mathbb{R}\}\). Then:
+	\begin{enumerate}
+		\item \textbf{Permutation equivariant:}
+		\(\tilde{s}\) is invariant to reordering of \((s_{ij}, w_{ij})\).
+		\item \textbf{Differentiable:}
+		\(\tilde{s}\) is differentiable w.r.t.\ both scores and embeddings.
+		\item \textbf{Convex:}
+		\(\tilde{s} \in \mathrm{conv}\{s_{ij}\}_{(i,j)\in S'}\).
+		\item \textbf{Norm‐bounded:}
+		If \(\|s_{ij}\|_2 \le B\), then \(\|\tilde{s}\|_2 \le B\).
+	\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+	\textbf{Equivariance:} Softmax weights \(\alpha_{ij}\) depend only on relative magnitudes of \(w_{ij}\) and not index order. Reordering inputs yields the same output.
+	
+	\textbf{Differentiability:} \(w_{ij}\) is produced via an MLP \(f_{\mathrm{score}}\), and \(\tilde{s}\) is a weighted linear combination. The entire computation is smooth.
+	
+	\textbf{Convexity:}
+	\[
+	\alpha_{ij} \ge 0,\quad \sum_{(i,j)} \alpha_{ij} = 1
+	\;\Rightarrow\;
+	\tilde{s} \in \mathrm{conv}\{s_{ij}\}.
+	\]
+	
+	\textbf{Boundedness:} If \(\|s_{ij}\|_2 \le B\) for all \((i,j)\), then
+	\[
+	\|\tilde{s}\|_2
+	\le \sum_{(i,j)} \alpha_{ij} \|s_{ij}\|_2
+	\le \sum \alpha_{ij} B = B.
+	\]
+\end{proof}
+
+\subsubsection{Computational Cost}
+
+Let \(K'\) be the number of retained spans after filtering (Sec.~\ref{sec:length-estimator}). For each span \((i,j)\in S'\), we compute a relevance logit \(w_{ij} = f_{\mathrm{score}}(x_{ij})\), where \(f_{\mathrm{score}}\) is a feed-forward network with hidden dimension \(d_f\). This scoring step requires \(O(K' d_f)\) operations.
+
+Next, the softmax normalization over \(\{w_{ij}\}\) is computed in \(O(K')\) time:
+\[
+\alpha_{ij} = \frac{\exp(w_{ij})}{\sum_{(p,q)\in S'}\exp(w_{pq})}.
+\]
+
+Finally, the fused controller vector
+\[
+\tilde{s} = \sum_{(i,j)\in S'} \alpha_{ij}\,s_{ij}
+\]
+involves a weighted summation over \(K'\) vectors of dimension \(d\), incurring a cost of \(O(K'd)\).
+
+Since \(K'\ll T^2\) due to length filtering, gating, and top-\(K\) selection, the total interpolation cost remains linear in the span count and embedding dimension. This makes relevance-based fusion tractable even for long sequences.
+
+\subsubsection{Transformer Injection}
+
+The fused controller \(\tilde{s}\) is injected into the downstream transformer encoder via the strategies in Sec.~\ref{sec:controller-fusion} (prefix token, attention bias, gated FFN). End-to-end gradients flow into all upstream components, enabling adaptive span weighting, entropy regularization, and modality‐conditioned interpolation.

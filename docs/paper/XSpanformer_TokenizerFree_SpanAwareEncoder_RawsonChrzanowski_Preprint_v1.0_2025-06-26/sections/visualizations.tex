@@ -8,7 +8,7 @@ These interfaces build on the interpretability literature in structured attentio
 \subsection{Span Trajectory Viewer (\texttt{trajectory\_overlay})}
 \label{sec:vis-traj}
 
-The span trajectory viewer highlights how span selection stabilizes or evolves over training epochs. For a given input prompt, we track the top-$K$ spans selected at each layer \( \ell \) and epoch \( t \), plotting their token offsets and confidence weights \( \alpha_k^{(t)} \). This provides a temporal window into routing stability and sparsification behavior.
+The span trajectory viewer\footnote{Implemented as an interactive Plotly dashboard with real-time epoch selection and layer filtering capabilities.} highlights how span selection stabilizes or evolves over training epochs. For a given input prompt, we track the top-$K$ spans selected at each layer \( \ell \) and epoch \( t \), plotting their token offsets and confidence weights \( \alpha_k^{(t)} \). This provides a temporal window into routing stability and sparsification behavior.
 
 \subsubsection*{Method}
 
@@ -19,11 +19,19 @@ The span trajectory viewer highlights how span selection stabilizes or evolves o
     H(P_t) = - \sum_k \alpha_k^{(t)} \log \alpha_k^{(t)}
     \label{eq:entropy_viz}
   \end{equation}
-  \item Compute inter-epoch routing divergence:
+  \item Compute inter-epoch routing divergence using Jensen-Shannon divergence for numerical stability:
   \begin{equation}
-    D_{\mathrm{JS}}(P_t \| P_{t+1}) = \frac{1}{2} \left[ \mathrm{KL}(P_t \| M) + \mathrm{KL}(P_{t+1} \| M) \right], \quad M = \tfrac{1}{2}(P_t + P_{t+1})
+    D_{\mathrm{JS}}(P_t \| P_{t+1}) = \frac{1}{2} \left[ \mathrm{KL}(P_t \| M) + \mathrm{KL}(P_{t+1} \| M) \right]
     \label{eq:jsdiv}
   \end{equation}
+  where \(M = \frac{1}{2}(P_t + P_{t+1})\) is the mixture distribution.
+  
+  \textbf{Mathematical Properties of Jensen-Shannon Divergence:}
+  \begin{enumerate}[leftmargin=1.5em]
+  \item \emph{Symmetry:} \(D_{\mathrm{JS}}(P \| Q) = D_{\mathrm{JS}}(Q \| P)\)
+  \item \emph{Boundedness:} \(0 \le D_{\mathrm{JS}}(P \| Q) \le \log 2\) for probability distributions
+  \item \emph{Metric Property:} \(\sqrt{D_{\mathrm{JS}}(P \| Q)}\) satisfies the triangle inequality
+  \end{enumerate}
   \item Render span overlays layerwise with bar intensity mapped to \( \alpha_k^{(t)} \)
 \end{enumerate}
 
@@ -40,9 +48,9 @@ To assess whether X-Spanformer’s induced spans align with latent syntax or sem
   \item Extract top-$K$ spans \( \{(i_k, j_k)\} \) from controller at layer \( \ell \)
   \item Align with:
   \begin{itemize}
-    \item Constituents: Berkeley parser \cite{kitaev2018constituency}
-    \item Named entities: SpaCy \cite{honnibal2017spacy}
-    \item Discourse units: OntoNotes \cite{weischedel2013ontonotes}
+    \item Constituents: Berkeley parser\footnote{Berkeley Neural Parser trained on Penn Treebank WSJ sections 02-21, achieving 95.8\% F1 on constituency parsing.} \cite{kitaev2018constituency}
+    \item Named entities: SpaCy\footnote{SpaCy v3.4 English model (en\_core\_web\_sm) with pre-trained NER components.} \cite{honnibal2017spacy}
+    \item Discourse units: OntoNotes\footnote{OntoNotes 5.0 coreference and semantic role labeling annotations.} \cite{weischedel2013ontonotes}
   \end{itemize}
   \item Compute Jaccard index \( J(s_k, r_j) = \frac{|s_k \cap r_j|}{|s_k \cup r_j|} \)
   \item Generate token-layer grid showing alignment scores
@@ -59,11 +67,19 @@ This module evaluates the downstream sensitivity of network outputs to variation
 
 \begin{enumerate}[leftmargin=1.5em]
   \item Inject perturbed vectors \( \tilde{s}_\text{baseline} \), \( \tilde{s}_\text{perturbed} \) into layer \( \ell \)
-  \item Measure output response via:
+  \item Measure output response via the \(L_2\) norm of output differences:
   \begin{equation}
     \delta_{\text{out}} = \left\| \mathcal{F}(x, \tilde{s}_1) - \mathcal{F}(x, \tilde{s}_2) \right\|_2
     \label{eq:controller_effect}
   \end{equation}
+  where \(\mathcal{F}(x, \tilde{s})\) represents the transformer output given input \(x\) and controller vector \(\tilde{s}\).
+  
+  \textbf{Interpretation of Controller Influence:}
+  \begin{itemize}[leftmargin=1.5em]
+  \item \(\delta_{\text{out}} = 0\): No sensitivity to controller perturbation
+  \item \(\delta_{\text{out}} \gg 0\): High sensitivity, indicating strong controller influence
+  \item Normalized version: \(\delta_{\text{norm}} = \frac{\delta_{\text{out}}}{\|\mathcal{F}(x, \tilde{s}_1)\|_2}\) provides scale-invariant interpretation
+  \end{itemize}
   \item Visualize effect across token positions and logit spaces
 \end{enumerate}
 

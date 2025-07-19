@@ -1,0 +1,60 @@
+\subsection{Experimental Setup}
+\label{sec:experimental-setup}
+
+We design our experimental pipeline to test the structural expressivity and routing fidelity of X-Spanformer in isolation from large-scale benchmark supervision. Following best practices in latent structure induction \cite{kim2019unsupervised, naradowsky2021structured, liu2019hierarchical}, we employ a diagnostic protocol based on entropy decay, span structure visualization, and controller variance tracking.
+
+\vspace{0.5em}
+\noindent\textbf{Datasets.} We conduct experiments on the following sources:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Synthetic Span Induction Corpus}: A handcrafted suite of synthetic sentence templates constructed using the Stream-Mix generator\footnote{Stream-Mix is our synthetic data generator that creates controlled hierarchical structures with configurable compositional complexity, enabling precise evaluation of span induction capabilities. The associated work is currently in preparation.} \cite{rawson2025streammix-inprep}, which provides hierarchical stream-label annotations and configurable entropy constraints. This dataset allows controlled testing of routing alignment under known compositional structure.
+  
+  \item \textbf{WikiText-103} \cite{merity2016pointer}: Unsupervised language modeling corpus used to evaluate span stability and routing coherence over noisy naturalistic prose.
+
+  \item \textbf{Gigaword Compression (Optional)}: For assessing semantic condensation and routing sparsity under low-token summarization windows \cite{rush2015neural}.
+
+  \item \textbf{Pseudo-structured Sequences}: A mix of instructional data (recipes, dialog trees) and semi-nested markdown documents to probe structural generalization over latent hierarchical cues.
+\end{itemize}
+
+\vspace{0.5em}
+\noindent\textbf{Metrics.} To isolate architectural effects, we evaluate span selection and routing behavior using the following indicators:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item Span entropy:
+  \begin{equation}
+  H(P) = -\sum_{(i,j) \in S} P_{ij} \log P_{ij},
+  \end{equation}
+  to assess structural uncertainty.
+  
+  \item Average span width:
+  \begin{equation}
+  \bar{w} = \mathbb{E}_{(i,j) \sim P} [j - i],
+  \end{equation}
+  indicating the model's preferred compositional grain.
+  
+  \item Overlap rate:
+  \[
+  \text{Overlap}(B) = \frac{1}{|B|} \sum_{x \in B} \frac{1}{K^2} \sum_{k \neq \ell} \mathbf{1}[s_k \cap s_\ell \neq \emptyset],
+  \]
+  where \(B\) is a mini-batch, and \(\{s_k\}\) are selected spans per instance.
+  
+  \item Controller gate entropy:
+  \[
+  H(\alpha) = -\sum_{k=1}^K \alpha_k \log \alpha_k,
+  \]
+  reflecting the distributional sharpness of fused routing signals.
+\end{itemize}
+
+\vspace{0.5em}
+\noindent\textbf{Baselines.} To contextualize architectural effects, we compare against:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Vanilla Transformer Encoder:} Without span selection or controller routing; matches embedding dimensionality and depth.
+  
+  \item \textbf{Prefix-Tuned Transformer} \cite{li2021prefix}: Appends learnable prefix tokens to the input sequence, serving as a lightweight prompting baseline.
+  
+  \item \textbf{Latent Syntax Attention} \cite{kim2019unsupervised}: Implements unsupervised span-based parse induction using differentiable parsing objectives.
+\end{itemize}
+
+\vspace{0.5em}
+\noindent\textbf{Infrastructure.} All experiments are conducted on a single 40GB NVIDIA A100 GPU. Training time per phase is approximately 10–12 hours. Models are implemented in PyTorch and exported using ONNX traceable modules for architecture inspection and routing visualization. Hyperparameter values are enumerated in Appendix~\ref{sec:hyperparams}.

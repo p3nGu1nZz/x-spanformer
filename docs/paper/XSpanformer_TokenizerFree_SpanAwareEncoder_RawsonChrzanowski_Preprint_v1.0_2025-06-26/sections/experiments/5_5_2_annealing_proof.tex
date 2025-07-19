@@ -1,0 +1,16 @@
+\subsubsection*{Proposition: Stability of Entropy-Gated Routing}
+
+\begin{proposition}[Span Entropy Convergence Under Annealing]
+\label{prop:annealing}
+Let \(P_t\) be the span distribution at epoch \(t\), and \(H(P_t)\) its entropy. Suppose controller updates are primarily influenced by the entropy term in the loss, with annealing schedule \(\lambda_{\mathrm{ent}}(t) = \lambda_0 e^{-\gamma t}\). Then the entropy satisfies the decay bound:
+\begin{equation}
+H(P_t) \leq H_{\max} \cdot e^{-\gamma t}, \quad \text{where } H_{\max} = \log |S|.
+\label{eq:entropy_bound}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Follows directly from exponential decay bounds on entropy-regularized softmax distributions \cite{grandvalet2006entropy}. See Proposition~\ref{prop:routing_convergence} for detailed derivation.
+\end{proof}
+
+This result provides theoretical support for the routing sparsification observed in Section~\ref{sec:qualitative-spans}, confirming that entropy scheduling is sufficient to yield selective, interpretable span patterns; provided \(\lambda_0\) and \(\gamma\) are chosen to balance exploration and convergence.

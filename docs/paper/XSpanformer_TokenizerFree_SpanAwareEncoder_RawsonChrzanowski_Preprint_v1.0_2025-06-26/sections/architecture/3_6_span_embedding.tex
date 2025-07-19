@@ -1,0 +1,78 @@
+\subsection{Span Embedding}
+\label{sec:span-embedding}
+
+Each retained span \((i,j)\in S'\) is mapped to a fixed-length vector \(s_{ij}\in\mathbb{R}^d\) that encodes both its internal composition and contextual salience. To achieve this, we employ a dual encoder: a lightweight mean-pooling pathway and a local self-attention pathway, fused adaptively via a gated interpolator.
+
+\subsubsection{Mean-Pooling Encoder}
+
+Define the span length \(\delta = j - i + 1\) and compute the average of its token embeddings:
+\[
+\bar h_{ij} = \frac{1}{\delta} \sum_{k=i}^{j} h_k.
+\]
+Project the pooled vector into model dimension:
+\[
+s_{ij}^{\mathrm{mean}} = W_m\,\bar h_{ij} + b_m,
+\quad
+W_m\in\mathbb{R}^{d\times d}.
+\]
+Mean pooling is efficient and length-invariant, and performs well in extractive tasks \cite{lee2017end,joshi2020spanbert}.
+
+\subsubsection{Local Self-Attention Encoder}
+
+We apply multi-head self-attention over the span window \(H[i{:}j]\):
+\[
+\{A_{ij}^{(\ell)}\}_{\ell=1}^h = \mathrm{MHSA}\bigl(H[i{:}j]\bigr),
+\quad
+A_{ij} = \bigl[\,A_{ij}^{(1)};\dots;A_{ij}^{(h)}\,\bigr].
+\]
+Then project the concatenated heads:
+\[
+s_{ij}^{\mathrm{attn}} = W_o\,A_{ij} + b_o,
+\quad
+W_o\in\mathbb{R}^{d\times(h\,d_h)},
+\]
+where \(d_h=d/h\) and \(h\) is the number of heads. This encoder captures intra-span dependencies and asymmetries \cite{lee2018higher, tay2021charformer}.
+
+\subsubsection{Gated Fusion}
+
+To balance expressivity with compute, we learn a gate \(g_{ij}\in(0,1)\) that weights the two embeddings. Define the fusion feature vector:
+\[
+f_{ij} = \bigl[
+\bar h_{ij};
+\phi(\delta);
+p^{\mathrm{mod}}_{ij};
+H^{\mathrm{mod}}_{ij};
+c_{ij}
+\bigr] \in \mathbb{R}^{d + D + M + 1 + 1},
+\]
+where:
+- \(\phi(\delta)\in\mathbb{R}^D\) is a learned length embedding,
+- \(p^{\mathrm{mod}}_{ij}\in\Delta^M\) is the modality distribution (Sec.~\ref{sec:modality-typing}),
+- \(H^{\mathrm{mod}}_{ij}\in[0,\log M]\) is modality entropy,
+- \(c_{ij}=p^s_i\,p^e_j\) is boundary confidence.
+
+Then:
+\[
+g_{ij} = \sigma(w_g^\top f_{ij} + b_g),
+\quad
+s_{ij} = g_{ij}\,s_{ij}^{\mathrm{attn}} + (1 - g_{ij})\,s_{ij}^{\mathrm{mean}}.
+\]
+
+\begin{proposition}[Adaptive Fusion Bound]
+	Let both \(s_{ij}^{\mathrm{mean}},s_{ij}^{\mathrm{attn}}\in\mathbb{R}^d\) have bounded norm \(\|s\|\le B\), and \(g_{ij}\in[0,1]\). Then:
+	\[
+	\|s_{ij}\|_2 \le B.
+	\]
+\end{proposition}
+
+\begin{proof}
+	We compute:
+	\[
+	\|s_{ij}\|_2 = \big\|\,g_{ij}\,s_{ij}^{\mathrm{attn}} + (1-g_{ij})\,s_{ij}^{\mathrm{mean}}\,\big\|_2
+	\le g_{ij}\|s_{ij}^{\mathrm{attn}}\|_2 + (1-g_{ij})\|s_{ij}^{\mathrm{mean}}\|_2
+	\le g_{ij}B + (1-g_{ij})B = B.
+	\]
+	This uses convexity and the triangle inequality.
+\end{proof}
+
+All final span embeddings \(s_{ij}\in\mathbb{R}^d\) are forwarded to the controller-fusion stage (Sec.~\ref{sec:controller-fusion}) and participate in downstream interpolation, type prediction, and transformer injection.
