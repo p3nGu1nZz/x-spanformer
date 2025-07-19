@@ -11,3 +11,4 @@ from .status import RecordStatus
 from .typing import RecordType
 from .xbar import XPSpan
 from .validation import ValidationResult, ValidationIssue
+from .vocab import VocabPiece, VocabStats

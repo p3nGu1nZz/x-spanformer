@@ -37,6 +37,10 @@ For full details, see [`/examples`](./examples) and the companion compiler agent
 
 ## 🧪 Data Preprocessing
 
+Our preprocessing pipeline consists of two main stages:
+
+### Stage 1: PDF to JSONL Conversion
+
 To generate semantically coherent pretraining data without tokenizers, we use the [`pdf2seg`](https://pypi.org/project/pdf2seg) package:
 
 ```bash
@@ -46,8 +50,25 @@ pip install pdf2seg
 Process scanned or structured PDFs into entropy-minimized text spans:
 
 ```bash
-pdf2seg -i input.pdf -o raw_spans/
+# Generate JSONL segments from PDFs
+uv run -m x_spanformer.pipelines.pdf2jsonl \
+  -i input_pdfs/ \
+  -o data/pretraining/out \
+  --name pretraining
 ```
+
+### Stage 2: Vocabulary Induction
+
+Generate a hybrid Unigram-LM vocabulary from the JSONL segments:
+
+```bash
+# Induce vocabulary from JSONL segments
+uv run -m x_spanformer.pipelines.jsonl2vocab \
+  -i data/pretraining/out \
+  -o data/vocab/out
+```
+
+This implements the mathematical formulation from Section 3.1 of our paper, using EM + Viterbi segmentation with adaptive pruning based on perplexity and OOV thresholds.
 
 Use the output as either raw training strings (for unsupervised Phase I) or compile with `oxbar` to produce labeled span records.
 
@@ -59,37 +80,51 @@ This enables X-Spanformer to bootstrap span boundaries from real-world documents
 
 ```
 x-spanformer/
-├── model/                # Core encoder + span fusion modules
-├── dataset/              # Record loader, validation, and augmentation
-├── train/                # Training config, Lightning loop, curriculum schedules
-├── visuals/              # Span density maps, entropy overlays, structure debugging
-├── experiments/          # Prototype tests: controller variants, dropout, fusion modes
-├── docs/                 # Concept diagrams, architecture notes, citations
-└── examples/             # Code / NL / hybrid span records
+├── x_spanformer/
+│   ├── pipelines/        # Data processing pipelines
+│   │   ├── pdf2jsonl.py  # PDF → JSONL conversion with AI judging
+│   │   └── jsonl2vocab.py # Hybrid Unigram-LM vocabulary induction
+│   ├── schema/           # Pydantic data models and validation
+│   │   ├── pretrain_record.py # Training data schema
+│   │   ├── vocab.py      # Vocabulary piece and statistics schemas
+│   │   └── ...           # Other schema definitions
+│   ├── agents/           # AI agents for content judging and processing
+│   ├── controllers/      # Span controller logic
+│   └── views/            # Data visualization and inspection
+├── config/               # Pipeline configurations
+│   └── pipelines/        # YAML configs for data processing
+├── data/                 # Training and vocabulary data
+│   ├── pretraining/      # Raw segments from PDF processing
+│   └── vocab/            # Vocabulary induction outputs
+├── docs/                 # Documentation and paper materials
+│   └── paper/            # LaTeX source and compiled paper
+├── tests/                # Unit tests and integration tests
+└── examples/             # Sample data and usage examples
 ```
 
 ---
 
-## 🧪 Training Utilities
+## 🧪 Pipeline Tools
 
-- `span-validator.py` — check span bounds, role-label pairings, schema conformity  
-- `entropy-map.py` — visualize smushed spans and structural attention regions  
-- `role-index.json` — map roles to IDs for supervised fusion routing  
-- `xbar-guide.md` — taxonomy for natural language, code, and hybrid inputs  
+### Core Pipelines
+
+- **`pdf2jsonl.py`** — Convert PDFs to validated JSONL segments with AI content judging
+- **`jsonl2vocab.py`** — Induce hybrid Unigram-LM vocabulary using EM + Viterbi with adaptive pruning
+
+### Validation & Analysis
+
+- **Schema validation** — Pydantic models ensure data consistency across pipelines
+- **Rich console output** — Detailed progress tracking and statistics reporting
+- **Incremental processing** — Resume interrupted runs and process new data efficiently
+
+### Configuration
+
+- **YAML-based configs** — Hyperparameter tuning for vocabulary induction and content judging
+- **Modular architecture** — Easy to extend with new processing stages and validation rules  
 
 ---
 
-## 🔧 Compiler Agents
-
-### [`oxbar`](https://github.com/.../ox-bar)
-
-Generate structured span-labeled records using local LLMs:
-
-```bash
-oxbar compile input.txt --type mixed --output spans.json
-```
-
-Supports retry logic, confidence scoring, and mode switching.
+## 🔧 External Tools
 
 ### [`pdf2seg`](https://pypi.org/project/pdf2seg)
 
@@ -99,7 +134,17 @@ Segment PDF documents into structured clauses using OCR + spaCy:
 pdf2seg -i paper.pdf -o spans/
 ```
 
-Ideal for extracting domain-specific clause boundaries from scientific papers, REPL transcripts, or code-heavy PDFs.
+Ideal for extracting domain-specific clause boundaries from scientific papers, REPL transcripts, or code-heavy PDFs. The output is then processed by our `pdf2jsonl` pipeline for validation and schema conformance.
+
+### [`oxbar`](https://github.com/.../ox-bar)
+
+Generate structured span-labeled records using local LLMs:
+
+```bash
+oxbar compile input.txt --type mixed --output spans.json
+```
+
+Supports retry logic, confidence scoring, and mode switching. Complements our vocabulary induction by providing supervised span labels for training data.
 
 ---
 
