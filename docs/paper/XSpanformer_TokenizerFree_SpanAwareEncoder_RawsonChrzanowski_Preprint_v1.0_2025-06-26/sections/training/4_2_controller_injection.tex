@@ -99,4 +99,4 @@ Let \(\mathcal{L}_{\mathrm{task}}\) be the downstream loss (e.g.\ cross-entropy 
 + \beta_1\,\mathcal{L}_{\mathrm{span}}
 + \beta_2\,\mathcal{L}_{\mathrm{ent}},
 \]
-where \(\beta_1,\beta_2\ge0\) balance structural supervision and entropy regularization.\footnote{Typical ranges: \(\beta_1\in[0.5,1.5]\), \(\beta_2<0.3\) after warmup for stable sparsity.}
+where \(\beta_1,\beta_2\ge0\) balance structural supervision and entropy regularization.\footnote{Typical ranges: \(\beta_1\in[0.5,1.5]\), \(\beta_2<0.3\) after warmup. These ranges were empirically determined to ensure stable training dynamics and promote sparsity in the learned representations.}
