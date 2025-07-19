@@ -64,7 +64,7 @@ def viterbi_segment(x: str, V: List[str], p_u: Dict[str, float]) -> List[str]:
             ptr -= len(piece)
         else:
             # This should never happen if vocabulary properly includes all single codepoints
-            raise ValueError(f"Segmentation failed at position {ptr} in string '{x}' - vocabulary incomplete")
+            raise ValueError(f"Segmentation failed at position {ptr} in string '{truncate_string(x, 50)}' - vocabulary incomplete")
     return list(reversed(seg))
 
 
