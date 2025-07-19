@@ -32,12 +32,12 @@ class VocabStats(BaseModel):
     - OOV rate (uncovered codepoint positions)
     - EM algorithm statistics
     """
-    total_pieces: int = Field(..., description="Final vocabulary size |V|")
-    baseline_ppl: float = Field(..., description="Initial corpus perplexity PPL^(0)")
-    final_ppl: float = Field(..., description="Final corpus perplexity after pruning")
+    total_pieces: int = Field(..., ge=0, description="Final vocabulary size |V|")
+    baseline_ppl: float = Field(..., gt=0.0, description="Initial corpus perplexity PPL^(0)")
+    final_ppl: float = Field(..., gt=0.0, description="Final corpus perplexity after pruning")
     oov_rate: float = Field(..., ge=0.0, le=1.0, description="Out-of-vocabulary rate (uncovered positions)")
-    em_iterations: int = Field(..., description="Number of EM iterations performed")
-    pruned_pieces: int = Field(default=0, description="Number of pieces pruned during adaptation")
+    em_iterations: int = Field(..., ge=0, description="Number of EM iterations performed")
+    pruned_pieces: int = Field(default=0, ge=0, description="Number of pieces pruned during adaptation")
     
     model_config = ConfigDict(
         json_schema_extra={

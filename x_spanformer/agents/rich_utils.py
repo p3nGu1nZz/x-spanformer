@@ -18,7 +18,13 @@ def rich_log(
     """Logs extracted data in a rich-formatted panel."""
     panel_content = Text()
     for key, value in extracted_data.items():
-        panel_content.append(f"{key.capitalize()}: ", style="bold")
+        # Handle non-string keys safely
+        key_str = str(key)
+        if hasattr(key, 'capitalize'):
+            key_display = key.capitalize()
+        else:
+            key_display = key_str.capitalize() if isinstance(key_str, str) else key_str
+        panel_content.append(f"{key_display}: ", style="bold")
         panel_content.append(str(value), style="none")
         panel_content.append("\n")
 
@@ -139,6 +145,14 @@ def display_telemetry_panel(
 
 def display_summary_panel(name: str, stats: Counter, reasons: list[str]):
     """Displays a summary panel for processing stats."""
+    # Handle None values gracefully
+    if name is None:
+        name = "Unknown"
+    if stats is None:
+        stats = Counter()
+    if reasons is None:
+        reasons = []
+        
     table = Table(
         title=f"Summary for {name}", show_header=False, box=None, padding=0
     )
