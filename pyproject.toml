@@ -7,11 +7,14 @@ requires-python = ">=3.12"
 dependencies = [
     "jinja2>=3.1.6",
     "langid>=1.1.6",
+    "matplotlib>=3.10.3",
     "ollama>=0.5.1",
     "pandas>=2.3.0",
     "pdf2seg>=1.0.1",
     "pypdf>=5.7.0",
     "rich>=13.7.1",
+    "scikit-learn>=1.7.1",
+    "seaborn>=0.13.2",
     "tenacity>=9.1.2",
 ]
 

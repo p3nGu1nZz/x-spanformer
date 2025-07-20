@@ -1,0 +1,29 @@
+# Configuration for vocab2embedding pipeline
+# Section 3.2: Seed Embeddings and Candidate Set Generation
+
+# Embedding parameters
+embed_dim: 256 # Embedding dimension d
+dropout_rate: 0.1 # Dropout rate for contextualization
+
+# Span candidate generation parameters  
+tau_vocab: 1e-4 # Vocabulary alignment threshold τ_vocab
+tau_comp: 1e-6 # Compositional potential threshold τ_comp  
+w_max: 64 # Maximum span width w_max
+
+# Convolution encoder parameters
+conv_kernels: [ 3, 5, 7 ] # Multi-scale kernel sizes
+conv_dilations: [ 1, 2, 4 ] # Dilation rates for receptive field expansion
+
+# Performance parameters
+max_sequence_length: 512 # Maximum input sequence length
+batch_size: 32 # Processing batch size
+device: "cuda" # PyTorch device (cuda/cpu)
+
+# Numerical stability
+epsilon: 1e-12 # Small constant for log-space computations
+max_piece_length: 16 # Maximum piece length for efficiency
+
+# Output options
+save_intermediate: true # Save intermediate representations
+save_numpy_arrays: true # Save embeddings as .npy files
+save_json_metadata: true # Save metadata as JSON
