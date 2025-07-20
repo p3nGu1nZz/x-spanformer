@@ -10,6 +10,7 @@ Tests the mathematical formulations from Section 3.2 of the X-Spanformer paper.
 import json
 import logging
 import math
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -859,17 +860,30 @@ class TestRealisticVocab2EmbeddingPipeline(unittest.TestCase):
     def test_pipeline_with_realistic_vocabulary(self):
         """Test pipeline with realistic vocabulary from Section 3.1."""
         # Create temporary files
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as vocab_file:
-            for item in self.vocab_data:
-                json.dump(item, vocab_file)
-                vocab_file.write('\n')
-            vocab_path = vocab_file.name
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as config_file:
-            yaml.dump(self.config_data, config_file)
-            config_path = config_file.name
+        vocab_path = None
+        config_path = None
         
         try:
+            # Create vocabulary file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as vocab_file:
+                for item in self.vocab_data:
+                    json.dump(item, vocab_file)
+                    vocab_file.write('\n')
+                vocab_path = vocab_file.name
+            
+            # Create config file manually to avoid yaml.dump coroutine issues
+            config_fd, config_path = tempfile.mkstemp(suffix='.yaml')
+            with os.fdopen(config_fd, 'w') as config_file:
+                config_file.write(f"""embed_dim: {self.config_data['embed_dim']}
+tau_vocab: {self.config_data['tau_vocab']}
+tau_comp: {self.config_data['tau_comp']}
+w_max: {self.config_data['w_max']}
+conv_kernels: {self.config_data['conv_kernels']}
+conv_dilations: {self.config_data['conv_dilations']}
+dropout_rate: {self.config_data['dropout_rate']}
+device: {self.config_data['device']}
+""")
+
             # Initialize and test pipeline
             pipeline = Vocab2EmbeddingPipeline(config_path, self.config_data['device'])
             pipeline.load_vocabulary(vocab_path)
@@ -915,22 +929,39 @@ class TestRealisticVocab2EmbeddingPipeline(unittest.TestCase):
             
         finally:
             # Cleanup
-            Path(vocab_path).unlink(missing_ok=True)
-            Path(config_path).unlink(missing_ok=True)
+            if vocab_path:
+                Path(vocab_path).unlink(missing_ok=True)
+            if config_path:
+                Path(config_path).unlink(missing_ok=True)
     
     def test_candidate_quality(self):
         """Test that generated candidates make linguistic sense."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as vocab_file:
-            for item in self.vocab_data:
-                json.dump(item, vocab_file)
-                vocab_file.write('\n')
-            vocab_path = vocab_file.name
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as config_file:
-            yaml.dump(self.config_data, config_file)
-            config_path = config_file.name
+        # Create vocabulary file
+        vocab_path = None
+        config_path = None
         
         try:
+            # Create vocabulary file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as vocab_file:
+                for item in self.vocab_data:
+                    json.dump(item, vocab_file)
+                    vocab_file.write('\n')
+                vocab_path = vocab_file.name
+            
+            # Create config file directly without using yaml.dump to avoid coroutine issues
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as config_file:
+                # Write config manually to avoid yaml.dump which seems to trigger coroutine creation
+                config_file.write(f"""embed_dim: {self.config_data['embed_dim']}
+tau_vocab: {self.config_data['tau_vocab']}
+tau_comp: {self.config_data['tau_comp']}
+w_max: {self.config_data['w_max']}
+conv_kernels: {self.config_data['conv_kernels']}
+conv_dilations: {self.config_data['conv_dilations']}
+dropout_rate: {self.config_data['dropout_rate']}
+device: {self.config_data['device']}
+""")
+                config_path = config_file.name
+            
             pipeline = Vocab2EmbeddingPipeline(config_path, self.config_data['device'])
             pipeline.load_vocabulary(vocab_path)
             
@@ -958,22 +989,37 @@ class TestRealisticVocab2EmbeddingPipeline(unittest.TestCase):
             self.assertLess(len(candidate_spans), 150)    # Not too many
             
         finally:
-            Path(vocab_path).unlink(missing_ok=True)
-            Path(config_path).unlink(missing_ok=True)
+            if vocab_path:
+                Path(vocab_path).unlink(missing_ok=True)
+            if config_path:
+                Path(config_path).unlink(missing_ok=True)
     
     def test_mathematical_properties(self):
         """Test mathematical properties of the implementation."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as vocab_file:
-            for item in self.vocab_data:
-                json.dump(item, vocab_file)
-                vocab_file.write('\n')
-            vocab_path = vocab_file.name
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as config_file:
-            yaml.dump(self.config_data, config_file)
-            config_path = config_file.name
+        vocab_path = None
+        config_path = None
         
         try:
+            # Create vocabulary file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as vocab_file:
+                for item in self.vocab_data:
+                    json.dump(item, vocab_file)
+                    vocab_file.write('\n')
+                vocab_path = vocab_file.name
+            
+            # Create config file manually to avoid yaml.dump coroutine issues
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as config_file:
+                config_file.write(f"""embed_dim: {self.config_data['embed_dim']}
+tau_vocab: {self.config_data['tau_vocab']}
+tau_comp: {self.config_data['tau_comp']}
+w_max: {self.config_data['w_max']}
+conv_kernels: {self.config_data['conv_kernels']}
+conv_dilations: {self.config_data['conv_dilations']}
+dropout_rate: {self.config_data['dropout_rate']}
+device: {self.config_data['device']}
+""")
+                config_path = config_file.name
+            
             pipeline = Vocab2EmbeddingPipeline(config_path, self.config_data['device'])
             pipeline.load_vocabulary(vocab_path)
             
@@ -1006,22 +1052,37 @@ class TestRealisticVocab2EmbeddingPipeline(unittest.TestCase):
             self.assertLess(correlation, 0.99)  # Should not be identical
             
         finally:
-            Path(vocab_path).unlink(missing_ok=True)
-            Path(config_path).unlink(missing_ok=True)
+            if vocab_path:
+                Path(vocab_path).unlink(missing_ok=True)
+            if config_path:
+                Path(config_path).unlink(missing_ok=True)
     
     def test_scalability(self):
         """Test that pipeline scales reasonably with sequence length."""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as vocab_file:
-            for item in self.vocab_data:
-                json.dump(item, vocab_file)
-                vocab_file.write('\n')
-            vocab_path = vocab_file.name
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as config_file:
-            yaml.dump(self.config_data, config_file)
-            config_path = config_file.name
+        vocab_path = None
+        config_path = None
         
         try:
+            # Create vocab file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as vocab_file:
+                for item in self.vocab_data:
+                    json.dump(item, vocab_file)
+                    vocab_file.write('\n')
+                vocab_path = vocab_file.name
+            
+            # Create config file manually to avoid yaml.dump coroutines
+            config_fd, config_path = tempfile.mkstemp(suffix='.yaml')
+            with os.fdopen(config_fd, 'w') as config_file:
+                config_file.write(f"""embed_dim: {self.config_data['embed_dim']}
+tau_vocab: {self.config_data['tau_vocab']}
+tau_comp: {self.config_data['tau_comp']}
+w_max: {self.config_data['w_max']}
+conv_kernels: {self.config_data['conv_kernels']}
+conv_dilations: {self.config_data['conv_dilations']}
+dropout_rate: {self.config_data['dropout_rate']}
+device: {self.config_data['device']}
+""")
+            
             pipeline = Vocab2EmbeddingPipeline(config_path, self.config_data['device'])
             pipeline.load_vocabulary(vocab_path)
             
@@ -1051,8 +1112,10 @@ class TestRealisticVocab2EmbeddingPipeline(unittest.TestCase):
                 prev_candidates = curr_candidates
             
         finally:
-            Path(vocab_path).unlink(missing_ok=True)
-            Path(config_path).unlink(missing_ok=True)
+            if vocab_path:
+                Path(vocab_path).unlink(missing_ok=True)
+            if config_path:
+                Path(config_path).unlink(missing_ok=True)
 
 
 class TestPipelineUtilities(unittest.TestCase):
