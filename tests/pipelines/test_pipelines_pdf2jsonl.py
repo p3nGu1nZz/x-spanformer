@@ -9,10 +9,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
 
-# Suppress RuntimeWarnings about unawaited coroutines globally for this test module
-warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited")
-warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*process.*was never awaited")
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from x_spanformer.pipelines import pdf2jsonl
@@ -97,31 +93,27 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
 
     def test_run_pdf2seg_success(self):
         """Test successful PDF to CSV conversion."""
-        # Suppress RuntimeWarning about unawaited coroutines from mocking
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited")
-            
-            pdf_path = self.tmp_dir / "test.pdf"
-            pdf_path.touch()
-            output_dir = self.tmp_dir / "csv_output"
-            output_dir.mkdir()
-            
-            # The function uses hash-based naming: hash_name("test.pdf") = "056c935e"
-            expected_csv_file = output_dir / "056c935e.csv"
-            # Don't create the CSV file beforehand - let the function create it
-            
-            # Mock the pdf2seg module at import time
-            mock_pdf2seg = MagicMock()
-            mock_pdf2seg.load.return_value = MagicMock()
-            mock_pdf2seg.pdf.return_value = None
-            mock_pdf2seg.extract.return_value = []
-            mock_pdf2seg.save_csv.return_value = None
-            
-            with patch.dict('sys.modules', {'pdf2seg': mock_pdf2seg}):
-                result = pdf2jsonl.run_pdf2seg(pdf_path, output_dir)
+        pdf_path = self.tmp_dir / "test.pdf"
+        pdf_path.touch()
+        output_dir = self.tmp_dir / "csv_output"
+        output_dir.mkdir()
         
-                self.assertEqual(result, expected_csv_file)
-                mock_pdf2seg.load.assert_called_once_with("en_core_web_sm")
+        # The function uses hash-based naming: hash_name("test.pdf") = "056c935e"
+        expected_csv_file = output_dir / "056c935e.csv"
+        # Don't create the CSV file beforehand - let the function create it
+        
+        # Mock the pdf2seg module at import time
+        mock_pdf2seg = MagicMock()
+        mock_pdf2seg.load.return_value = MagicMock()
+        mock_pdf2seg.pdf.return_value = None
+        mock_pdf2seg.extract.return_value = []
+        mock_pdf2seg.save_csv.return_value = None
+        
+        with patch.dict('sys.modules', {'pdf2seg': mock_pdf2seg}):
+            result = pdf2jsonl.run_pdf2seg(pdf_path, output_dir)
+    
+            self.assertEqual(result, expected_csv_file)
+            mock_pdf2seg.load.assert_called_once_with("en_core_web_sm")
 
     def test_run_pdf2seg_failure(self):
         pdf_path = self.tmp_dir / "test.pdf"
@@ -139,26 +131,22 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
 
     def test_run_pdf2seg_import_error(self):
         """Test handling of pdf2seg import error."""
-        # Suppress RuntimeWarning about unawaited coroutines from mocking
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited")
-            
-            pdf_path = self.tmp_dir / "test.pdf"
-            pdf_path.touch()
-            output_dir = self.tmp_dir / "csv_output"
-            output_dir.mkdir()
-            
-            # Mock importlib to raise ImportError only for pdf2seg
-            original_import = __builtins__['__import__']
-            
-            def mock_import(name, *args, **kwargs):
-                if name == 'pdf2seg':
-                    raise ImportError("No module named 'pdf2seg'")
-                return original_import(name, *args, **kwargs)
-            
-            with patch('builtins.__import__', side_effect=mock_import):
-                result = pdf2jsonl.run_pdf2seg(pdf_path, output_dir)
-                self.assertIsNone(result)
+        pdf_path = self.tmp_dir / "test.pdf"
+        pdf_path.touch()
+        output_dir = self.tmp_dir / "csv_output"
+        output_dir.mkdir()
+        
+        # Mock importlib to raise ImportError only for pdf2seg
+        original_import = __builtins__['__import__']
+        
+        def mock_import(name, *args, **kwargs):
+            if name == 'pdf2seg':
+                raise ImportError("No module named 'pdf2seg'")
+            return original_import(name, *args, **kwargs)
+        
+        with patch('builtins.__import__', side_effect=mock_import):
+            result = pdf2jsonl.run_pdf2seg(pdf_path, output_dir)
+            self.assertIsNone(result)
 
     def test_process_all_csvs_function(self):
         """Test CSV processing function - simplified to test logic only."""
@@ -449,50 +437,46 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
     @patch("x_spanformer.pipelines.pdf2jsonl.load_judge_config")
     def test_end_to_end_pdf_to_jsonl_workflow(self, mock_load_config, mock_process_csvs, mock_ollama_check):
         """Test the complete workflow from PDF to JSONL - simplified."""
-        # Suppress RuntimeWarning about unawaited coroutines from mocking
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited")
-            
-            mock_load_config.return_value = MOCK_CONFIG
-            mock_ollama_check.return_value = True
-            
-            pdf_path = self.tmp_dir / "document.pdf"
-            pdf_path.touch()
+        mock_load_config.return_value = MOCK_CONFIG
+        mock_ollama_check.return_value = True
+        
+        pdf_path = self.tmp_dir / "document.pdf"
+        pdf_path.touch()
 
-            # Mock processing results
-            from x_spanformer.schema.metadata import RecordMeta
-            mock_records = [
-                pretrain_record.PretrainRecord(
-                    raw="This is high quality text content.",
-                    meta=RecordMeta(status="keep", tags=[], doc_language="en", extracted_by="test", confidence=0.9, notes="high quality", source_file="document.pdf")
-                ),
-                pretrain_record.PretrainRecord(
-                    raw="Another good piece of content.",
-                    meta=RecordMeta(status="keep", tags=[], doc_language="en", extracted_by="test", confidence=0.8, notes="good", source_file="document.pdf")
-                ),
-                pretrain_record.PretrainRecord(
-                    raw="Bad text here.",
-                    meta=RecordMeta(status="discard", tags=["discard"], doc_language="en", extracted_by="test", confidence=0.2, notes="low quality", source_file="document.pdf")
-                ),
-            ]
-            mock_process_csvs.return_value = mock_records
+        # Mock processing results
+        from x_spanformer.schema.metadata import RecordMeta
+        mock_records = [
+            pretrain_record.PretrainRecord(
+                raw="This is high quality text content.",
+                meta=RecordMeta(status="keep", tags=[], doc_language="en", extracted_by="test", confidence=0.9, notes="high quality", source_file="document.pdf")
+            ),
+            pretrain_record.PretrainRecord(
+                raw="Another good piece of content.",
+                meta=RecordMeta(status="keep", tags=[], doc_language="en", extracted_by="test", confidence=0.8, notes="good", source_file="document.pdf")
+            ),
+            pretrain_record.PretrainRecord(
+                raw="Bad text here.",
+                meta=RecordMeta(status="discard", tags=["discard"], doc_language="en", extracted_by="test", confidence=0.2, notes="low quality", source_file="document.pdf")
+            ),
+        ]
+        mock_process_csvs.return_value = mock_records
 
-            # Mock CSV generation
-            generated_csv = self.tmp_dir / "document.csv"
-            generated_csv.write_text('''text
+        # Mock CSV generation
+        generated_csv = self.tmp_dir / "document.csv"
+        generated_csv.write_text('''text
 "This is high quality text content."
 "Bad text here."
 "Another good piece of content."
 ''')
-            
-            with patch("x_spanformer.pipelines.pdf2jsonl.run_pdf2seg", return_value=generated_csv):
-                pdf2jsonl.run(pdf_path, self.output_dir, "text", True, "final_dataset", 1, save_interval=1)
-            
-            # Verify process was called
-            mock_process_csvs.assert_called_once()
-            
-            # Test passes if no exceptions thrown
-            self.assertTrue(True)
+        
+        with patch("x_spanformer.pipelines.pdf2jsonl.run_pdf2seg", return_value=generated_csv):
+            pdf2jsonl.run(pdf_path, self.output_dir, "text", True, "final_dataset", 1, save_interval=1)
+        
+        # Verify process was called
+        mock_process_csvs.assert_called_once()
+        
+        # Test passes if no exceptions thrown
+        self.assertTrue(True)
 
     @patch("x_spanformer.pipelines.pdf2jsonl.check_ollama_connection")
     @patch("x_spanformer.pipelines.pdf2jsonl.process_all_csvs")
@@ -585,17 +569,13 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
 
     def test_count_pdf_pages_with_real_pypdf(self):
         """Test PDF page counting - integration test with real pypdf"""
-        # Suppress RuntimeWarning about unawaited coroutines from module imports
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited")
-            
-            # Simple integration test - just ensure function doesn't crash
-            test_pdf = self.tmp_dir / "test.pdf"
-            test_pdf.write_bytes(b"fake pdf content")
-            
-            # This will return -1 since it's not a real PDF, but tests the error handling path
-            result = pdf2jsonl.count_pdf_pages(test_pdf)
-            self.assertEqual(result, -1)  # Expected for invalid PDF content
+        # Simple integration test - just ensure function doesn't crash
+        test_pdf = self.tmp_dir / "test.pdf"
+        test_pdf.write_bytes(b"fake pdf content")
+        
+        # This will return -1 since it's not a real PDF, but tests the error handling path
+        result = pdf2jsonl.count_pdf_pages(test_pdf)
+        self.assertEqual(result, -1)  # Expected for invalid PDF content
 
     def test_split_large_pdf_with_fake_pdf(self):
         """Test PDF splitting with fake PDF (tests error handling)"""
