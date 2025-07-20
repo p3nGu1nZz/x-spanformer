@@ -184,6 +184,10 @@ data/pretraining/out/jsonl/*/*
 data/pretraining2/out/csv/*
 data/pretraining2/out/jsonl/*/*
 
+# Batch 3
+data/pretraining3/out/csv/*
+data/pretraining3/out/jsonl/*/*
+
 # Vocab
 data/vocab/out/candidates/*
 data/vocab/out/full_freq/*
