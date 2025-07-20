@@ -1,3 +1,4 @@
+import csv
 import json
 import sys
 import tempfile
@@ -560,3 +561,192 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             # Verify no CSV filenames in source_file  
             self.assertNotIn("hash1.csv", source_files)
             self.assertNotIn("hash2.csv", source_files)
+
+    def test_count_pdf_pages_with_real_pypdf(self):
+        """Test PDF page counting - integration test with real pypdf"""
+        # Simple integration test - just ensure function doesn't crash
+        test_pdf = self.tmp_dir / "test.pdf"
+        test_pdf.write_bytes(b"fake pdf content")
+        
+        # This will return -1 since it's not a real PDF, but tests the error handling path
+        result = pdf2jsonl.count_pdf_pages(test_pdf)
+        self.assertEqual(result, -1)  # Expected for invalid PDF content
+
+    def test_split_large_pdf_with_fake_pdf(self):
+        """Test PDF splitting with fake PDF (tests error handling)"""
+        test_pdf = self.tmp_dir / "test.pdf"
+        test_pdf.write_bytes(b"fake pdf content")
+        temp_dir = self.tmp_dir / "temp"
+        temp_dir.mkdir()
+        
+        # This will fail to read the PDF and return the original file
+        result = pdf2jsonl.split_large_pdf(test_pdf, temp_dir)
+        
+        # Should return original PDF when PDF reading fails
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0], test_pdf)
+
+    def test_aggregate_batch_results_single_batch(self):
+        """Test aggregation with single batch result"""
+        # Create a mock CSV file
+        batch_csv = self.tmp_dir / "batch_01.csv"
+        with batch_csv.open('w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['text'])
+            writer.writerow(['Sample text content'])
+        
+        original_pdf = self.tmp_dir / "original.pdf"
+        original_pdf.write_bytes(b"fake pdf")
+        
+        batch_results = [(self.tmp_dir / "batch_01.pdf", batch_csv)]
+        final_csv_dir = self.tmp_dir / "final"
+        final_csv_dir.mkdir()
+        
+        with patch('shutil.copy2') as mock_copy:
+            result = pdf2jsonl.aggregate_batch_results(original_pdf, batch_results, final_csv_dir)
+            
+            # Should attempt to copy single batch result
+            self.assertIsNotNone(result)
+            mock_copy.assert_called_once()
+
+    def test_aggregate_batch_results_multiple_batches(self):
+        """Test aggregation with multiple batch results"""
+        # Create multiple mock CSV files
+        batch_csvs = []
+        batch_results = []
+        
+        for i in range(3):
+            batch_csv = self.tmp_dir / f"batch_{i+1:02d}.csv"
+            with batch_csv.open('w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['text'])
+                writer.writerow([f'Batch {i+1} content line 1'])
+                writer.writerow([f'Batch {i+1} content line 2'])
+            
+            batch_pdfs = self.tmp_dir / f"batch_{i+1:02d}.pdf"
+            batch_results.append((batch_pdfs, batch_csv))
+            batch_csvs.append(batch_csv)
+        
+        original_pdf = self.tmp_dir / "original.pdf"
+        original_pdf.write_bytes(b"fake pdf")
+        
+        final_csv_dir = self.tmp_dir / "final"
+        final_csv_dir.mkdir()
+        
+        result = pdf2jsonl.aggregate_batch_results(original_pdf, batch_results, final_csv_dir)
+        
+        self.assertIsNotNone(result)
+        if result is not None:
+            self.assertTrue(result.exists())
+            
+            # Verify aggregated content
+            with result.open('r') as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+                
+                # Should have header + 6 data rows (2 rows per batch * 3 batches)
+                self.assertEqual(len(rows), 7)
+                self.assertEqual(rows[0], ['text'])  # Header
+                
+                # Check that all batch content is included
+                content = [row[0] for row in rows[1:]]
+                self.assertIn('Batch 1 content line 1', content)
+                self.assertIn('Batch 2 content line 1', content)
+                self.assertIn('Batch 3 content line 1', content)
+
+    def test_aggregate_batch_results_no_results(self):
+        """Test aggregation with no batch results"""
+        original_pdf = self.tmp_dir / "original.pdf"
+        final_csv_dir = self.tmp_dir / "final"
+        final_csv_dir.mkdir()
+        
+        result = pdf2jsonl.aggregate_batch_results(original_pdf, [], final_csv_dir)
+        self.assertIsNone(result)
+
+    def test_cleanup_batch_files(self):
+        """Test cleanup of temporary batch files"""
+        # Create mock batch directory structure
+        batch_dir = self.tmp_dir / "test_batches"
+        batch_dir.mkdir()
+        
+        # Create some batch files
+        batch_files = []
+        for i in range(3):
+            batch_file = batch_dir / f"batch_{i+1:02d}.pdf"
+            batch_file.write_bytes(b"fake batch content")
+            batch_files.append(batch_file)
+        
+        # Verify files exist before cleanup
+        for batch_file in batch_files:
+            self.assertTrue(batch_file.exists())
+        self.assertTrue(batch_dir.exists())
+        
+        # Run cleanup
+        pdf2jsonl.cleanup_batch_files(batch_files)
+        
+        # Verify files and directory are removed
+        for batch_file in batch_files:
+            self.assertFalse(batch_file.exists())
+        self.assertFalse(batch_dir.exists())
+
+    def test_cleanup_batch_files_empty_list(self):
+        """Test cleanup with empty batch file list"""
+        # Should not raise any errors
+        pdf2jsonl.cleanup_batch_files([])
+
+    def test_cleanup_batch_files_nonexistent_files(self):
+        """Test cleanup with nonexistent files"""
+        nonexistent_files = [
+            self.tmp_dir / "fake1.pdf",
+            self.tmp_dir / "fake2.pdf"
+        ]
+        
+        # Should not raise any errors
+        pdf2jsonl.cleanup_batch_files(nonexistent_files)
+
+    @patch("x_spanformer.pipelines.pdf2jsonl.check_ollama_connection")
+    @patch("x_spanformer.pipelines.pdf2jsonl.load_judge_config")
+    def test_all_segments_already_processed_case(self, mock_load_config, mock_ollama_check):
+        """Test graceful handling when all segments are already processed"""
+        # Mock configuration
+        mock_config = MOCK_CONFIG.copy()
+        mock_load_config.return_value = mock_config
+        mock_ollama_check.return_value = True
+        
+        # Create test CSV file
+        csv_file = self.tmp_dir / "test.csv"
+        with csv_file.open('w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['text'])
+            writer.writerow(['Sample text content'])
+        
+        # Create existing records that match the CSV content exactly
+        from x_spanformer.schema.pretrain_record import PretrainRecord
+        from x_spanformer.schema.metadata import RecordMeta
+        
+        existing_records = [
+            PretrainRecord(
+                raw='Sample text content',
+                type='natural',
+                meta=RecordMeta(
+                    source_file='test.pdf',
+                    doc_language='en',
+                    extracted_by='pdf2seg',
+                    confidence=0.8,
+                    status='keep',
+                    tags=[],
+                    notes='test'
+                )
+            )
+        ]
+        
+        # This should not raise an error and should return the existing records
+        result = pdf2jsonl.process_all_csvs(
+            [csv_file], "text", 1, {},
+            save_interval=0, existing_records=existing_records
+        )
+        
+        # Should return the existing records without error
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].raw, 'Sample text content')
+        self.assertEqual(result[0].meta.status, 'keep')
