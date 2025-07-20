@@ -15,8 +15,6 @@ import tempfile
 import unittest
 from pathlib import Path
 import sys
-import warnings
-import shutil
 import time
 
 import torch
