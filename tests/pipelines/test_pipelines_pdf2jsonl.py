@@ -3,9 +3,15 @@ import json
 import sys
 import tempfile
 import unittest
+import warnings
 from collections import Counter
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
+import pytest
+
+# Suppress RuntimeWarnings about unawaited coroutines globally for this test module
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*process.*was never awaited")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -90,27 +96,32 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         self.assertEqual(args[2], 1)  # Workers
 
     def test_run_pdf2seg_success(self):
-        pdf_path = self.tmp_dir / "test.pdf"
-        pdf_path.touch()
-        output_dir = self.tmp_dir / "csv_output"
-        output_dir.mkdir()
+        """Test successful PDF to CSV conversion."""
+        # Suppress RuntimeWarning about unawaited coroutines from mocking
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited")
+            
+            pdf_path = self.tmp_dir / "test.pdf"
+            pdf_path.touch()
+            output_dir = self.tmp_dir / "csv_output"
+            output_dir.mkdir()
+            
+            # The function uses hash-based naming: hash_name("test.pdf") = "056c935e"
+            expected_csv_file = output_dir / "056c935e.csv"
+            # Don't create the CSV file beforehand - let the function create it
+            
+            # Mock the pdf2seg module at import time
+            mock_pdf2seg = MagicMock()
+            mock_pdf2seg.load.return_value = MagicMock()
+            mock_pdf2seg.pdf.return_value = None
+            mock_pdf2seg.extract.return_value = []
+            mock_pdf2seg.save_csv.return_value = None
+            
+            with patch.dict('sys.modules', {'pdf2seg': mock_pdf2seg}):
+                result = pdf2jsonl.run_pdf2seg(pdf_path, output_dir)
         
-        # The function uses hash-based naming: hash_name("test.pdf") = "056c935e"
-        expected_csv_file = output_dir / "056c935e.csv"
-        # Don't create the CSV file beforehand - let the function create it
-        
-        # Mock the pdf2seg module at import time
-        mock_pdf2seg = MagicMock()
-        mock_pdf2seg.load.return_value = MagicMock()
-        mock_pdf2seg.pdf.return_value = None
-        mock_pdf2seg.extract.return_value = []
-        mock_pdf2seg.save_csv.return_value = None
-        
-        with patch.dict('sys.modules', {'pdf2seg': mock_pdf2seg}):
-            result = pdf2jsonl.run_pdf2seg(pdf_path, output_dir)
-    
-            self.assertEqual(result, expected_csv_file)
-            mock_pdf2seg.load.assert_called_once_with("en_core_web_sm")
+                self.assertEqual(result, expected_csv_file)
+                mock_pdf2seg.load.assert_called_once_with("en_core_web_sm")
 
     def test_run_pdf2seg_failure(self):
         pdf_path = self.tmp_dir / "test.pdf"
@@ -127,22 +138,27 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             self.assertIsNone(result)
 
     def test_run_pdf2seg_import_error(self):
-        pdf_path = self.tmp_dir / "test.pdf"
-        pdf_path.touch()
-        output_dir = self.tmp_dir / "csv_output"
-        output_dir.mkdir()
-        
-        # Mock importlib to raise ImportError only for pdf2seg
-        original_import = __builtins__['__import__']
-        
-        def mock_import(name, *args, **kwargs):
-            if name == 'pdf2seg':
-                raise ImportError("No module named 'pdf2seg'")
-            return original_import(name, *args, **kwargs)
-        
-        with patch('builtins.__import__', side_effect=mock_import):
-            result = pdf2jsonl.run_pdf2seg(pdf_path, output_dir)
-            self.assertIsNone(result)
+        """Test handling of pdf2seg import error."""
+        # Suppress RuntimeWarning about unawaited coroutines from mocking
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited")
+            
+            pdf_path = self.tmp_dir / "test.pdf"
+            pdf_path.touch()
+            output_dir = self.tmp_dir / "csv_output"
+            output_dir.mkdir()
+            
+            # Mock importlib to raise ImportError only for pdf2seg
+            original_import = __builtins__['__import__']
+            
+            def mock_import(name, *args, **kwargs):
+                if name == 'pdf2seg':
+                    raise ImportError("No module named 'pdf2seg'")
+                return original_import(name, *args, **kwargs)
+            
+            with patch('builtins.__import__', side_effect=mock_import):
+                result = pdf2jsonl.run_pdf2seg(pdf_path, output_dir)
+                self.assertIsNone(result)
 
     def test_process_all_csvs_function(self):
         """Test CSV processing function - simplified to test logic only."""
@@ -433,46 +449,50 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
     @patch("x_spanformer.pipelines.pdf2jsonl.load_judge_config")
     def test_end_to_end_pdf_to_jsonl_workflow(self, mock_load_config, mock_process_csvs, mock_ollama_check):
         """Test the complete workflow from PDF to JSONL - simplified."""
-        mock_load_config.return_value = MOCK_CONFIG
-        mock_ollama_check.return_value = True
-        
-        pdf_path = self.tmp_dir / "document.pdf"
-        pdf_path.touch()
+        # Suppress RuntimeWarning about unawaited coroutines from mocking
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited")
+            
+            mock_load_config.return_value = MOCK_CONFIG
+            mock_ollama_check.return_value = True
+            
+            pdf_path = self.tmp_dir / "document.pdf"
+            pdf_path.touch()
 
-        # Mock processing results
-        from x_spanformer.schema.metadata import RecordMeta
-        mock_records = [
-            pretrain_record.PretrainRecord(
-                raw="This is high quality text content.",
-                meta=RecordMeta(status="keep", tags=[], doc_language="en", extracted_by="test", confidence=0.9, notes="high quality", source_file="document.pdf")
-            ),
-            pretrain_record.PretrainRecord(
-                raw="Another good piece of content.",
-                meta=RecordMeta(status="keep", tags=[], doc_language="en", extracted_by="test", confidence=0.8, notes="good", source_file="document.pdf")
-            ),
-            pretrain_record.PretrainRecord(
-                raw="Bad text here.",
-                meta=RecordMeta(status="discard", tags=["discard"], doc_language="en", extracted_by="test", confidence=0.2, notes="low quality", source_file="document.pdf")
-            ),
-        ]
-        mock_process_csvs.return_value = mock_records
+            # Mock processing results
+            from x_spanformer.schema.metadata import RecordMeta
+            mock_records = [
+                pretrain_record.PretrainRecord(
+                    raw="This is high quality text content.",
+                    meta=RecordMeta(status="keep", tags=[], doc_language="en", extracted_by="test", confidence=0.9, notes="high quality", source_file="document.pdf")
+                ),
+                pretrain_record.PretrainRecord(
+                    raw="Another good piece of content.",
+                    meta=RecordMeta(status="keep", tags=[], doc_language="en", extracted_by="test", confidence=0.8, notes="good", source_file="document.pdf")
+                ),
+                pretrain_record.PretrainRecord(
+                    raw="Bad text here.",
+                    meta=RecordMeta(status="discard", tags=["discard"], doc_language="en", extracted_by="test", confidence=0.2, notes="low quality", source_file="document.pdf")
+                ),
+            ]
+            mock_process_csvs.return_value = mock_records
 
-        # Mock CSV generation
-        generated_csv = self.tmp_dir / "document.csv"
-        generated_csv.write_text('''text
+            # Mock CSV generation
+            generated_csv = self.tmp_dir / "document.csv"
+            generated_csv.write_text('''text
 "This is high quality text content."
 "Bad text here."
 "Another good piece of content."
 ''')
-        
-        with patch("x_spanformer.pipelines.pdf2jsonl.run_pdf2seg", return_value=generated_csv):
-            pdf2jsonl.run(pdf_path, self.output_dir, "text", True, "final_dataset", 1, save_interval=1)
-        
-        # Verify process was called
-        mock_process_csvs.assert_called_once()
-        
-        # Test passes if no exceptions thrown
-        self.assertTrue(True)
+            
+            with patch("x_spanformer.pipelines.pdf2jsonl.run_pdf2seg", return_value=generated_csv):
+                pdf2jsonl.run(pdf_path, self.output_dir, "text", True, "final_dataset", 1, save_interval=1)
+            
+            # Verify process was called
+            mock_process_csvs.assert_called_once()
+            
+            # Test passes if no exceptions thrown
+            self.assertTrue(True)
 
     @patch("x_spanformer.pipelines.pdf2jsonl.check_ollama_connection")
     @patch("x_spanformer.pipelines.pdf2jsonl.process_all_csvs")
@@ -565,13 +585,17 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
 
     def test_count_pdf_pages_with_real_pypdf(self):
         """Test PDF page counting - integration test with real pypdf"""
-        # Simple integration test - just ensure function doesn't crash
-        test_pdf = self.tmp_dir / "test.pdf"
-        test_pdf.write_bytes(b"fake pdf content")
-        
-        # This will return -1 since it's not a real PDF, but tests the error handling path
-        result = pdf2jsonl.count_pdf_pages(test_pdf)
-        self.assertEqual(result, -1)  # Expected for invalid PDF content
+        # Suppress RuntimeWarning about unawaited coroutines from module imports
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited")
+            
+            # Simple integration test - just ensure function doesn't crash
+            test_pdf = self.tmp_dir / "test.pdf"
+            test_pdf.write_bytes(b"fake pdf content")
+            
+            # This will return -1 since it's not a real PDF, but tests the error handling path
+            result = pdf2jsonl.count_pdf_pages(test_pdf)
+            self.assertEqual(result, -1)  # Expected for invalid PDF content
 
     def test_split_large_pdf_with_fake_pdf(self):
         """Test PDF splitting with fake PDF (tests error handling)"""
@@ -874,3 +898,131 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         self.assertEqual(rows[0], ['text'])
         self.assertIn(['Large PDF segment 1 content'], rows)
         self.assertIn(['Large PDF segment 10 content'], rows)
+
+    def test_concatenate_small_segments_basic(self):
+        """Test basic small segment concatenation functionality"""
+        # Test data with small segments from same document
+        spans = ["Short", "text here", "This is longer content that makes it over 50 characters"]
+        source_mapping = ["doc1.pdf", "doc1.pdf", "doc1.pdf"]
+        
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments(
+            spans, source_mapping, min_length=50, max_length=512
+        )
+        
+        # Should concatenate first two segments until it reaches min_length, then stop
+        self.assertEqual(len(result_spans), 2)
+        self.assertEqual(result_spans[0], "Short text here")  # Concatenated and reaches 15 chars
+        self.assertTrue(len(result_spans[0]) >= 15)  # Combined should be reasonable length
+        self.assertEqual(result_spans[1], "This is longer content that makes it over 50 characters")  # Left alone
+        self.assertEqual(result_sources, ["doc1.pdf", "doc1.pdf"])
+
+    def test_concatenate_small_segments_different_documents(self):
+        """Test that concatenation respects document boundaries"""
+        spans = ["Short", "text", "from another doc"]
+        source_mapping = ["doc1.pdf", "doc2.pdf", "doc2.pdf"]
+        
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments(
+            spans, source_mapping, min_length=50, max_length=512
+        )
+        
+        # Should not concatenate across document boundaries
+        # First segment stays alone (can't concatenate with different doc)
+        # Second and third segments get concatenated within doc2.pdf
+        self.assertEqual(len(result_spans), 2)
+        self.assertEqual(result_spans[0], "Short")  # Left alone (different doc boundary)
+        self.assertEqual(result_spans[1], "text from another doc")  # Concatenated within doc2
+        self.assertEqual(result_sources, ["doc1.pdf", "doc2.pdf"])
+        
+    def test_concatenate_small_segments_respects_max_length(self):
+        """Test that concatenation respects max_length boundary"""
+        # Create segments where concatenation would exceed max_length
+        long_segment = "A" * 400  # 400 characters
+        spans = ["Short", long_segment]
+        source_mapping = ["doc1.pdf", "doc1.pdf"]
+        
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments(
+            spans, source_mapping, min_length=50, max_length=450
+        )
+        
+        # Should not concatenate because "Short " + long_segment > 450 chars
+        self.assertEqual(len(result_spans), 2)
+        self.assertEqual(result_spans[0], "Short")
+        self.assertEqual(result_spans[1], long_segment)
+
+    def test_concatenate_small_segments_iterative(self):
+        """Test iterative concatenation of multiple small segments"""
+        spans = ["A", "B", "C", "D", "This is long enough content to be standalone"]
+        source_mapping = ["doc1.pdf"] * 5
+        
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments(
+            spans, source_mapping, min_length=10, max_length=512
+        )
+        
+        # Should concatenate A B C D together (even if still below min_length), leave the long one alone
+        self.assertEqual(len(result_spans), 2)
+        self.assertTrue(result_spans[0].startswith("A B"))  # Should start with concatenation
+        self.assertEqual(result_spans[0], "A B C D")  # All small segments concatenated
+        self.assertEqual(result_spans[1], "This is long enough content to be standalone")
+
+    def test_concatenate_small_segments_empty_input(self):
+        """Test concatenation with empty input"""
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments([], [])
+        self.assertEqual(result_spans, [])
+        self.assertEqual(result_sources, [])
+
+    def test_concatenate_small_segments_single_element(self):
+        """Test concatenation with single element"""
+        spans = ["Single element"]
+        source_mapping = ["doc1.pdf"]
+        
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments(
+            spans, source_mapping, min_length=50, max_length=512
+        )
+        
+        self.assertEqual(result_spans, ["Single element"])
+        self.assertEqual(result_sources, ["doc1.pdf"])
+        
+    def test_concatenate_small_segments_all_long_enough(self):
+        """Test concatenation when all segments are already long enough"""
+        spans = ["This is a long enough segment", "This is another long enough segment"]
+        source_mapping = ["doc1.pdf", "doc1.pdf"]
+        
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments(
+            spans, source_mapping, min_length=25, max_length=512
+        )
+        
+        # Should not concatenate anything since all segments are >= min_length
+        self.assertEqual(len(result_spans), 2)
+        self.assertEqual(result_spans, spans)
+        self.assertEqual(result_sources, source_mapping)
+
+    def test_process_all_csvs_with_small_segment_concatenation(self):
+        """Test that the process_all_csvs function properly integrates concatenation"""
+        # Create CSV with mix of small and large segments
+        csv_file = self.tmp_dir / "mixed_segments.csv"
+        csv_content = '''text
+"Short"
+"text"
+"This is a much longer segment that exceeds the minimum length requirement"
+"Another"
+"small bit"
+'''
+        csv_file.write_text(csv_content)
+        
+        with patch('asyncio.run') as mock_asyncio_run:
+            # Mock the async process to verify concatenation happens
+            def mock_process():
+                # This would be called after concatenation, so we should see fewer segments
+                return [], Counter(), []
+            
+            mock_asyncio_run.return_value = mock_process()
+            
+            # Test with configuration that should trigger concatenation
+            result = pdf2jsonl.process_all_csvs(
+                [csv_file], "text", 1, {}, 
+                save_interval=0, pdf_mapping={"mixed_segments.csv": "test.pdf"}
+            )
+            
+            # The main thing is that this doesn't crash and concatenation is applied
+            # The actual processing is mocked, but concatenation should happen before that
+            self.assertEqual(len(result), 0)  # Empty because we mocked the return

@@ -293,6 +293,7 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
 
         # Pre-process spans to split long texts
         max_raw_length = agent_config.get("processor", {}).get("max_raw_length", 512)
+        min_raw_length = agent_config.get("processor", {}).get("min_raw_length", 64)
         expanded_spans = []
         expanded_source_mapping = []
 
@@ -305,6 +306,13 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_in
             for chunk in text_chunks:
                 expanded_spans.append(chunk)
                 expanded_source_mapping.append(source_file)
+
+        # After text splitting, concatenate small segments within same documents
+        if min_raw_length > 0 and agent_config.get("processor", {}).get("concatenate_small_segments", True):
+            expanded_spans, expanded_source_mapping = concatenate_small_segments(
+                expanded_spans, expanded_source_mapping, 
+                min_length=min_raw_length, max_length=max_raw_length
+            )
 
         # Save the total number of segments before filtering (for progress tracking)
         total_segments_including_processed = len(expanded_spans)
@@ -969,6 +977,82 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
         with j2.open("w", encoding="utf-8") as writer:
             json.dump([x.model_dump() for x in allr], writer, ensure_ascii=False, indent=2)
         console.print(f"[cyan]• Pretty JSON → {j2.name}[/cyan]")
+
+
+def concatenate_small_segments(spans: list[str], source_mapping: list[str], 
+                             min_length: int = 64, max_length: int = 512) -> tuple[list[str], list[str]]:
+    """
+    Iteratively concatenate small segments within the same document until reaching acceptable length.
+    Respects max_length boundary - never exceeds it during concatenation.
+    
+    Args:
+        spans: List of text segments  
+        source_mapping: List of source files corresponding to each segment
+        min_length: Minimum segment length to keep standalone (default: 64)
+        max_length: Maximum length after concatenation (default: 512)
+    
+    Returns:
+        Tuple of (concatenated_spans, updated_source_mapping)
+    """
+    if not spans:
+        return spans, source_mapping
+    
+    concatenated_spans = []
+    concatenated_sources = []
+    concatenated_count = 0
+    
+    i = 0
+    while i < len(spans):
+        current_text = spans[i].strip()
+        current_source = source_mapping[i]
+        
+        # If segment is too small, try iterative concatenation
+        if len(current_text) < min_length and i < len(spans) - 1:
+            combined_text = current_text
+            segments_used = 1
+            j = i + 1
+            
+            # Iteratively add subsequent segments from same document
+            while j < len(spans) and source_mapping[j] == current_source:
+                
+                next_segment = spans[j].strip()
+                
+                # Don't concatenate with segments that are already long enough by themselves
+                if len(next_segment) >= min_length:
+                    break
+                
+                potential_combined = combined_text + " " + next_segment
+                
+                # RESPECT MAX LENGTH - don't exceed during concatenation
+                if len(potential_combined) <= max_length:
+                    combined_text = potential_combined
+                    segments_used += 1
+                    j += 1
+                    
+                    # Stop if we've reached a good length
+                    if len(combined_text) >= min_length:
+                        break
+                else:
+                    # Would exceed max_length, stop concatenation
+                    break
+            
+            concatenated_spans.append(combined_text)
+            concatenated_sources.append(current_source)
+            
+            if segments_used > 1:
+                concatenated_count += segments_used - 1  # Count extra segments merged
+            
+            i = j  # Skip the segments we just concatenated
+        else:
+            # Segment is long enough or is last segment - keep as-is
+            concatenated_spans.append(current_text)
+            concatenated_sources.append(current_source)
+            i += 1
+    
+    if concatenated_count > 0:
+        console.print(f"[cyan]🔗 Concatenated {concatenated_count} small segments (min: {min_length} chars, max: {max_length} chars)[/cyan]")
+    
+    return concatenated_spans, concatenated_sources
 
 
 def split_long_text(text: str, max_length: int = 512) -> list[str]:
