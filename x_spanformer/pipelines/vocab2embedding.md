@@ -80,14 +80,32 @@ soft_probs = result['soft_probabilities']     # Shape: (T, |V|)
 
 ### Command Line Usage
 ```bash
+# Using dataset.jsonl from the Section 3.1 pipeline
 python -m x_spanformer.pipelines.vocab2embedding \
     --vocab data/vocab/vocab.jsonl \
-    --input data/pretraining/sequences.jsonl \
-    --output data/embeddings/ \
+    --input data/embedding/in \
+    --output data/embeddings/out \
     --config config/pipelines/vocab2embedding.yaml \
     --device cuda \
     --batch-size 32
 ```
+
+## Input Format Support
+
+The pipeline supports PretrainRecord format from the Section 3.1 pipeline:
+
+### PretrainRecord Format
+Direct usage of dataset.jsonl files from the vocabulary induction pipeline:
+```json
+{"raw": "the quick brown fox", "type": "text", "id": "001", "meta": {"source": "example.txt"}}
+{"raw": "jumps over the lazy dog", "type": "text", "id": "002", "meta": {"status": "validated"}}
+```
+
+**Features:**
+- Extracts text content from the `raw` field of PretrainRecord entries
+- Skips sequences marked as `status: "discard"` in metadata
+- Handles empty lines and malformed JSON gracefully
+- Logs processing statistics and corpus summary
 
 ## Configuration
 
@@ -180,7 +198,7 @@ Tests cover:
 
 ### Input Dependencies
 - **vocab.jsonl**: Output from `jsonl2vocab.py` (Section 3.1)
-- **sequences.jsonl**: Raw text sequences for processing
+- **dataset.jsonl**: PretrainRecord format files from the vocabulary induction pipeline
 
 ### Output Usage  
 - Embeddings feed into span boundary prediction modules

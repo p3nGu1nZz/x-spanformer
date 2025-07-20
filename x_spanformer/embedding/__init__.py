@@ -31,6 +31,12 @@ from .embedding_viz import (
     create_comprehensive_visualization
 )
 
+# Logging utilities
+from .embedding_logging import (
+    setup_embedding_logging,
+    get_embedding_logger
+)
+
 # Core functionality always available
 __all__ = [
     # Embedding utilities
@@ -52,4 +58,8 @@ __all__ = [
     'create_span_heatmap',
     'plot_embedding_comparison',
     'create_comprehensive_visualization',
+    
+    # Logging
+    'setup_embedding_logging',
+    'get_embedding_logger',
 ]

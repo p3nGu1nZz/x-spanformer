@@ -13,16 +13,30 @@ implements the unified algorithm for:
 
 The implementation uses PyTorch with CUDA acceleration for efficient processing
 of long sequences and large vocabularies.
+
+Input Format:
+- PretrainRecord format (dataset.jsonl): {"raw": "text", "type": "...", "meta": {...}}
+
+This allows direct processing of dataset files from the Section 3.1 pipeline
+without requiring separate sequence extraction steps.
 """
 import argparse
 import json
 import logging
 import math
+import re
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional, Union
+import warnings
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import yaml
+import numpy as np
 import warnings
 
 import torch
@@ -36,7 +50,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.vocab import VocabStats
-from x_spanformer.vocab.vocab_logging import setup_vocab_logging, get_vocab_logger
+from x_spanformer.embedding.embedding_logging import setup_embedding_logging, get_embedding_logger
 
 # Module-level logger that gets configured in main()
 logger = None
@@ -45,8 +59,93 @@ def get_logger() -> logging.Logger:
     """Get the module logger, creating a basic one if none exists."""
     global logger
     if logger is None:
-        logger = get_vocab_logger('vocab2embedding')
+        logger = get_embedding_logger('vocab2embedding')
     return logger
+
+
+def load_corpus(corpus_path: str) -> List[str]:
+    """
+    Load sequences from a JSONL file using PretrainRecord format.
+    
+    This function mirrors the load_corpus() pattern from jsonl2vocab.py
+    and handles only the PretrainRecord format with 'raw' field extraction.
+    
+    Args:
+        corpus_path: Path to the JSONL corpus file with PretrainRecord format
+        
+    Returns:
+        List of text sequences extracted from the corpus
+        
+    Raises:
+        FileNotFoundError: If the corpus file doesn't exist
+        ValueError: If no valid sequences are found
+    """
+    logger = get_logger()
+    logger.info("=" * 50)
+    logger.info("STAGE 1: CORPUS LOADING")
+    logger.info("=" * 50)
+    
+    sequences = []
+    total_records = 0
+    valid_records = 0
+    invalid_records = 0
+    discarded_records = 0
+    
+    with open(corpus_path, 'r', encoding='utf-8') as f:
+        for line_num, line in enumerate(f, 1):
+            try:
+                total_records += 1
+                record = json.loads(line)
+                
+                # Only support PretrainRecord format with 'raw' field
+                if isinstance(record, dict) and 'raw' in record:
+                    sequence = record['raw']
+                    
+                    # Skip discarded sequences
+                    if 'meta' in record and record['meta'].get('status') == 'discard':
+                        logger.debug(f"Line {line_num}: Skipping discarded sequence")
+                        discarded_records += 1
+                        continue
+                    
+                    if sequence and sequence.strip():
+                        sequences.append(sequence.strip())
+                        valid_records += 1
+                    else:
+                        logger.warning(f"Line {line_num}: Empty 'raw' field")
+                        invalid_records += 1
+                else:
+                    logger.warning(f"Line {line_num}: Record missing 'raw' field - only PretrainRecord format supported")
+                    invalid_records += 1
+                    
+            except json.JSONDecodeError as e:
+                logger.warning(f"Line {line_num}: Invalid JSON - {e}")
+                invalid_records += 1
+            except Exception as e:
+                logger.error(f"Line {line_num}: Unexpected error - {e}")
+                invalid_records += 1
+    
+    # Calculate corpus statistics
+    total_chars = sum(len(seq) for seq in sequences)
+    avg_sequence_length = total_chars / len(sequences) if sequences else 0
+    
+    logger.info("-" * 50)
+    logger.info("CORPUS LOADING SUMMARY:")
+    logger.info(f"  Total input records: {total_records}")
+    logger.info(f"  Valid sequences: {valid_records}")
+    logger.info(f"  Discarded sequences: {discarded_records}")
+    logger.info(f"  Invalid records: {invalid_records}")
+    if total_records > 0:
+        logger.info(f"  Success rate: {valid_records/total_records*100:.1f}%")
+    else:
+        logger.info(f"  Success rate: N/A (no records)")
+    logger.info(f"  Total characters: {total_chars:,}")
+    logger.info(f"  Average sequence length: {avg_sequence_length:.1f} chars")
+    logger.info("-" * 50)
+    
+    if not sequences:
+        raise ValueError(f"No valid sequences found in corpus file: {corpus_path}")
+    
+    return sequences
 
 
 class UnigramLM(nn.Module):
@@ -435,9 +534,9 @@ class Vocab2EmbeddingPipeline:
         with open(vocab_path, 'r', encoding='utf-8') as f:
             for line in f:
                 entry = json.loads(line)
-                if 'piece' in entry and 'probability' in entry:
-                    # Ensure probability is a float
-                    prob = entry['probability']
+                if 'piece' in entry and ('probability' in entry or 'prob' in entry):
+                    # Support both 'probability' and 'prob' field names
+                    prob = entry.get('probability', entry.get('prob'))
                     if isinstance(prob, str):
                         prob = float(prob)
                     vocab_dict[entry['piece']] = prob
@@ -510,7 +609,7 @@ def parse_args():
         "--input",
         type=str, 
         required=True,
-        help="Path to input JSONL file with sequences to process"
+        help="Path to input dataset.jsonl file with PretrainRecord format (contains 'raw' field)"
     )
     
     parser.add_argument(
@@ -555,13 +654,14 @@ def main():
     """Main pipeline execution."""
     args = parse_args()
     
-    # Setup logging  
-    from pathlib import Path
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
-    setup_vocab_logging(log_dir, 'vocab2embedding')
+    # Create output directory
+    output_path = Path(args.output)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Setup logging in the output directory
+    setup_embedding_logging(output_path, 'vocab2embedding')
     global logger
-    logger = get_vocab_logger('vocab2embedding')
+    logger = get_embedding_logger('vocab2embedding')
     
     logger.info("Starting vocab2embedding pipeline")
     logger.info(f"Vocabulary: {args.vocab}")
@@ -569,30 +669,36 @@ def main():
     logger.info(f"Output: {args.output}")
     logger.info(f"Device: {args.device}")
     
-    # Create output directory
-    output_path = Path(args.output)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
     # Initialize pipeline
     pipeline = Vocab2EmbeddingPipeline(args.config, args.device)
     pipeline.load_vocabulary(args.vocab)
     
-    # Process sequences
+    # Process sequences from file
     processed_count = 0
     start_time = time.time()
+
+    logger.info(f"Processing sequences from: {args.input}")
     
     with open(args.input, 'r', encoding='utf-8') as infile:
         for line_num, line in enumerate(infile, 1):
             try:
                 record = json.loads(line)
                 
-                # Extract sequence text
-                if isinstance(record, dict) and 'content' in record:
-                    sequence = record['content']
-                elif isinstance(record, str):
-                    sequence = record  
+                # Extract sequence using PretrainRecord format only
+                sequence = None
+                if isinstance(record, dict) and 'raw' in record:
+                    sequence = record['raw']
+                    # Skip discarded sequences
+                    if 'meta' in record and record['meta'].get('status') == 'discard':
+                        logger.debug(f"Line {line_num}: Skipping discarded sequence")
+                        continue
                 else:
-                    logger.warning(f"Line {line_num}: Unknown record format")
+                    logger.warning(f"Line {line_num}: Record missing 'raw' field - only PretrainRecord format supported")
+                    continue
+
+                # Validate sequence
+                if not sequence or not sequence.strip():
+                    logger.warning(f"Line {line_num}: Empty sequence")
                     continue
                 
                 # Skip sequences that are too long

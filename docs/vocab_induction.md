@@ -203,13 +203,13 @@ The vocabulary induction pipeline connects to the broader X-Spanformer architect
 ```bash
 # 1. Prepare JSONL corpus from PDFs
 uv run -m x_spanformer.pipelines.pdf2jsonl \
-  -i papers/ \
+  -i data/pretraining/in \
   -o data/pretraining/out \
   --name academic_papers
 
 # 2. Induce vocabulary from corpus  
 uv run -m x_spanformer.pipelines.jsonl2vocab \
-  -i data/pretraining/out \
+  -i data/vocab/in \
   -o data/vocab/out \
   -c config/pipelines/jsonl2vocab.yaml
 
@@ -217,8 +217,15 @@ uv run -m x_spanformer.pipelines.jsonl2vocab \
 cat data/vocab/out/vocab_stats.json
 head -20 data/vocab/out/vocab.jsonl
 
-# 4. Use vocabulary for span training (future phase)
-# x-spanformer train --vocab data/vocab/out/vocab.jsonl --spans ...
+# 4. Use vocabulary for span training (Section 3.2+)
+# python -m x_spanformer.pipelines.vocab2embedding --vocab data/vocab/out/vocab.jsonl ...
+```
+
+**Vocabulary Induction Output:**
+- ✅ **High-quality vocabulary**: Statistical and compositional pieces learned from data
+- ✅ **Comprehensive statistics**: Detailed metrics for analysis and tuning
+- ✅ **Transparent artifacts**: Multi-stage outputs for debugging and research
+- ✅ **Ready for Section 3.2**: Compatible with seed embedding pipeline
 ```
 
 ---
