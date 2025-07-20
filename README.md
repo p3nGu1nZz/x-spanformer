@@ -77,6 +77,26 @@ This implements the mathematical formulation from Section 3.1 of our paper (Algo
 - **Schema-validated vocabulary pieces** using `VocabPiece` and `VocabStats` models
 - **Multi-stage artifact generation** for transparency and debugging
 
+### Stage 3: Seed Embeddings & Span Generation
+
+Transform vocabulary into contextualized embeddings and span candidates using Section 3.2 algorithms:
+
+```bash
+# Generate embeddings from vocabulary and text sequences
+uv run -m x_spanformer.pipelines.vocab2embedding \
+  --vocab data/vocab/out/vocab.jsonl \
+  --input data/sequences.jsonl \
+  --output data/embeddings/ \
+  --device cuda
+```
+
+This implements the unified algorithm from Section 3.2, featuring:
+
+- **Forward-backward soft probability computation** adapted from HMMs for variable-length pieces
+- **Vocabulary-aware Xavier initialization** with probability-adjusted embedding variance
+- **Multi-scale dilated convolutions** for contextual encoding (kernels [3,5,7], dilations [1,2,4])
+- **Vocabulary-informed span filtering** using alignment, compositional potential, and whitespace coherence
+
 The pipeline outputs both `vocab.jsonl` (final vocabulary with probabilities) and `vocab_stats.json` (comprehensive training statistics), enabling detailed analysis of the vocabulary induction process.
 
 Use the output as either raw training strings (for unsupervised Phase I) or compile with `oxbar` to produce labeled span records.
@@ -85,14 +105,81 @@ This enables X-Spanformer to bootstrap span boundaries from real-world documents
 
 ---
 
-## 🧰 Repository Structure
+## � Testing Framework
+
+X-Spanformer includes comprehensive test coverage organized into focused categories for maintainability and clear separation of concerns.
+
+### Test Organization
+
+- **`tests/pipelines/`** - Data processing pipeline tests
+  - `test_pipelines_pdf2jsonl.py` - PDF→JSONL conversion with AI judging
+  - `test_pipelines_jsonl2vocab.py` - Vocabulary induction (Section 3.1)
+  - `test_pipelines_vocab2embedding.py` - Seed embeddings & span generation (Section 3.2)
+  - `test_integration_vocab2embedding.py` - End-to-end integration validation
+
+- **`tests/embedding/`** - Embedding analysis utilities (Section 3.2)
+  - `test_pipeline.py` - Complete vocab2embedding pipeline validation
+
+- **`tests/schema/`** - Pydantic schema validation
+  - `test_schema.py` - Basic schema validation
+  - `test_schema_comprehensive.py` - Comprehensive schema tests  
+  - `test_schema_vocab.py` - Vocabulary schema validation
+
+- **`tests/agents/`** - AI agent and content processing
+  - `test_agents.py` - Base agent functionality
+  - `test_comprehensive_judge.py` - Content judging tests
+  - `test_e2e_ollama_client.py` - Ollama client integration
+
+- **`tests/core/`** - Core utilities and configuration
+  - `test_config_loader.py` - Configuration loading
+  - `test_error_handling.py` - Error handling validation
+  - `test_rich_utils.py` - Console output utilities
+  - `test_vocab_*.py` - Vocabulary processing utilities
+
+### Running Tests
+
+```bash
+# Run all tests
+python -m pytest tests/
+
+# Run specific test categories  
+python -m pytest tests/embedding/      # Embedding tests (Section 3.2)
+python -m pytest tests/pipelines/     # Pipeline tests (Sections 3.1, 3.2)
+python -m pytest tests/schema/        # Schema validation tests
+
+# Run with verbose output and coverage
+python -m pytest tests/ -v --cov=x_spanformer
+
+# Test specific pipeline components
+python -m pytest tests/embedding/test_pipeline.py -v
+python -m pytest tests/pipelines/test_pipelines_vocab2embedding.py -v
+```
+
+### Test Features
+
+- **Mathematical Correctness** - Validates Section 3.1/3.2 algorithms (EM convergence, forward-backward consistency, Xavier initialization)
+- **Integration Testing** - End-to-end pipeline validation with synthetic and real data
+- **Schema Validation** - Pydantic model testing with edge cases and comprehensive coverage
+- **Synthetic Data Generation** - Automated test data creation for consistent, reproducible testing
+- **Modular Architecture** - Organized by functionality for easy navigation and maintenance
+
+---
+
+## �🧰 Repository Structure
 
 ```
 x-spanformer/
 ├── x_spanformer/
 │   ├── pipelines/        # Data processing pipelines
 │   │   ├── pdf2jsonl.py  # PDF → JSONL conversion with AI judging
-│   │   └── jsonl2vocab.py # Hybrid Unigram-LM vocabulary induction
+│   │   ├── jsonl2vocab.py # Hybrid Unigram-LM vocabulary induction
+│   │   └── vocab2embedding.py # Section 3.2: Seed embeddings & span generation
+│   ├── embedding/        # Embedding analysis & utilities (Section 3.2)
+│   │   ├── embedding_utils.py # Loading, analysis, quality metrics
+│   │   ├── span_analysis.py   # Span patterns, hierarchy, coverage
+│   │   ├── embedding_viz.py   # Visualization tools (optional deps)
+│   │   ├── analyze_results.py # CLI analysis workflows
+│   │   └── test_pipeline.py   # Pipeline validation
 │   ├── schema/           # Pydantic data models and validation
 │   │   ├── pretrain_record.py # Training data schema
 │   │   ├── vocab.py      # Vocabulary piece and statistics schemas
@@ -106,8 +193,16 @@ x-spanformer/
 │   ├── pretraining/      # Raw segments from PDF processing
 │   └── vocab/            # Vocabulary induction outputs
 ├── docs/                 # Documentation and paper materials
+│   ├── vocab_induction.md    # Section 3.1 documentation
+│   ├── seed_embeddings.md    # Section 3.2 documentation  
+│   ├── pretraining_schema.md # Data format specifications
 │   └── paper/            # LaTeX source and compiled paper
 ├── tests/                # Unit tests and integration tests
+│   ├── pipelines/        # Pipeline-specific tests (PDF→JSONL, vocab induction, embeddings)
+│   ├── embedding/        # Embedding module tests (Section 3.2 validation)
+│   ├── schema/           # Pydantic schema validation tests
+│   ├── agents/           # AI agent and content judging tests
+│   └── core/             # Core utilities and configuration tests
 └── examples/             # Sample data and usage examples
 ```
 
@@ -119,6 +214,7 @@ x-spanformer/
 
 - **`pdf2jsonl.py`** — Convert PDFs to validated JSONL segments with AI content judging
 - **`jsonl2vocab.py`** — Induce hybrid Unigram-LM vocabulary using EM + Viterbi with adaptive pruning
+- **`vocab2embedding.py`** — Generate seed embeddings and span candidates (Section 3.2: forward-backward algorithm, vocabulary-aware Xavier initialization, multi-scale contextualization)
 
 ### Validation & Analysis
 
@@ -130,6 +226,86 @@ x-spanformer/
 
 - **YAML-based configs** — Hyperparameter tuning for vocabulary induction and content judging
 - **Modular architecture** — Easy to extend with new processing stages and validation rules  
+
+---
+
+## 🌱 Embedding Module
+
+The embedding module provides comprehensive utilities for working with **vocab2embedding pipeline** (Section 3.2) outputs, enabling analysis, visualization, and debugging of vocabulary-to-embedding transformations.
+
+### Module Structure
+
+- **`embedding_utils.py`** — Core utilities for loading and analyzing embeddings
+- **`span_analysis.py`** — Advanced span pattern analysis with hierarchy detection  
+- **`embedding_viz.py`** — Rich visualization tools (requires matplotlib/seaborn)
+- **`analyze_results.py`** — Command-line analysis workflows
+- **`test_pipeline.py`** — Comprehensive pipeline validation
+
+### Quick Start
+
+```python
+from x_spanformer.embedding import (
+    load_embedding_results,
+    analyze_embedding_quality,
+    SpanAnalyzer
+)
+
+# Load vocab2embedding results
+result = load_embedding_results("data/embeddings", sequence_id=1)
+
+# Analyze embedding quality
+quality = analyze_embedding_quality(result['contextual_embeddings'])
+print(f"Mean norm: {quality['mean_embedding_norm']:.3f}")
+
+# Analyze span coverage patterns  
+sequence = result['metadata']['sequence']
+candidates = result['metadata']['span_candidates']
+analyzer = SpanAnalyzer(sequence, candidates)
+
+coverage = analyzer.compute_coverage_statistics()
+print(f"Coverage: {coverage['coverage_density']:.1%}")
+```
+
+### Command-Line Analysis
+
+```bash
+# Analyze specific sequence
+python -m x_spanformer.embedding.analyze_results data/embeddings/ --sequence-id 1
+
+# Batch analysis across sequences
+python -m x_spanformer.embedding.analyze_results data/embeddings/ --batch --max-sequences 10
+
+# Export embeddings to numpy
+python -m x_spanformer.embedding.analyze_results data/embeddings/ --export contextual
+```
+
+### Pipeline Testing
+
+```bash
+# Test complete pipeline with synthetic data
+python x_spanformer/embedding/test_pipeline.py
+```
+
+**Expected Output:**
+```
+🧪 Testing vocab2embedding pipeline
+✅ Pipeline initialized successfully  
+✅ Processed sequence: 'the quick brown fox'
+  Number of candidates: 112
+✅ Embedding quality analysis: Mean norm: 16.816
+✅ Span coverage analysis: Coverage density: 100.0%
+🎉 All tests passed successfully!
+```
+
+### Key Features
+
+- **Quality Assessment** — Embedding norms, variance ratios, similarity analysis
+- **Span Pattern Analysis** — Hierarchy detection, coverage gaps, overlap patterns  
+- **Visualization Suite** — Heatmaps, PCA plots, span coverage maps (optional)
+- **Batch Processing** — Aggregate statistics across multiple sequences
+- **Export Capabilities** — Numpy format, JSON metadata, comprehensive reporting
+
+This module bridges Section 3.2 outputs with downstream X-Spanformer components, providing essential debugging and analysis capabilities for span-aware embedding research.
 
 ---
 

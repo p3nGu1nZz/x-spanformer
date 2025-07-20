@@ -1,36 +1,335 @@
 \subsection{Seed Embeddings and Candidate Set}
 \label{sec:seed-embeddings}
 
-The X-Spanformer pipeline begins with a sequence of \(T\) raw Unicode codepoints. We apply our custom Unigram‐LM operator (Sec.~\ref{sec:vocab-induction}), implemented as an ONNX custom op, to compute soft piece probabilities over the induced vocabulary \(V\):
-\[
-P \;\in\;\mathbb{R}^{T\times V},
-\quad
-P_{t,i} = \Pr\bigl(\text{piece }u_i\text{ starts at position }t\bigr).
-\]
-The vocabulary \(V\) comprises all single codepoints plus the final entropy‐ and perplexity‐pruned subword fragments.
+The X-Spanformer pipeline begins with a sequence \(x = [x_1, x_2, \ldots, x_T]\) of \(T\) raw Unicode codepoints. Given the induced vocabulary \(V = \{u_1, u_2, \ldots, u_{|V|}\}\) from Section~\ref{sec:vocab-induction}, we compute position-wise soft piece probabilities and transform them into contextual embeddings that serve as input to the span predictor.
 
-These probabilities are embedded via a single matrix multiplication:
-\[
-H^0 = P\,W_{\mathrm{emb}},
-\quad
-W_{\mathrm{emb}}\in\mathbb{R}^{V\times d},
-\]
-yielding initial seed embeddings \(H^0\in\mathbb{R}^{T\times d}\) for each input position.
+\subsubsection{Soft Piece Probability Computation}
+\label{sec:soft-piece-probs}
 
-\subsubsection{Contextual Encoder: Convolutional Pathway}
+We extend the Viterbi decoding from vocabulary induction to compute soft probabilities indicating where each vocabulary piece is likely to start within the input sequence. For position \(t \in \{1, 2, \ldots, T\}\) and piece \(u_i \in V\), we define:
+\begin{equation}
+P_{t,i} = \Pr\bigl(\text{piece }u_i\text{ starts at position }t \mid x, V\bigr),
+\label{eq:soft-piece-probability}
+\end{equation}
+forming the probability matrix \(P \in \mathbb{R}^{T \times |V|}\).
 
-To enrich these seed embeddings with contextual structure, we apply a lightweight convolutional encoder\footnote{We use dilated 1D convolutions with kernel sizes [3, 5, 7] and dilation rates [1, 2, 4] to capture multi-scale local patterns without quadratic complexity.} to produce the final representation \(H\in\mathbb{R}^{T\times d}\):
-\[
-H = \mathrm{ConvNet}(H^0),\quad \text{cost }O(T d^2).
-\]
-This encoder employs stacked or dilated 1D convolutions \cite{tay2021charformer}, providing fixed-window receptive fields that are tuned to capture short-range compositional patterns. By avoiding the quadratic complexity of self-attention, the convolutional encoder ensures scalability across long codepoint sequences and maintains a runtime that is linear in the input length.
+\paragraph{Forward-Backward Algorithm for Soft Probabilities}
 
-The design choice to adopt convolutional contextualization reflects the architectural goal of high-throughput segmentation in real-time or resource-constrained settings. While transformer-based encoders offer richer modeling of long-distance dependencies \cite{vaswani2017attention}, their runtime limits applicability for streaming inputs or modular deployments. In contrast, convolutional filters preserve local positional regularities critical for span induction—such as those arising in identifiers, literals, or markup—and enable reproducible, interpretable segmentation across diverse modalities. Empirical evidence on synthetic benchmarks further suggests that this encoder achieves robust span localization without sacrificing structural fidelity \cite{rawson2025streammix}.
+To compute these probabilities efficiently, we adapt the forward-backward algorithm from HMMs to the Unigram-LM segmentation problem. Let \(\alpha_t\) denote the forward probability of reaching position \(t\), and \(\beta_t\) the backward probability from position \(t\) to the sequence end.
 
-\subsubsection{Span Candidate Enumeration}
+\textbf{Forward Pass:} Initialize \(\alpha_1 = 1\) and compute recursively:
+\begin{equation}
+\alpha_{t+1} = \sum_{u_i \in V : \text{match}(x, t, u_i)} \alpha_t \cdot p(u_i),
+\label{eq:forward-pass}
+\end{equation}
+where \(\text{match}(x, t, u_i)\) indicates whether piece \(u_i\) matches the substring starting at position \(t\).
 
-Given the contextualized sequence \(H\), we enumerate all contiguous span candidates:
-\[
-C = \{(i,j)\mid 1 \le i < j \le T,\quad j - i + 1 \le w_{\max}\}.
-\]
-This restricts span width to \(w_{\max}\), reducing total candidates from quadratic to linear scale: \(|C| = O(T\,w_{\max})\). Each span \((i,j)\) corresponds to the subsequence \([h_i,\dots,h_j]\), which is passed to the boundary scorer and length filter in subsequent modules. The candidate set remains compatible with global-attention filtering and sparse attention schemes \cite{joshi2020spanbert,tay2021charformer}, ensuring scalability and modularity in downstream processing.
+\textbf{Backward Pass:} Initialize \(\beta_{T+1} = 1\) and compute recursively:
+\begin{equation}
+\beta_t = \sum_{u_i \in V : \text{match}(x, t, u_i)} p(u_i) \cdot \beta_{t + |u_i|},
+\label{eq:backward-pass}
+\end{equation}
+where \(|u_i|\) denotes the length of piece \(u_i\) in codepoints.
+
+\textbf{Soft Probability Calculation:} The soft probability for piece \(u_i\) starting at position \(t\) is:
+\begin{equation}
+P_{t,i} = \frac{\alpha_t \cdot p(u_i) \cdot \beta_{t + |u_i|}}{\alpha_{T+1}},
+\quad \text{if } \text{match}(x, t, u_i), \text{ else } 0.
+\label{eq:soft-probability}
+\end{equation}
+
+This formulation ensures that \(\sum_{i=1}^{|V|} P_{t,i} \leq 1\) for all positions \(t\), with equality when every position is covered by at least one piece.
+
+\subsubsection{Embedding Matrix Initialization and Seed Computation}
+\label{sec:seed-embeddings-computation}
+
+The embedding matrix \(W_{\mathrm{emb}} \in \mathbb{R}^{|V| \times d}\) projects vocabulary pieces into a dense \(d\)-dimensional representation space. Each row \(W_{\mathrm{emb}}[i, :]\) corresponds to the embedding vector for piece \(u_i \in V\).
+
+\paragraph{Initialization Strategy}
+
+We initialize \(W_{\mathrm{emb}}\) using vocabulary-aware strategies that leverage the statistical properties from Section~\ref{sec:vocab-induction}:
+
+\begin{align}
+W_{\mathrm{emb}}[i, :] &\sim \mathcal{N}\left(0, \frac{\sigma^2}{\sqrt{p(u_i)}}\right) \\
+&\quad \text{(frequency-scaled Gaussian)} \label{eq:freq-scaled-init} \\
+\text{where } \sigma^2 &= \frac{2}{d + |V|} \quad \text{(Xavier-style scaling)} \label{eq:xavier-scaling}
+\end{align}
+
+This initialization gives more stable gradients to frequent pieces (higher \(p(u_i)\)) while maintaining overall variance control. 
+
+Single codepoints, which have guaranteed non-zero probability, receive standard Xavier initialization.
+
+\paragraph{Seed Embedding Computation}
+
+The initial seed embeddings are computed via matrix multiplication:
+\begin{equation}
+H^0 = P \cdot W_{\mathrm{emb}} \in \mathbb{R}^{T \times d},
+\label{eq:seed-embeddings}
+\end{equation}
+where each row \(H^0[t, :]\) represents the weighted combination of piece embeddings that are likely to start at position \(t\). 
+
+This soft aggregation preserves uncertainty from the probabilistic segmentation while providing a dense representation for downstream processing.
+
+\subsubsection{Contextual Encoder: Multi-Scale Dilated Convolutions}
+\label{sec:contextual-encoder}
+
+To enrich the seed embeddings with local contextual information, we apply a multi-scale dilated convolutional encoder that captures compositional patterns across different length scales. The encoder transforms \(H^0 \in \mathbb{R}^{T \times d}\) into contextualized representations \(H \in \mathbb{R}^{T \times d}\):
+\begin{equation}
+H = \mathrm{ConvEncoder}(H^0),\quad \text{computational cost } O(T d^2).
+\label{eq:conv-encoder}
+\end{equation}
+
+\paragraph{Multi-Scale Architecture}
+
+The encoder employs three parallel convolutional pathways with different kernel sizes \(K = \{3, 5, 7\}\) and dilation rates \(D = \{1, 2, 4\}\), creating a total of \(|K| \times |D| = 9\) distinct receptive field patterns. For kernel size \(k \in K\) and dilation \(d \in D\), the effective receptive field spans:
+\begin{equation}
+\text{RF}_{k,d} = 1 + (k-1) \cdot d \quad \text{positions},
+\label{eq:receptive-field}
+\end{equation}
+yielding receptive fields from 3~positions (k=3, d=1) to 25~positions (k=7, d=4).
+
+\paragraph{Dilated Convolution Formulation}
+
+For a single pathway with kernel size \(k\) and dilation \(d\), the convolution at position \(t\) with input \(H^{(\ell)} \in \mathbb{R}^{T \times d_{\ell}}\) and weight tensor \(W^{(k,d)} \in \mathbb{R}^{k \times d_{\ell} \times d_{\ell+1}}\) is:
+\begin{equation}
+H^{(\ell+1)}[t, :] = \sum_{j=0}^{k-1} W^{(k,d)}[j, :, :] \cdot H^{(\ell)}[t - j \cdot d, :] + b^{(k,d)},
+\label{eq:dilated-conv}
+\end{equation}
+where boundary conditions apply zero-padding for out-of-bounds indices.
+
+\paragraph{Pathway Fusion and Residual Connections}
+
+The outputs from all \(|K| \times |D|\) pathways are concatenated and projected back to dimension \(d\):
+\begin{align}
+H^{(\text{concat})} &= \text{Concat}\left(\left\{H^{(k,d)}\right\}_{k \in K, d \in D}\right) \nonumber \\
+&\quad \in \mathbb{R}^{T \times (|K| \cdot |D| \cdot d)} \\
+H^{(\text{proj})} &= H^{(\text{concat})} \cdot W_{\text{proj}} + b_{\text{proj}} \in \mathbb{R}^{T \times d} \\
+H &= \text{LayerNorm}(H^0 + H^{(\text{proj})}) \quad \text{(residual connection)}
+\label{eq:pathway-fusion}
+\end{align}
+
+This residual design ensures that the encoder preserves the original seed embedding information while adding contextual refinements.
+
+\begin{proposition}[Computational Complexity]
+	The multi-scale dilated convolutional encoder has computational complexity \(O(T d^2 \cdot |K| \cdot |D|)\) and memory complexity \(O(T d)\) for a sequence of length \(T\).
+\end{proposition}
+
+\begin{proof}
+	For each of the \(|K| \cdot |D|\) pathways, the dilated convolution operation requires \(O(T \cdot k \cdot d^2)\) operations, where \(k\) is the kernel size. 
+	
+	Summing over all pathways:
+	\begin{align}
+	\sum_{k \in K, d \in D} O(T \cdot k \cdot d^2) &= O\left(T d^2 \sum_{k \in K} k \cdot |D|\right) \nonumber \\
+	&= O(T d^2 \cdot |K| \cdot |D|)
+	\label{eq:conv-complexity}
+	\end{align}
+	since \(\sum_{k \in K} k = O(|K|)\) for fixed kernel sizes.
+	
+	The concatenation and projection steps add \(O(T \cdot |K| \cdot |D| \cdot d^2)\) operations, which is dominated by the convolution cost.
+	
+	Memory complexity is \(O(T d)\) since intermediate activations are computed sequentially and the final output has the same dimensions as the input.
+\end{proof}
+
+\paragraph{Architectural Rationale}
+
+This convolutional design choice reflects several architectural priorities:
+
+\begin{itemize}
+	\item \textbf{Linear Scaling:} Unlike quadratic self-attention, convolution scales linearly with sequence length, enabling processing of long documents and code files.
+	\item \textbf{Local Compositionality:} Multi-scale kernels capture hierarchical patterns relevant to span boundaries, from character clusters to word-level units.
+	\item \textbf{Positional Inductive Bias:} Convolutions preserve spatial relationships critical for segmentation tasks, maintaining awareness of relative positions within spans.
+	\item \textbf{Interpretability:} Individual pathways can be analyzed to understand which length scales contribute most to span predictions.
+\end{itemize}
+
+\subsubsection{Span Candidate Enumeration and Filtering}
+\label{sec:span-candidates}
+
+Given the contextualized sequence \(H \in \mathbb{R}^{T \times d}\), we enumerate contiguous span candidates that serve as input to the boundary prediction module. The candidate generation process balances completeness with computational efficiency through width-based filtering and structural constraints.
+
+\paragraph{Basic Candidate Generation}
+
+We define the initial candidate set as all contiguous subsequences within the maximum span width:
+\begin{equation}
+C_{\text{raw}} = \{(i,j) \mid 1 \leq i < j \leq T, \; j - i + 1 \leq w_{\max}\},
+\label{eq:raw-candidates}
+\end{equation}
+where \(w_{\max}\) is the maximum allowed span width in codepoints. This constraint reduces the candidate space from quadratic \(O(T^2)\) to linear \(O(T \cdot w_{\max})\).
+
+\paragraph{Vocabulary-Informed Filtering}
+
+To focus computation on linguistically plausible spans, we apply additional filtering based on the induced vocabulary structure. A span \((i,j)\) is retained if it satisfies at least one of the following criteria:
+
+\begin{enumerate}
+	\item \textbf{Vocabulary Alignment:} The span corresponds to a high-probability piece:
+	\begin{equation}
+	\exists \, u_k \in V : \text{span}(x, i, j) = u_k \wedge p(u_k) \geq \tau_{\text{vocab}}
+	\label{eq:vocab-alignment}
+	\end{equation}
+	
+	\item \textbf{Compositional Potential:} The span can be segmented into multiple vocabulary pieces:
+	\begin{equation}
+	\exists \, \text{seg} \in \text{Segments}(x, i, j) : \prod_{u \in \text{seg}} p(u) \geq \tau_{\text{comp}}
+	\label{eq:compositional-potential}
+	\end{equation}
+	
+	\item \textbf{Boundary Coherence:} The span respects whitespace separation constraints from Section~\ref{sec:whitespace-tokenization}:
+	\begin{equation}
+	\text{WhitespaceCoherent}(\text{span}(x, i, j)) = \text{True}
+	\label{eq:boundary-coherence}
+	\end{equation}
+\end{enumerate}
+
+The filtered candidate set becomes:
+\begin{equation}
+C = \{(i,j) \in C_{\text{raw}} \mid \text{satisfies at least one criterion above}\}.
+\label{eq:filtered-candidates}
+\end{equation}
+
+\paragraph{Efficient Candidate Storage}
+
+For implementation efficiency, candidates are stored as a sparse tensor \(\mathcal{C} \in \{0,1\}^{T \times T}\) where \(\mathcal{C}[i,j] = 1\) if \((i,j) \in C\) and 0 otherwise. This representation enables:
+
+\begin{itemize}
+	\item \textbf{Batch Processing:} Multiple sequences can share the same indexing structure
+	\item \textbf{Memory Efficiency:} Only valid spans consume storage via sparse tensor operations
+	\item \textbf{GPU Acceleration:} Parallel span evaluation using tensor broadcasting
+\end{itemize}
+
+\begin{algorithm}[H]
+	\caption{Span Candidate Enumeration}
+	\label{alg:span-candidates}
+	\begin{algorithmic}[1]
+		\STATE \textbf{Input:} Sequence length \(T\), vocabulary \(V\), probabilities \(\{p(u)\}\), 
+		\STATE \qquad thresholds \(\tau_{\text{vocab}}, \tau_{\text{comp}}\)
+		\STATE Initialize sparse tensor \(\mathcal{C} \in \{0,1\}^{T \times T}\) with zeros
+		\FOR{\(i = 1\) to \(T-1\)}
+		\FOR{\(j = i+1\) to \(\min(i + w_{\max}, T)\)}
+		\STATE \(s \leftarrow \text{span}(x, i, j)\) \COMMENT{Extract span text}
+		\IF{VocabularyAlignment\((s, V, \tau_{\text{vocab}})\)}
+		\STATE \(\mathcal{C}[i,j] \leftarrow 1\)
+		\ELSIF{CompositionalPotential\((s, V, \tau_{\text{comp}})\)}
+		\STATE \(\mathcal{C}[i,j] \leftarrow 1\)
+		\ELSIF{WhitespaceCoherent\((s)\)}
+		\STATE \(\mathcal{C}[i,j] \leftarrow 1\)
+		\ENDIF
+		\ENDFOR
+		\ENDFOR
+		\STATE \textbf{Return:} Candidate tensor \(\mathcal{C}\)
+	\end{algorithmic}
+\end{algorithm}
+
+\begin{proposition}[Candidate Set Completeness]
+	For any vocabulary \(V\) containing all single codepoints, the filtered candidate set \(C\) contains all spans that can be perfectly segmented under \(V\).
+\end{proposition}
+
+\begin{proof}
+	Let \((i,j)\) be any span such that \(\text{span}(x, i, j)\) can be perfectly segmented using pieces from \(V\). We consider two cases:
+	
+	\textbf{Case 1:} The entire span corresponds to a single piece \(u \in V\). Then by vocabulary alignment criterion (1), \((i,j) \in C\) whenever \(p(u) \geq \tau_{\text{vocab}}\).
+	
+	\textbf{Case 2:} The span requires multiple pieces. Let \(\text{seg} = [u_1, u_2, \ldots, u_k]\) be the optimal segmentation. Since each \(u_i \in V\) has non-zero probability from the EM training in Section~\ref{sec:vocab-induction}, we have \(\prod_{i=1}^k p(u_i) > 0\). For sufficiently small \(\tau_{\text{comp}}\), this satisfies criterion (2), so \((i,j) \in C\).
+	
+	\textbf{Boundary Case:} If the span violates whitespace coherence but satisfies segmentation criteria, it may still be included via criteria (1) or (2), ensuring no valid linguistic spans are excluded.
+\end{proof}
+
+This candidate enumeration provides the foundation for downstream span boundary prediction while maintaining computational tractability through principled filtering based on the statistical properties learned during vocabulary induction.
+
+\subsubsection{Pipeline Integration and Algorithm Synthesis}
+\label{sec:pipeline-integration}
+
+The complete seed embedding and candidate generation pipeline integrates the vocabulary induction from Section~\ref{sec:vocab-induction} with the contextual encoding and candidate filtering described above. This section presents the unified algorithm and establishes computational guarantees.
+
+\paragraph{End-to-End Pipeline}
+
+Given raw codepoint sequence \(x = [x_1, \ldots, x_T]\) and induced vocabulary \(V\) with probabilities \(\{p(u)\}_{u \in V}\), the complete pipeline produces:
+
+\begin{enumerate}
+	\item \textbf{Soft probabilities} \(P \in \mathbb{R}^{T \times |V|}\) via forward-backward algorithm
+	\item \textbf{Seed embeddings} \(H^0 = P \cdot W_{\mathrm{emb}} \in \mathbb{R}^{T \times d}\)  
+	\item \textbf{Contextual embeddings} \(H = \text{ConvEncoder}(H^0) \in \mathbb{R}^{T \times d}\)
+	\item \textbf{Span candidates} \(C = \{(i,j)\}\) with vocabulary-informed filtering
+\end{enumerate}
+
+\begin{algorithm}[H]
+	\caption{Unified Seed Embedding and Candidate Generation}
+	\label{alg:seed-embedding-pipeline}
+	\begin{algorithmic}[1]
+		\STATE \textbf{Input:} Codepoint sequence \(x \in \mathbb{Z}^T\), vocabulary \(V\), 
+		\STATE \qquad piece probabilities \(\{p(u)\}\)
+		\STATE \textbf{Parameters:} Embedding matrix \(W_{\mathrm{emb}} \in \mathbb{R}^{|V| \times d}\), 
+		\STATE \qquad conv weights, span width \(w_{\max}\)
+		\STATE
+		\STATE \textbf{// Step 1: Soft Probability Computation}
+		\STATE Initialize forward probabilities: \(\alpha_1 \leftarrow 1\), 
+		\STATE \qquad \(\alpha_t \leftarrow 0\) for \(t > 1\)
+		\FOR{\(t = 1\) to \(T\)}
+		\FOR{each piece \(u_i \in V\) where \(\text{match}(x, t, u_i)\)}
+		\STATE \(\alpha_{t + |u_i|} \leftarrow \alpha_{t + |u_i|} + \alpha_t \cdot p(u_i)\)
+		\ENDFOR
+		\ENDFOR
+		\STATE
+		\STATE Initialize backward probabilities: \(\beta_{T+1} \leftarrow 1\), 
+		\STATE \qquad \(\beta_t \leftarrow 0\) for \(t \leq T\)
+		\FOR{\(t = T\) down to \(1\)}
+		\FOR{each piece \(u_i \in V\) where \(\text{match}(x, t, u_i)\)}
+		\STATE \(\beta_t \leftarrow \beta_t + p(u_i) \cdot \beta_{t + |u_i|}\)
+		\ENDFOR
+		\ENDFOR
+		\STATE
+		\STATE \textbf{// Step 2: Construct Probability Matrix}
+		\FOR{\(t = 1\) to \(T\)}
+		\FOR{\(i = 1\) to \(|V|\)}
+		\IF{\(\text{match}(x, t, u_i)\)}
+		\STATE \(P[t, i] \leftarrow \frac{\alpha_t \cdot p(u_i) \cdot \beta_{t + |u_i|}}{\alpha_{T+1}}\)
+		\ELSE
+		\STATE \(P[t, i] \leftarrow 0\)
+		\ENDIF
+		\ENDFOR
+		\ENDFOR
+		\STATE
+		\STATE \textbf{// Step 3: Embedding and Contextualization}
+		\STATE \(H^0 \leftarrow P \cdot W_{\mathrm{emb}}\) \COMMENT{Seed embeddings}
+		\STATE \(H \leftarrow \text{ConvEncoder}(H^0)\) \COMMENT{Multi-scale contextualization}
+		\STATE
+		\STATE \textbf{// Step 4: Candidate Generation}
+		\STATE \(C \leftarrow \text{EnumerateCandidates}(x, V, w_{\max})\) 
+		\STATE \qquad \COMMENT{Algorithm~\ref{alg:span-candidates}}
+		\STATE
+		\STATE \textbf{Return:} Embeddings \(H\), candidates \(C\), probabilities \(P\)
+	\end{algorithmic}
+\end{algorithm}
+
+\begin{proposition}[Pipeline Computational Complexity]
+	The unified pipeline has time complexity \(O(T \cdot |V| \cdot L_{\max} + T \cdot d^2 + T \cdot w_{\max}^2)\) and space complexity \(O(T \cdot |V| + T \cdot d)\), where \(L_{\max}\) is the maximum piece length.
+\end{proposition}
+
+\begin{proof}
+	We analyze each step separately:
+	
+	\textbf{Step 1 (Forward-Backward):} For each position \(t\), we check matching against all pieces \(u_i \in V\), each taking \(O(|u_i|) = O(L_{\max})\) time. 
+	
+	Total: \(O(T \cdot |V| \cdot L_{\max})\).
+	
+	\textbf{Step 2 (Probability Matrix):} Direct computation for \(T \times |V|\) entries: \(O(T \cdot |V|)\).
+	
+	\textbf{Step 3 (Embeddings):} Matrix multiplication \(P \cdot W_{\mathrm{emb}}\) costs \(O(T \cdot |V| \cdot d)\), and convolution costs \(O(T \cdot d^2)\).
+	
+	\textbf{Step 4 (Candidates):} Enumerating \(O(T \cdot w_{\max})\) candidates, each requiring \(O(w_{\max})\) validation: \(O(T \cdot w_{\max}^2)\).
+	
+	The dominant terms are \(O(T \cdot |V| \cdot L_{\max})\) for probability computation and \(O(T \cdot d^2)\) for contextualization.
+	
+	Space complexity is dominated by the probability matrix \(P \in \mathbb{R}^{T \times |V|}\) and contextual embeddings \(H \in \mathbb{R}^{T \times d}\).
+\end{proof}
+
+\paragraph{Implementation Considerations}
+
+The pipeline design enables several practical optimizations:
+
+\begin{itemize}
+	\item \textbf{Batch Processing:} Multiple sequences can share embedding matrices and convolution operations
+	\item \textbf{Memory Streaming:} Probability matrices can be computed in chunks for very long sequences
+	\item \textbf{GPU Acceleration:} All matrix operations are amenable to parallel execution
+	\item \textbf{Sparse Computation:} Many \(P[t,i]\) entries are zero due to vocabulary mismatch, enabling sparse tensor optimizations
+\end{itemize}
+
+This integrated pipeline transforms raw codepoint sequences into structured representations suitable for span-aware downstream processing, while maintaining linear scaling properties and preserving the statistical foundations established during vocabulary induction.
