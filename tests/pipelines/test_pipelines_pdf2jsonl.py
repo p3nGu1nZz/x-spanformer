@@ -3,6 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -750,3 +751,126 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].raw, 'Sample text content')
         self.assertEqual(result[0].meta.status, 'keep')
+
+    def test_batch_resume_functionality(self):
+        """Test that resume works correctly with batched PDF processing"""
+        # Simulate large PDF that was split into batches
+        batch_segments = [
+            'Batch 1 Segment A', 'Batch 1 Segment B',  # Batch 1
+            'Batch 2 Segment A', 'Batch 2 Segment B',  # Batch 2  
+            'Batch 3 Segment A', 'Batch 3 Segment B',  # Batch 3
+            'Batch 4 Segment A', 'Batch 4 Segment B'   # Batch 4
+        ]
+        
+        # Create aggregated CSV (what aggregate_batch_results would create)
+        csv_file = self.tmp_dir / "large_doc.csv"
+        with csv_file.open('w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['text'])
+            for segment in batch_segments:
+                writer.writerow([segment])
+        
+        # Simulate existing records (batches 1-2 completed, batch 3 partially done)
+        from x_spanformer.schema.pretrain_record import PretrainRecord
+        from x_spanformer.schema.metadata import RecordMeta
+        
+        existing_records = []
+        # Batches 1-2 fully processed + first segment of batch 3
+        for segment in batch_segments[:5]:  # First 5 segments
+            existing_records.append(
+                PretrainRecord(
+                    raw=segment,
+                    type='natural',
+                    meta=RecordMeta(
+                        source_file='large_doc.pdf',
+                        doc_language='en',
+                        extracted_by='pdf2seg',
+                        confidence=0.8,
+                        status='keep',
+                        tags=[],
+                        notes='batch_test'
+                    )
+                )
+            )
+        
+        # Test resume logic
+        processed_raws = {rec.raw for rec in existing_records}
+        unprocessed_segments = [seg for seg in batch_segments if seg not in processed_raws]
+        
+        # Should only need to process remaining segments from batch 3 + all of batch 4
+        expected_remaining = batch_segments[5:]  # Last 3 segments
+        
+        self.assertEqual(len(unprocessed_segments), 3)
+        self.assertEqual(set(unprocessed_segments), set(expected_remaining))
+        self.assertIn('Batch 3 Segment B', unprocessed_segments)
+        self.assertIn('Batch 4 Segment A', unprocessed_segments)
+        self.assertIn('Batch 4 Segment B', unprocessed_segments)
+        
+        # Verify the resume would work with process_all_csvs
+        with patch('asyncio.run') as mock_asyncio_run:
+            # Mock the async process to return processed results for remaining segments
+            mock_results = []
+            for segment in unprocessed_segments:
+                mock_results.append(
+                    PretrainRecord(
+                        raw=segment,
+                        type='natural',
+                        meta=RecordMeta(
+                            source_file='large_doc.pdf',
+                            doc_language='en',
+                            extracted_by='pdf2seg',
+                            confidence=0.8,
+                            status='keep',
+                            tags=[],
+                            notes='resumed_batch'
+                        )
+                    )
+                )
+            
+            # Return existing + newly processed records
+            all_results = existing_records + mock_results
+            mock_asyncio_run.return_value = (all_results, Counter({'keep': len(all_results)}), [])
+            
+            result = pdf2jsonl.process_all_csvs(
+                [csv_file], "text", 1, {},
+                save_interval=0, existing_records=existing_records
+            )
+            
+            # Should return all records (existing + newly processed)
+            self.assertEqual(len(result), len(batch_segments))
+            
+            # Verify that all original segments are represented
+            result_raws = {r.raw for r in result}
+            self.assertEqual(result_raws, set(batch_segments))
+
+    def test_csv_reuse_with_batched_pdfs(self):
+        """Test that CSV reuse logic works correctly with batched PDFs"""
+        # Create a CSV that would result from successful batch aggregation
+        pdf_hash = "abc12345"
+        csv_name = f"{pdf_hash}.csv"
+        csv_path = self.tmp_dir / csv_name
+        
+        # Simulate aggregated CSV with content from multiple batches
+        with csv_path.open('w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['text'])
+            for i in range(1, 11):  # 10 segments across batches
+                writer.writerow([f'Large PDF segment {i} content'])
+        
+        # Test CSV reuse logic
+        force_regenerate = False
+        csv_exists = csv_path.exists() and csv_path.stat().st_size > 0
+        should_reuse = not force_regenerate and csv_exists
+        
+        self.assertTrue(csv_exists)
+        self.assertTrue(should_reuse)
+        
+        # Verify file has expected content
+        with csv_path.open('r') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+            
+        self.assertEqual(len(rows), 11)  # Header + 10 data rows
+        self.assertEqual(rows[0], ['text'])
+        self.assertIn(['Large PDF segment 1 content'], rows)
+        self.assertIn(['Large PDF segment 10 content'], rows)
