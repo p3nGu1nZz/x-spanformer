@@ -5,6 +5,7 @@ description = "Tokenizer-free, span-aware encoder architecture inspired by X-bar
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "gitpython>=3.1.44",
     "jinja2>=3.1.6",
     "langid>=1.1.6",
     "matplotlib>=3.10.3",

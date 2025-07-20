@@ -1,0 +1,136 @@
+# Repository processing pipeline configuration
+# Used by repo2jsonl.py for GitHub repository ingestion
+
+# Repository export settings
+repository:
+  # Git clone options
+  clone_depth: 1 # Shallow clone for efficiency
+  single_branch: true # Only clone target branch
+  remove_git_dir: true # Remove .git to avoid conflicts
+
+  # File processing limits
+  max_file_size: 50000 # Maximum file size in characters
+
+  # Default file extensions to include
+  extensions:
+  - .py # Python
+  - .js # JavaScript  
+  - .ts # TypeScript
+  - .java # Java
+  - .cpp # C++
+  - .c # C
+  - .h # C/C++ Headers
+  - .rs # Rust
+  - .go # Go
+  - .rb # Ruby
+  - .php # PHP
+  - .cs # C#
+  - .swift # Swift
+  - .kt # Kotlin
+  - .scala # Scala
+  - .clj # Clojure
+  - .hs # Haskell
+  - .ml # OCaml
+  - .r # R
+  - .sql # SQL
+  - .sh # Shell
+  - .bat # Batch
+  - .ps1 # PowerShell
+  - .yaml # YAML
+  - .yml # YAML
+  - .json # JSON
+  - .xml # XML
+  - .md # Markdown
+  - .rst # reStructuredText
+  - .txt # Text
+
+  # Directories to skip during extraction
+  skip_directories:
+  - .git
+  - .svn
+  - .hg
+  - .bzr
+  - __pycache__
+  - .pytest_cache
+  - .mypy_cache
+  - .tox
+  - node_modules
+  - .node_modules
+  - bower_components
+  - .vscode
+  - .idea
+  - .vs
+  - .vscode-test
+  - build
+  - dist
+  - target
+  - out
+  - bin
+  - obj
+  - release
+  - debug
+  - .next
+  - .nuxt
+  - .output
+  - .vercel
+  - .netlify
+  - coverage
+  - .nyc_output
+  - .coverage
+  - htmlcov
+  - venv
+  - env
+  - .env
+  - .venv
+  - virtualenv
+  - .virtualenv
+  - logs
+  - log
+  - tmp
+  - temp
+  - .tmp
+  - .temp
+  - cache
+  - .cache
+  - data # Data directories (as requested)
+  - dataset
+  - datasets
+  - models # ML model files
+  - checkpoints # Training checkpoints
+  - vendor
+  - third_party
+  - external
+  - deps
+  - dependencies
+  - test_data
+  - test_files
+  - fixtures
+  - samples
+  - examples
+  - docs # Documentation
+  - documentation
+  - .docs
+  - doc
+  - assets # Static assets
+  - static
+  - public
+  - images
+  - img
+  - media
+
+# Processing settings
+processing:
+  # Number of concurrent workers for judge evaluation
+  default_workers: 2
+
+  # Save interval for incremental saving
+  default_save_interval: 5
+
+  # Text processing limits (longer for code files)
+  max_raw_length: 2048
+  min_raw_length: 32
+
+# Judge evaluation settings (inherits from judge.yaml)
+judge:
+  # Code-specific evaluation criteria
+  code_context: true
