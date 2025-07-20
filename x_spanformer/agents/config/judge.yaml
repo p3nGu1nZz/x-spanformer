@@ -8,6 +8,8 @@ model:
 
 processor:
   max_raw_length: 512
+  min_raw_length: 64
+  concatenate_small_segments: true
 
 dialogue:
   max_turns: 12

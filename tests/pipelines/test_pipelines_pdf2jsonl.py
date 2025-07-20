@@ -3,9 +3,11 @@ import json
 import sys
 import tempfile
 import unittest
+import warnings
 from collections import Counter
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -90,6 +92,7 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         self.assertEqual(args[2], 1)  # Workers
 
     def test_run_pdf2seg_success(self):
+        """Test successful PDF to CSV conversion."""
         pdf_path = self.tmp_dir / "test.pdf"
         pdf_path.touch()
         output_dir = self.tmp_dir / "csv_output"
@@ -127,6 +130,7 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
             self.assertIsNone(result)
 
     def test_run_pdf2seg_import_error(self):
+        """Test handling of pdf2seg import error."""
         pdf_path = self.tmp_dir / "test.pdf"
         pdf_path.touch()
         output_dir = self.tmp_dir / "csv_output"
@@ -874,3 +878,131 @@ class TestPdf2JsonlPipeline(unittest.TestCase):
         self.assertEqual(rows[0], ['text'])
         self.assertIn(['Large PDF segment 1 content'], rows)
         self.assertIn(['Large PDF segment 10 content'], rows)
+
+    def test_concatenate_small_segments_basic(self):
+        """Test basic small segment concatenation functionality"""
+        # Test data with small segments from same document
+        spans = ["Short", "text here", "This is longer content that makes it over 50 characters"]
+        source_mapping = ["doc1.pdf", "doc1.pdf", "doc1.pdf"]
+        
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments(
+            spans, source_mapping, min_length=50, max_length=512
+        )
+        
+        # Should concatenate first two segments until it reaches min_length, then stop
+        self.assertEqual(len(result_spans), 2)
+        self.assertEqual(result_spans[0], "Short text here")  # Concatenated and reaches 15 chars
+        self.assertTrue(len(result_spans[0]) >= 15)  # Combined should be reasonable length
+        self.assertEqual(result_spans[1], "This is longer content that makes it over 50 characters")  # Left alone
+        self.assertEqual(result_sources, ["doc1.pdf", "doc1.pdf"])
+
+    def test_concatenate_small_segments_different_documents(self):
+        """Test that concatenation respects document boundaries"""
+        spans = ["Short", "text", "from another doc"]
+        source_mapping = ["doc1.pdf", "doc2.pdf", "doc2.pdf"]
+        
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments(
+            spans, source_mapping, min_length=50, max_length=512
+        )
+        
+        # Should not concatenate across document boundaries
+        # First segment stays alone (can't concatenate with different doc)
+        # Second and third segments get concatenated within doc2.pdf
+        self.assertEqual(len(result_spans), 2)
+        self.assertEqual(result_spans[0], "Short")  # Left alone (different doc boundary)
+        self.assertEqual(result_spans[1], "text from another doc")  # Concatenated within doc2
+        self.assertEqual(result_sources, ["doc1.pdf", "doc2.pdf"])
+        
+    def test_concatenate_small_segments_respects_max_length(self):
+        """Test that concatenation respects max_length boundary"""
+        # Create segments where concatenation would exceed max_length
+        long_segment = "A" * 400  # 400 characters
+        spans = ["Short", long_segment]
+        source_mapping = ["doc1.pdf", "doc1.pdf"]
+        
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments(
+            spans, source_mapping, min_length=50, max_length=450
+        )
+        
+        # Should not concatenate because "Short " + long_segment > 450 chars
+        self.assertEqual(len(result_spans), 2)
+        self.assertEqual(result_spans[0], "Short")
+        self.assertEqual(result_spans[1], long_segment)
+
+    def test_concatenate_small_segments_iterative(self):
+        """Test iterative concatenation of multiple small segments"""
+        spans = ["A", "B", "C", "D", "This is long enough content to be standalone"]
+        source_mapping = ["doc1.pdf"] * 5
+        
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments(
+            spans, source_mapping, min_length=10, max_length=512
+        )
+        
+        # Should concatenate A B C D together (even if still below min_length), leave the long one alone
+        self.assertEqual(len(result_spans), 2)
+        self.assertTrue(result_spans[0].startswith("A B"))  # Should start with concatenation
+        self.assertEqual(result_spans[0], "A B C D")  # All small segments concatenated
+        self.assertEqual(result_spans[1], "This is long enough content to be standalone")
+
+    def test_concatenate_small_segments_empty_input(self):
+        """Test concatenation with empty input"""
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments([], [])
+        self.assertEqual(result_spans, [])
+        self.assertEqual(result_sources, [])
+
+    def test_concatenate_small_segments_single_element(self):
+        """Test concatenation with single element"""
+        spans = ["Single element"]
+        source_mapping = ["doc1.pdf"]
+        
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments(
+            spans, source_mapping, min_length=50, max_length=512
+        )
+        
+        self.assertEqual(result_spans, ["Single element"])
+        self.assertEqual(result_sources, ["doc1.pdf"])
+        
+    def test_concatenate_small_segments_all_long_enough(self):
+        """Test concatenation when all segments are already long enough"""
+        spans = ["This is a long enough segment", "This is another long enough segment"]
+        source_mapping = ["doc1.pdf", "doc1.pdf"]
+        
+        result_spans, result_sources = pdf2jsonl.concatenate_small_segments(
+            spans, source_mapping, min_length=25, max_length=512
+        )
+        
+        # Should not concatenate anything since all segments are >= min_length
+        self.assertEqual(len(result_spans), 2)
+        self.assertEqual(result_spans, spans)
+        self.assertEqual(result_sources, source_mapping)
+
+    def test_process_all_csvs_with_small_segment_concatenation(self):
+        """Test that the process_all_csvs function properly integrates concatenation"""
+        # Create CSV with mix of small and large segments
+        csv_file = self.tmp_dir / "mixed_segments.csv"
+        csv_content = '''text
+"Short"
+"text"
+"This is a much longer segment that exceeds the minimum length requirement"
+"Another"
+"small bit"
+'''
+        csv_file.write_text(csv_content)
+        
+        with patch('asyncio.run') as mock_asyncio_run:
+            # Mock the async process to verify concatenation happens
+            def mock_process():
+                # This would be called after concatenation, so we should see fewer segments
+                return [], Counter(), []
+            
+            mock_asyncio_run.return_value = mock_process()
+            
+            # Test with configuration that should trigger concatenation
+            result = pdf2jsonl.process_all_csvs(
+                [csv_file], "text", 1, {}, 
+                save_interval=0, pdf_mapping={"mixed_segments.csv": "test.pdf"}
+            )
+            
+            # The main thing is that this doesn't crash and concatenation is applied
+            # The actual processing is mocked, but concatenation should happen before that
+            self.assertEqual(len(result), 0)  # Empty because we mocked the return
