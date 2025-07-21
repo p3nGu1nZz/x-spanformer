@@ -36,8 +36,8 @@ class TestRepo2JSONL:
         with patch('sys.argv', ['repo2jsonl.py', '-u', 'https://github.com/test/repo', '-i', './input', '-o', './output']):
             args = repo2jsonl.parse_args()
             assert args.url == 'https://github.com/test/repo'
-            assert str(args.input) == './input'
-            assert str(args.output) == './output'
+            assert str(args.input) == 'input'  # Path normalizes ./input to input
+            assert str(args.output) == 'output'  # Path normalizes ./output to output
             assert args.name == 'repo_dataset'  # default
             assert args.workers is None  # should use config default
             assert args.save_interval is None  # should use config default

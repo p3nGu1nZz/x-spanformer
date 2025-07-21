@@ -193,11 +193,15 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict,
 
         # Process segments
         semaphore = asyncio.Semaphore(w)
+        consecutive_retry_errors = 0
+        critical_error_detected = False
         
         async def judge_segment(idx, text, source_file):
+            nonlocal consecutive_retry_errors, critical_error_detected
             async with semaphore:
                 session = sessions[idx % len(sessions)]
                 judge_responses = []
+                retry_error_count = 0
                 
                 # Process judges sequentially for stability
                 for judge_num in range(num_judges):
@@ -208,10 +212,32 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict,
                         )
                         judge_responses.append(judge_result)
                     except Exception as e:
+                        error_msg = str(e)
                         console.print(f"[red]❌ Judge {judge_num + 1} failed for segment {idx}: {e}[/red]")
+                        
+                        # Check for RetryError patterns that indicate critical connection issues
+                        if "RetryError" in error_msg and ("ConnectionError" in error_msg or "All attempts failed" in error_msg):
+                            retry_error_count += 1
+                            consecutive_retry_errors += 1
+                            
+                            # Mark critical error detected, but don't exit immediately
+                            # Let the processing complete and check at the end
+                            if consecutive_retry_errors >= 3 or "All attempts failed" in error_msg:
+                                critical_error_detected = True
+                        else:
+                            # Reset consecutive error count on non-retry errors
+                            consecutive_retry_errors = 0
                         continue
                 
+                # Reset consecutive errors on successful processing
+                if judge_responses:
+                    consecutive_retry_errors = 0
+                
                 if not judge_responses:
+                    # Check if all judges failed due to retry errors
+                    if retry_error_count >= num_judges:
+                        critical_error_detected = True
+                    
                     return idx, {
                         "score": 0.0,
                         "status": "discard", 
@@ -321,6 +347,12 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict,
         # Save any remaining records
         if save_interval > 0 and records_to_save:
             save_chunk(records_to_save)
+
+        # Check for critical errors after processing completes
+        if critical_error_detected:
+            console.print(f"[red]🚨 Critical error pattern detected during processing[/red]")
+            console.print(f"[red]🚫 Exiting due to critical system failures[/red]")
+            sys.exit(1)
 
         return all_processed_recs, stats, reasons
 
