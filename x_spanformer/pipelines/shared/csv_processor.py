@@ -23,6 +23,7 @@ from x_spanformer.agents.rich_utils import (
 from x_spanformer.agents.session.judge_session import JudgeSession
 from x_spanformer.schema.metadata import RecordMeta
 from x_spanformer.schema.pretrain_record import PretrainRecord
+from x_spanformer.pipelines.shared.text_processor import normalize_text_segments
 
 def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, 
                     save_interval: int = 1, output_path: Optional[Path] = None, 
@@ -137,22 +138,20 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict,
         # Load agent configuration
         agent_config = load_judge_config()
 
-        # Pre-process spans for text length management
+        # Pre-process spans for text length management using shared text processor
         max_raw_length = agent_config.get("processor", {}).get("max_raw_length", 512)
         min_raw_length = agent_config.get("processor", {}).get("min_raw_length", 64)
         
-        expanded_spans = []
-        expanded_source_mapping = []
-
-        for text, source_file in zip(spans, source_mapping):
-            if len(text) > max_raw_length:
-                text_chunks = split_long_text(text, max_raw_length)
-            else:
-                text_chunks = [text]
-            
-            for chunk in text_chunks:
-                expanded_spans.append(chunk)
-                expanded_source_mapping.append(source_file)
+        # Determine content type based on pipeline context (can be overridden by caller)
+        content_type = cfg.get("content_type", "natural")  # Default to natural language
+        
+        expanded_spans, expanded_source_mapping = normalize_text_segments(
+            spans=spans,
+            source_mapping=source_mapping,
+            max_length=max_raw_length,
+            min_length=min_raw_length,
+            content_type=content_type
+        )
 
         # Handle existing records (resume functionality)
         if existing_records:
@@ -372,38 +371,3 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict,
     except Exception as e:
         console.print(f"\n[bold red]❌ Processing failed: {e}[/bold red]")
         return []
-
-def split_long_text(text: str, max_length: int = 512) -> list[str]:
-    """Split text that exceeds max_length into smaller chunks."""
-    if len(text) <= max_length:
-        return [text]
-
-    # Split on newlines first for code
-    lines = text.split('\n')
-    chunks = []
-    current_chunk = ""
-    
-    for line in lines:
-        if len(current_chunk) + len(line) + 1 > max_length:
-            if current_chunk:
-                chunks.append(current_chunk)
-            current_chunk = line
-        else:
-            if current_chunk:
-                current_chunk += "\n" + line
-            else:
-                current_chunk = line
-    
-    if current_chunk:
-        chunks.append(current_chunk)
-    
-    # If any chunk is still too long, split by characters
-    final_chunks = []
-    for chunk in chunks:
-        if len(chunk) > max_length:
-            for i in range(0, len(chunk), max_length):
-                final_chunks.append(chunk[i:i+max_length])
-        else:
-            final_chunks.append(chunk)
-    
-    return final_chunks if final_chunks else [""]

@@ -223,7 +223,7 @@ def run(url: str, input_dir: Path, output_dir: Path, name: str, workers: Optiona
             csv_files=csv_files,
             col="content",  # Code content column
             w=workers,
-            cfg={},  # Use default config
+            cfg={"content_type": "code"},  # Specify this is code content for proper text processing
             save_interval=save_interval,
             output_path=output_dir,
             base_name=name,
@@ -233,6 +233,7 @@ def run(url: str, input_dir: Path, output_dir: Path, name: str, workers: Optiona
         
         # Update extracted_by field to reflect this pipeline
         for record in all_records:
+            record.meta.extracted_by = "repo2jsonl"
             record.meta.extracted_by = "repo2jsonl"
         
         if not all_records:
