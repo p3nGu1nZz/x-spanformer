@@ -177,9 +177,19 @@ def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict,
             console.print("[green]✔ All segments have already been processed.[/green]")
             return existing_records if existing_records else [], Counter(), []
 
-        # Update total count after processing
+        # Update total count after resume filtering - this should be the original total from CSV
+        # The total segments to process in this session is len(expanded_spans)
+        # The total segments processed so far is processed_count_total (existing records)
+        # Update total_segment_count to reflect actual segment count after text processing
         nonlocal total_segment_count
+        original_total = total_segment_count
         total_segment_count = len(expanded_spans) + processed_count_total
+        
+        console.print(f"[yellow]📊 Session metrics: {len(expanded_spans)} segments to process this session[/yellow]")
+        if processed_count_total > 0:
+            console.print(f"[yellow]📊 Resume: {processed_count_total} segments already processed from previous sessions[/yellow]")
+        if original_total != total_segment_count:
+            console.print(f"[yellow]📊 Text processing changed total from {original_total} to {total_segment_count} segments[/yellow]")
 
         # Initialize judge sessions
         sessions = [JudgeSession(config=agent_config, quiet=True) for _ in range(w)]
