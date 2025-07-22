@@ -27,6 +27,12 @@ from x_spanformer.agents.rich_utils import (
 from x_spanformer.agents.session.judge_session import JudgeSession
 from x_spanformer.schema.metadata import RecordMeta
 from x_spanformer.schema.pretrain_record import PretrainRecord
+from x_spanformer.pipelines.shared.csv_processor import process_all_csvs
+# Import text processing functions for backward compatibility with tests
+from x_spanformer.pipelines.shared.text_processor import (
+    concatenate_small_segments,
+    split_long_text
+)
 
 
 def hash_name(p: Path) -> str:
@@ -146,9 +152,6 @@ def run_pdf2seg(pdf_file: Path, output_dir: Path, force_regenerate: bool = False
             console.print(f"[yellow]Creating fallback CSV for {pdf_file.name}[/yellow]")
             csv_file.write_text("text\n\"sample text\"")
 
-    except ImportError:
-        console.print(f"[red]pdf2seg package not found. Please ensure pdf2seg is installed.[/red]")
-        return None
     except Exception as e:
         error_msg = str(e).replace('[', '\\[').replace(']', '\\]')
         console.print(f"[red]⚠ Error processing {pdf_file.name}: {error_msg}[/red]")
@@ -184,442 +187,6 @@ def manifest(p: Path):
             d = json.load(f)
         return d.get("csv") or p.name, "pdf2seg (manifest v1)"
     return p.name, "unknown"
-
-
-def process_all_csvs(csv_files: list[Path], col: str, w: int, cfg: dict, save_interval: int = 1, output_path: Optional[Path] = None, base_name: str = "dataset", pdf_mapping: Optional[dict[str, str]] = None, existing_records: Optional[list[PretrainRecord]] = None) -> list[PretrainRecord]:
-    if not csv_files:
-        console.print(f"[red]⚠ No CSV files provided[/red]")
-        return []
-
-    if pdf_mapping is None:
-        pdf_mapping = {}
-
-    # Ensure deterministic processing order
-    csv_files = sorted(csv_files)
-    
-    all_dfs = []
-    source_files = []
-
-    for csv_file in csv_files:
-        try:
-            df = pd.read_csv(csv_file)
-            if col in df.columns:
-                original_pdf_name = pdf_mapping.get(csv_file.name, csv_file.name)
-                df['source_file'] = original_pdf_name
-                all_dfs.append(df)
-                source_files.append(original_pdf_name)
-                console.print(f"[green]✔ Loaded {len(df)} rows from {csv_file.name} (original: {original_pdf_name})[/green]")
-            else:
-                console.print(f"[red]⚠ Missing '{col}' column in {csv_file.name}[/red]")
-        except Exception as e:
-            console.print(f"[red]⚠ Error reading {csv_file.name}: {e}[/red]")
-
-    if not all_dfs:
-        console.print(f"[red]⚠ No valid CSV files found[/red]")
-        return []
-
-    combined_df = pd.concat(all_dfs, ignore_index=True)
-    spans = combined_df[col].dropna().astype(str).str.strip().tolist()
-    source_mapping = combined_df['source_file'].tolist()
-
-    if not spans:
-        console.print(f"[red]⚠ No usable '{col}' values found across all CSV files[/red]")
-        return []
-
-    console.print(f"[green]Processing {len(spans)} text segments from {len(source_files)} CSV files[/green]")
-    if save_interval > 0:
-        console.print(f"[cyan]💾 Incremental saving enabled: saving after every {save_interval} record(s) to {output_path}[/cyan]")
-    else:
-        console.print("[yellow]💾 Incremental saving disabled. Results will be processed in memory.[/yellow]")
-    console.print()
-
-    # Initialize timing metrics
-    start_time = time.time()
-    # Note: We can't predict how many valid records we'll have, so estimated_total_saves will be updated after text splitting
-    estimated_total_saves = 1  # Placeholder, will be updated after text splitting
-    records_saved_this_session = 0
-    total_segment_count = len(spans)  # Initialize with original count, will be updated after splitting
-
-    def save_chunk(records: list[PretrainRecord]):
-        """Save a chunk of records incrementally to prevent data loss"""
-        nonlocal records_saved_this_session
-
-        if not output_path or not records:
-            return
-
-        # Separate records by status
-        keep_records = [record for record in records if record.meta.status == "keep"]
-        discard_records = [record for record in records if record.meta.status == "discard"]
-        
-        # Create jsonl directory for dataset files
-        jsonl_dir = output_path / "jsonl"
-        jsonl_dir.mkdir(parents=True, exist_ok=True)
-        
-        saved_count = 0
-        
-        # Save "keep" records to main dataset file
-        if keep_records:
-            dataset_file = jsonl_dir / f"{base_name}.jsonl"
-            with dataset_file.open("a", encoding="utf-8") as writer:
-                for record in keep_records:
-                    writer.write(json.dumps(record.model_dump(), ensure_ascii=False) + "\n")
-            saved_count += len(keep_records)
-            console.print(f"[blue]💾 Saved {len(keep_records)} keep record(s) to {dataset_file.name}[/blue]")
-        
-        # Save "discard" records to discard file
-        if discard_records:
-            discard_file = jsonl_dir / "discard.jsonl"
-            with discard_file.open("a", encoding="utf-8") as writer:
-                for record in discard_records:
-                    writer.write(json.dumps(record.model_dump(), ensure_ascii=False) + "\n")
-            console.print(f"[blue]💾 Saved {len(discard_records)} discard record(s) to {discard_file.name}[/blue]")
-        
-        records_saved_this_session += saved_count
-        total_saved = len(keep_records) + len(discard_records)
-        console.print(f"[blue]💾 Total saved this chunk: {total_saved} records (session total: {records_saved_this_session} keeps)[/blue]")
-
-    async def process():
-        stats = Counter()
-        all_processed_recs = []
-        records_to_save = []
-        recs, reasons = [], []
-        # Initialize counters, including already-processed records if resuming
-        processed_count_total = len(existing_records) if existing_records else 0
-        # Count existing valid records (status "keep") toward valid count
-        valid_records_count = sum(1 for r in existing_records if r.meta.status == "keep") if existing_records else 0
-
-        # Initialize sessions once, sharing the same config
-        agent_config = load_judge_config()
-
-        # Pre-process spans to split long texts
-        max_raw_length = agent_config.get("processor", {}).get("max_raw_length", 512)
-        min_raw_length = agent_config.get("processor", {}).get("min_raw_length", 64)
-        expanded_spans = []
-        expanded_source_mapping = []
-
-        for i, (text, source_file) in enumerate(zip(spans, source_mapping)):
-            if len(text) > max_raw_length:
-                text_chunks = split_long_text(text, max_raw_length)
-            else:
-                text_chunks = [text]
-            
-            for chunk in text_chunks:
-                expanded_spans.append(chunk)
-                expanded_source_mapping.append(source_file)
-
-        # After text splitting, concatenate small segments within same documents
-        if min_raw_length > 0 and agent_config.get("processor", {}).get("concatenate_small_segments", True):
-            expanded_spans, expanded_source_mapping = concatenate_small_segments(
-                expanded_spans, expanded_source_mapping, 
-                min_length=min_raw_length, max_length=max_raw_length
-            )
-
-        # Save the total number of segments before filtering (for progress tracking)
-        total_segments_including_processed = len(expanded_spans)
-
-        if existing_records:
-            processed_raws = {rec.raw for rec in existing_records}
-            keep_raws = {rec.raw for rec in existing_records if rec.meta.status == "keep"}
-            discard_raws = {rec.raw for rec in existing_records if rec.meta.status == "discard"}
-            
-            if processed_raws:
-                unprocessed_spans = []
-                unprocessed_source_mapping = []
-                skipped_keeps = 0
-                skipped_discards = 0
-                
-                for text, source in zip(expanded_spans, expanded_source_mapping):
-                    if text not in processed_raws:
-                        unprocessed_spans.append(text)
-                        unprocessed_source_mapping.append(source)
-                    else:
-                        # Count what type of record we're skipping
-                        if text in keep_raws:
-                            skipped_keeps += 1
-                        elif text in discard_raws:
-                            skipped_discards += 1
-
-                if len(unprocessed_spans) < len(expanded_spans):
-                    skipped_count = len(expanded_spans) - len(unprocessed_spans)
-                    console.print(f"[cyan]🔄 Resuming: Skipped {skipped_count} already processed segments ({skipped_keeps} keeps + {skipped_discards} discards). Total processed so far: {processed_count_total}[/cyan]")
-                    expanded_spans = unprocessed_spans
-                    expanded_source_mapping = unprocessed_source_mapping
-                else:
-                    console.print("[yellow]No matching segments found in existing records. Processing all from scratch.[/yellow]")
-
-        if not expanded_spans:
-            console.print("[green]✔ All segments have already been processed. Nothing to do.[/green]")
-            # Return existing records with empty stats since nothing was processed this session
-            return existing_records if existing_records else [], Counter(), []
-
-        if len(expanded_spans) != len(spans):
-            console.print(f"[cyan]📐 Text splitting: {len(spans)} → {len(expanded_spans)} segments to process (max length: {max_raw_length} chars)[/cyan]")
-
-        # Update references to use total segments including already processed
-        nonlocal total_segment_count
-        total_segment_count = total_segments_including_processed  # Use total including already processed
-        nonlocal estimated_total_saves
-        estimated_total_saves = total_segment_count
-
-        # Get judge configuration
-        num_judges = agent_config.get("judge", {}).get("judges", 5)
-        threshold = agent_config.get("judge", {}).get("threshold", 0.69)
-        max_retries = agent_config.get("judge", {}).get("max_retries", 3)
-        
-        console.print(f"[bold magenta]🚀 Using {w} concurrent workers with {num_judges} judges each (sequential per worker)[/bold magenta]")
-        console.print(f"[yellow]💡 Sequential judge processing reduces Ollama queue pressure for better stability![/yellow]")
-        
-        # Initialize sessions once, sharing the same config
-        from x_spanformer.agents.session.judge_session import JudgeSession
-        sessions = [JudgeSession(config=agent_config, quiet=True) for _ in range(w)]
-        
-        # Use asyncio.Semaphore for concurrency control
-        semaphore = asyncio.Semaphore(w)
-        consecutive_retry_errors = 0  # Track consecutive RetryError failures
-        
-        async def judge_segment(idx, text, source_file):
-            nonlocal consecutive_retry_errors
-            async with semaphore:
-                try:
-                    session = sessions[idx % len(sessions)]
-                    judge_responses = []
-                    
-                    # Process judges sequentially - let tenacity handle retries
-                    for judge_num in range(num_judges):
-                        try:
-                            console.print(f"[dim]⚖️ Judging text (len={len(text)}): {text[:80]}...[/dim]")
-                            judge_result = await asyncio.wait_for(
-                                session.evaluate(text), 
-                                timeout=30.0
-                            )
-                            judge_responses.append(judge_result)
-                            # Reset consecutive error counter on any successful evaluation
-                            consecutive_retry_errors = 0
-                            
-                        except Exception as e:
-                            error_str = str(e)
-                            
-                            # Check for RetryError from tenacity exhaustion
-                            if "RetryError" in error_str and "ConnectionError" in error_str:
-                                consecutive_retry_errors += 1
-                                console.print(f"[red]❌ RetryError for segment {idx} judge {judge_num + 1} (consecutive: {consecutive_retry_errors}): {error_str}[/red]")
-                                
-                                # Exit after 3 consecutive RetryErrors across any judges
-                                if consecutive_retry_errors >= 3:
-                                    console.print(f"[bold red]🚫 CRITICAL: {consecutive_retry_errors} consecutive RetryErrors - Ollama connection unstable![/bold red]")
-                                    raise Exception(f"CRITICAL: {consecutive_retry_errors} consecutive RetryErrors - Ollama connection unstable")
-                                
-                                # RetryError means tenacity has exhausted all retries for this judge
-                                # This judge failed completely, so we continue to next judge
-                                console.print(f"[red]❌ Judge {judge_num + 1} failed after all retries - continuing to next judge[/red]")
-                                continue
-                            else:
-                                # For other errors (timeouts, etc.), increment counter and exit immediately
-                                consecutive_retry_errors += 1
-                                console.print(f"[red]❌ Critical error in judge {judge_num + 1} (consecutive: {consecutive_retry_errors}): {str(e)}[/red]")
-                                raise Exception(f"CRITICAL: Judge evaluation error for segment {idx}: {str(e)}")
-                    
-                    # Check if we got any successful judge responses
-                    if not judge_responses:
-                        console.print(f"[bold red]🚫 CRITICAL: All judges failed for segment {idx} - system failure detected![/bold red]")
-                        raise Exception(f"CRITICAL: No successful judge responses for segment {idx} - all judges failed")
-                    
-                    # Calculate consensus from available responses
-                    scores = [r.get("score", 0) for r in judge_responses]
-                    consensus_score = sum(scores) / len(scores)
-                    
-                    content_types = [r.get("type", "natural") for r in judge_responses]
-                    consensus_type = max(set(content_types), key=content_types.count)
-                    
-                    final_status = "keep" if consensus_score >= threshold else "discard"
-                    
-                    all_reasons = [r.get("reason", "") for r in judge_responses]
-                    combined_reason = " / ".join(all_reasons)
-                    
-                    return idx, {
-                        "score": consensus_score,
-                        "status": final_status,
-                        "type": consensus_type,
-                        "reason": combined_reason
-                    }, {
-                        "text": text,
-                        "source_file": source_file,
-                        "judge_responses": judge_responses
-                    }
-                    
-                except Exception as e:
-                    error_str = str(e)
-                    # All critical errors should bubble up and stop processing
-                    console.print(f"[bold red]🚫 CRITICAL FAILURE: {error_str}[/bold red]")
-                    raise e
-        
-        # Group segments by source file to process documents sequentially
-        segments_by_source = {}
-        for i, (text, source_file) in enumerate(zip(expanded_spans, expanded_source_mapping)):
-            if source_file not in segments_by_source:
-                segments_by_source[source_file] = []
-            segments_by_source[source_file].append((i, text))
-        
-        console.print(f"[cyan]📋 Processing {len(segments_by_source)} documents sequentially, with concurrent judge evaluation within each document[/cyan]")
-        
-        # Debug: Show first few segments to verify resume logic
-        if len(expanded_spans) < 20:
-            console.print(f"[dim]Debug: First few segments to process:[/dim]")
-            for i, text in enumerate(expanded_spans[:5]):
-                console.print(f"[dim]  {i+1}: {text[:60]}...[/dim]")
-        
-        # Process each document sequentially
-        overall_completed_count = len(existing_records) if existing_records else 0  # Start from already processed count
-        session_start_count = overall_completed_count  # Remember where we started this session
-        overall_keep_count = valid_records_count  # Start from already kept records count
-        overall_discard_count = len(existing_records) - valid_records_count if existing_records else 0  # Start from already discarded records count
-        results = []  # Track all results for final return
-        
-        for doc_idx, (source_file, segments_list) in enumerate(segments_by_source.items(), 1):
-            console.print(f"[bold yellow]📄 Processing Document {doc_idx}/{len(segments_by_source)}: {source_file}[/bold yellow]")
-            console.print(f"[dim]   {len(segments_list)} segments in this document[/dim]")
-            
-            # Create tasks for this document only
-            doc_tasks = [
-                judge_segment(original_idx, text, source_file) 
-                for original_idx, text in segments_list
-            ]
-            
-            # Process this document's segments concurrently
-            doc_results = []
-            doc_completed_count = 0
-            
-            for task in asyncio.as_completed(doc_tasks):
-                idx, r, log_data = await task
-                doc_results.append((idx, r, log_data))
-                doc_completed_count += 1
-                overall_completed_count += 1
-                
-                # Process this result immediately for incremental saving
-                tag = r["status"]
-                reasons.append(r["reason"])
-                stats[tag] += 1
-
-                # Handle AI processing log 
-                if log_data and output_path:
-                    save_ai_processing_log(
-                        output_path,
-                        log_data["source_file"],
-                        str(idx),
-                        log_data["text"],
-                        log_data["judge_responses"],
-                        r
-                    )
-
-                src_file = expanded_source_mapping[idx]
-                original_text = expanded_spans[idx]
-
-                record = PretrainRecord(
-                    raw=original_text,
-                    type=r.get("type", "natural"),
-                    meta=RecordMeta(
-                        source_file=src_file,
-                        doc_language="en",
-                        extracted_by="pdf2seg",
-                        confidence=r.get("score"),
-                        status=tag,
-                        tags=[tag] if tag != "keep" else [],
-                        notes=r.get('reason', '')
-                    )
-                )
-                
-                all_processed_recs.append(record)
-                processed_count_total += 1
-
-                # Incremental saving - save immediately after each record
-                if save_interval > 0:
-                    records_to_save.append(record)
-                    if len(records_to_save) >= save_interval:
-                        save_chunk(records_to_save)
-                        records_to_save.clear()
-
-                # Only count valid records (status "keep") toward valid count
-                if tag == "keep":
-                    valid_records_count += 1
-                    overall_keep_count += 1  # Track overall kept records
-                elif tag == "discard":
-                    overall_discard_count += 1  # Track overall discarded records
-                
-                # Display individual judgment result for every segment
-                if log_data:
-                    display_judgment_result(
-                        idx=overall_completed_count - 1,  # Use sequential progress counter (0-based)
-                        text=log_data["text"], 
-                        status=r["status"],
-                        score=r["score"],
-                        reason=r["reason"],
-                        content_type=r.get("type", "natural"),
-                        total_count=total_segment_count  # Use total including already processed
-                    )
-                
-                # Show progress summary every 10 completed or at end of document
-                if doc_completed_count % 10 == 0 or doc_completed_count == len(doc_tasks):
-                    keep_count = sum(1 for _, result, _ in doc_results if result["status"] == "keep")
-                    discard_count = doc_completed_count - keep_count
-                    console.print(f"[bright_blue]📊 Document Progress: {doc_completed_count}/{len(doc_tasks)} | [green]✅ Keep: {keep_count}[/green] | [red]❌ Discard: {discard_count}[/red] | Overall: {overall_completed_count}/{total_segment_count}[/bright_blue]")
-                    console.print()
-                    
-                    # Display telemetry panel after progress summary
-                    if overall_completed_count > 0:  # Only show if we have processed some records
-                        # Calculate estimated total saves based on current keep rate
-                        current_keep_rate = overall_keep_count / overall_completed_count if overall_completed_count > 0 else 0.5
-                        estimated_total_keeps = int(total_segment_count * current_keep_rate)
-                        
-                        display_telemetry_panel(
-                            processed_count=overall_completed_count,
-                            total_count=total_segment_count,  # Use total including already processed
-                            start_time=start_time,
-                            save_count=overall_keep_count,  # Total saved records (all keeps)
-                            estimated_total_saves=estimated_total_keeps,  # Estimated based on current keep rate
-                            records_saved_this_session=records_saved_this_session,
-                            keep_count=overall_keep_count,
-                            session_start_count=session_start_count  # Pass the session start count
-                        )
-            
-            # Sort this document's results by original index to maintain order within document
-            doc_results.sort(key=lambda x: x[0])
-            results.extend(doc_results)
-            
-            console.print(f"[green]✅ Completed Document {doc_idx}/{len(segments_by_source)}: {source_file}[/green]")
-            console.print()
-        
-        # Save any remaining records in the buffer
-        if save_interval > 0 and records_to_save:
-            console.print(f"[blue]Finalizing... saving {len(records_to_save)} remaining records.[/blue]")
-            save_chunk(records_to_save)
-            records_to_save.clear()
-
-        return all_processed_recs, stats, reasons
-
-    try:
-        result = asyncio.run(process())
-        if result is None:
-            console.print("[yellow]⚠ Processing returned no results[/yellow]")
-            return []
-        all_recs, stats, reasons = result
-        display_summary_panel("Combined CSV files", stats, reasons)
-        return all_recs
-    except KeyboardInterrupt:
-        console.print("\n[bold red]Interrupted by user. Exiting.[/bold red]")
-        return []
-    except Exception as e:
-        error_str = str(e)
-        if ("consecutive RetryErrors" in error_str or 
-            ("failed after" in error_str and "retries" in error_str) or
-            "Segment evaluation timeout" in error_str or
-            "Hard processing error" in error_str or
-            "all judges failed" in error_str):
-            console.print(f"\n[bold red]❌ Critical system failure: {error_str}[/bold red]")
-            console.print(f"[red]🚫 Exiting program immediately. Please check system status and try again.[/red]")
-            sys.exit(1)  # Exit immediately on critical system failures
-        else:
-            console.print(f"\n[bold red]❌ Processing failed: {error_str}[/bold red]")
-            return []
 
 
 def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: int = 1, force: bool = False):
@@ -687,7 +254,7 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
                 else:
                     console.print(f"[bold blue]📊 Total workload: {total_pages} pages across {len(pdfs)} PDF files[/bold blue]")
             else:
-                console.print(f"[yellow]⚠ Could not determine page counts (pypdf may not be installed)[/yellow]")
+                console.print(f"[yellow]⚠ Could not determine page counts for some PDF files[/yellow]")
     elif i.is_file() and i.suffix.lower() == ".pdf":
         pdfs = [i]
         page_count = count_pdf_pages(i)
@@ -941,7 +508,7 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
         console.print(f"[cyan]🆕 Fresh start: No existing records found[/cyan]")
 
     console.print()
-    allr = process_all_csvs(csvs, f, w, {}, save_interval, o, base, pdf_mapping, existing_records=existing_records)
+    allr = process_all_csvs(csvs, f, w, {"content_type": "natural"}, save_interval, o, base, pdf_mapping, existing_records=existing_records)
 
     if not allr:
         console.print(f"[red]⚠ No valid records found across all CSVs[/red]")
@@ -979,140 +546,6 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
         console.print(f"[cyan]• Pretty JSON → {j2.name}[/cyan]")
 
 
-def concatenate_small_segments(spans: list[str], source_mapping: list[str], 
-                             min_length: int = 64, max_length: int = 512) -> tuple[list[str], list[str]]:
-    """
-    Iteratively concatenate small segments within the same document until reaching acceptable length.
-    Respects max_length boundary - never exceeds it during concatenation.
-    
-    Args:
-        spans: List of text segments  
-        source_mapping: List of source files corresponding to each segment
-        min_length: Minimum segment length to keep standalone (default: 64)
-        max_length: Maximum length after concatenation (default: 512)
-    
-    Returns:
-        Tuple of (concatenated_spans, updated_source_mapping)
-    """
-    if not spans:
-        return spans, source_mapping
-    
-    concatenated_spans = []
-    concatenated_sources = []
-    concatenated_count = 0
-    
-    i = 0
-    while i < len(spans):
-        current_text = spans[i].strip()
-        current_source = source_mapping[i]
-        
-        # If segment is too small, try iterative concatenation
-        if len(current_text) < min_length and i < len(spans) - 1:
-            combined_text = current_text
-            segments_used = 1
-            j = i + 1
-            
-            # Iteratively add subsequent segments from same document
-            while j < len(spans) and source_mapping[j] == current_source:
-                
-                next_segment = spans[j].strip()
-                
-                # Don't concatenate with segments that are already long enough by themselves
-                if len(next_segment) >= min_length:
-                    break
-                
-                potential_combined = combined_text + " " + next_segment
-                
-                # RESPECT MAX LENGTH - don't exceed during concatenation
-                if len(potential_combined) <= max_length:
-                    combined_text = potential_combined
-                    segments_used += 1
-                    j += 1
-                    
-                    # Stop if we've reached a good length
-                    if len(combined_text) >= min_length:
-                        break
-                else:
-                    # Would exceed max_length, stop concatenation
-                    break
-            
-            concatenated_spans.append(combined_text)
-            concatenated_sources.append(current_source)
-            
-            if segments_used > 1:
-                concatenated_count += segments_used - 1  # Count extra segments merged
-            
-            i = j  # Skip the segments we just concatenated
-        else:
-            # Segment is long enough or is last segment - keep as-is
-            concatenated_spans.append(current_text)
-            concatenated_sources.append(current_source)
-            i += 1
-    
-    if concatenated_count > 0:
-        console.print(f"[cyan]🔗 Concatenated {concatenated_count} small segments (min: {min_length} chars, max: {max_length} chars)[/cyan]")
-    
-    return concatenated_spans, concatenated_sources
-
-
-def split_long_text(text: str, max_length: int = 512) -> list[str]:
-    """
-    Split text that exceeds max_length into smaller chunks, ensuring no chunk is longer than max_length.
-    It prioritizes splitting at sentence boundaries, then word boundaries, and finally at the character level
-    for very long, unbroken strings of text.
-    """
-    if len(text) <= max_length:
-        return [text]
-
-    # Use a simple regex for sentence splitting to avoid heavy dependencies like spaCy
-    # This regex looks for sentence-ending punctuation followed by a space or the end of the string.
-    sentences = re.split(r'(?<=[.!?])\\s+', text)
-    
-    chunks = []
-    
-    for sent in sentences:
-        if not sent.strip():
-            continue
-            
-        if len(sent) <= max_length:
-            chunks.append(sent)
-        else:
-            # The sentence itself is too long, so we need to split it further.
-            # First, try splitting by words.
-            words = sent.split()
-            current_chunk = ""
-            for word in words:
-                if len(current_chunk) + len(word) + 1 > max_length:
-                    if current_chunk:
-                        chunks.append(current_chunk)
-                    current_chunk = word
-                else:
-                    if current_chunk:
-                        current_chunk += " " + word
-                    else:
-                        current_chunk = word
-            
-            if current_chunk:
-                chunks.append(current_chunk)
-
-    # Final check: If any chunk is still too long (e.g., a very long word or token),
-    # we must split it at the character level.
-    final_chunks = []
-    for chunk in chunks:
-        if len(chunk) > max_length:
-            for i in range(0, len(chunk), max_length):
-                final_chunks.append(chunk[i:i+max_length])
-        else:
-            final_chunks.append(chunk)
-            
-    # If, after all that, we have no chunks, it means the original text was probably just whitespace.
-    # Return an empty list in that case.
-    if not final_chunks and not text.strip():
-        return []
-        
-    return final_chunks
-
-
 def count_pdf_pages(pdf_path: Path) -> int:
     """Count the number of pages in a PDF file using pypdf."""
     try:
@@ -1120,11 +553,8 @@ def count_pdf_pages(pdf_path: Path) -> int:
         with pdf_path.open('rb') as file:
             reader = pypdf.PdfReader(file)
             return len(reader.pages)
-    except ImportError:
-        # pypdf not available, return unknown count
-        return -1
     except Exception as e:
-        # If there's any error reading the PDF, return unknown count silently
+        # If there's any error reading the PDF, return -1 to indicate unknown
         return -1
 
 
@@ -1176,9 +606,6 @@ def split_large_pdf(pdf_path: Path, temp_dir: Path, pages_per_batch: int = 200) 
             console.print(f"[green]✔ Split into {len(batch_files)} batches[/green]")
             return batch_files
             
-    except ImportError:
-        console.print(f"[yellow]⚠ pypdf not available, cannot split large PDFs. Processing as single file.[/yellow]")
-        return [pdf_path]
     except Exception as e:
         console.print(f"[yellow]⚠ Error splitting PDF {pdf_path.name}: {e}. Processing as single file.[/yellow]")
         return [pdf_path]

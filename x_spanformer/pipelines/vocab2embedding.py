@@ -51,6 +51,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.vocab import VocabStats
 from x_spanformer.embedding.embedding_logging import setup_embedding_logging, get_embedding_logger
+from x_spanformer.embedding.embedding_utils import (
+    analyze_embedding_quality
+)
+from x_spanformer.pipelines.shared.text_processor import load_pretrain_records
 
 # Module-level logger that gets configured in main()
 logger = None
@@ -63,15 +67,15 @@ def get_logger() -> logging.Logger:
     return logger
 
 
-def load_corpus(corpus_path: str) -> List[str]:
+def load_corpus(corpus_path: str, max_length: Optional[int] = None) -> List[str]:
     """
     Load sequences from a JSONL file using PretrainRecord format.
     
-    This function mirrors the load_corpus() pattern from jsonl2vocab.py
-    and handles only the PretrainRecord format with 'raw' field extraction.
+    Uses the shared text processor for consistent corpus loading.
     
     Args:
         corpus_path: Path to the JSONL corpus file with PretrainRecord format
+        max_length: Optional maximum sequence length filter
         
     Returns:
         List of text sequences extracted from the corpus
@@ -80,71 +84,12 @@ def load_corpus(corpus_path: str) -> List[str]:
         FileNotFoundError: If the corpus file doesn't exist
         ValueError: If no valid sequences are found
     """
-    logger = get_logger()
-    logger.info("=" * 50)
-    logger.info("STAGE 1: CORPUS LOADING")
-    logger.info("=" * 50)
-    
-    sequences = []
-    total_records = 0
-    valid_records = 0
-    invalid_records = 0
-    discarded_records = 0
-    
-    with open(corpus_path, 'r', encoding='utf-8') as f:
-        for line_num, line in enumerate(f, 1):
-            try:
-                total_records += 1
-                record = json.loads(line)
-                
-                # Only support PretrainRecord format with 'raw' field
-                if isinstance(record, dict) and 'raw' in record:
-                    sequence = record['raw']
-                    
-                    # Skip discarded sequences
-                    if 'meta' in record and record['meta'].get('status') == 'discard':
-                        logger.debug(f"Line {line_num}: Skipping discarded sequence")
-                        discarded_records += 1
-                        continue
-                    
-                    if sequence and sequence.strip():
-                        sequences.append(sequence.strip())
-                        valid_records += 1
-                    else:
-                        logger.warning(f"Line {line_num}: Empty 'raw' field")
-                        invalid_records += 1
-                else:
-                    logger.warning(f"Line {line_num}: Record missing 'raw' field - only PretrainRecord format supported")
-                    invalid_records += 1
-                    
-            except json.JSONDecodeError as e:
-                logger.warning(f"Line {line_num}: Invalid JSON - {e}")
-                invalid_records += 1
-            except Exception as e:
-                logger.error(f"Line {line_num}: Unexpected error - {e}")
-                invalid_records += 1
-    
-    # Calculate corpus statistics
-    total_chars = sum(len(seq) for seq in sequences)
-    avg_sequence_length = total_chars / len(sequences) if sequences else 0
-    
-    logger.info("-" * 50)
-    logger.info("CORPUS LOADING SUMMARY:")
-    logger.info(f"  Total input records: {total_records}")
-    logger.info(f"  Valid sequences: {valid_records}")
-    logger.info(f"  Discarded sequences: {discarded_records}")
-    logger.info(f"  Invalid records: {invalid_records}")
-    if total_records > 0:
-        logger.info(f"  Success rate: {valid_records/total_records*100:.1f}%")
-    else:
-        logger.info(f"  Success rate: N/A (no records)")
-    logger.info(f"  Total characters: {total_chars:,}")
-    logger.info(f"  Average sequence length: {avg_sequence_length:.1f} chars")
-    logger.info("-" * 50)
+    sequences, stats = load_pretrain_records(corpus_path, max_length)
     
     if not sequences:
-        raise ValueError(f"No valid sequences found in corpus file: {corpus_path}")
+        raise ValueError(f"No valid sequences found in {corpus_path}. Stats: {stats}")
     
+    get_logger().info(f"Successfully loaded {len(sequences)} sequences from corpus")
     return sequences
 
 
@@ -177,6 +122,37 @@ class UnigramLM(nn.Module):
         # Convert probabilities to log space for numerical stability
         log_probs = [math.log(vocab_dict[piece]) for piece in self.piece_to_idx.keys()]
         self.log_piece_probs = torch.tensor(log_probs, device=device, dtype=torch.float32)
+        
+        # Build prefix tree for efficient matching
+        self._build_prefix_tree(vocab_dict.keys())
+    
+    def _build_prefix_tree(self, pieces):
+        """Build prefix tree for efficient piece matching."""
+        self.prefix_tree = {}
+        for piece in pieces:
+            node = self.prefix_tree
+            for char in piece:
+                if char not in node:
+                    node[char] = {}
+                node = node[char]
+            node['_end'] = self.piece_to_idx[piece]
+    
+    def _find_matches_at_position(self, sequence: str, pos: int):
+        """Find all pieces that match starting at position pos using prefix tree."""
+        matches = []
+        node = self.prefix_tree
+        
+        for i in range(pos, min(pos + self.max_piece_length, len(sequence))):
+            char = sequence[i]
+            if char not in node:
+                break
+            node = node[char]
+            if '_end' in node:
+                piece_idx = node['_end']
+                piece_len = i - pos + 1
+                matches.append((piece_idx, piece_len))
+        
+        return matches
     
     def matches_at_position(self, sequence: str, pos: int, piece: str) -> bool:
         """Check if piece matches sequence starting at position pos."""
@@ -203,39 +179,40 @@ class UnigramLM(nn.Module):
         alpha = torch.full((T + 1,), -float('inf'), device=self.device)
         alpha[0] = 0.0  # log(1) = 0
         
-        # Forward pass
+        # Forward pass with prefix tree optimization
         for t in range(T):
             if alpha[t] == -float('inf'):
                 continue
                 
-            for piece_idx, piece in self.idx_to_piece.items():
-                if self.matches_at_position(sequence, t, piece):
-                    next_pos = t + len(piece)
-                    if next_pos <= T:
-                        # α_{t+|u_i|} += α_t * p(u_i)  (in log space)
-                        alpha[next_pos] = torch.logsumexp(
-                            torch.stack([alpha[next_pos], 
-                                       alpha[t] + self.log_piece_probs[piece_idx]]),
-                            dim=0
-                        )
+            # Use prefix tree to find all matching pieces efficiently
+            matches = self._find_matches_at_position(sequence, t)
+            for piece_idx, piece_len in matches:
+                next_pos = t + piece_len
+                if next_pos <= T:
+                    # α_{t+|u_i|} += α_t * p(u_i)  (in log space)
+                    alpha[next_pos] = torch.logsumexp(
+                        torch.stack([alpha[next_pos], 
+                                   alpha[t] + self.log_piece_probs[piece_idx]]),
+                        dim=0
+                    )
         
         # Initialize backward probabilities β_t
         # β_t = probability of generating sequence[t:T] 
         beta = torch.full((T + 1,), -float('inf'), device=self.device)
         beta[T] = 0.0  # log(1) = 0
         
-        # Backward pass
+        # Backward pass with prefix tree optimization
         for t in range(T - 1, -1, -1):
-            for piece_idx, piece in self.idx_to_piece.items():
-                if self.matches_at_position(sequence, t, piece):
-                    next_pos = t + len(piece)
-                    if next_pos <= T and beta[next_pos] != -float('inf'):
-                        # β_t += p(u_i) * β_{t+|u_i|}  (in log space)
-                        beta[t] = torch.logsumexp(
-                            torch.stack([beta[t],
-                                       self.log_piece_probs[piece_idx] + beta[next_pos]]),
-                            dim=0
-                        )
+            matches = self._find_matches_at_position(sequence, t)
+            for piece_idx, piece_len in matches:
+                next_pos = t + piece_len
+                if next_pos <= T and beta[next_pos] != -float('inf'):
+                    # β_t += p(u_i) * β_{t+|u_i|}  (in log space)
+                    beta[t] = torch.logsumexp(
+                        torch.stack([beta[t],
+                                   self.log_piece_probs[piece_idx] + beta[next_pos]]),
+                        dim=0
+                    )
         
         # Compute soft piece probabilities
         # P[t,i] = α_t * p(u_i) * β_{t+|u_i|} / α_T
@@ -247,15 +224,15 @@ class UnigramLM(nn.Module):
             return P
         
         for t in range(T):
-            for piece_idx, piece in self.idx_to_piece.items():
-                if self.matches_at_position(sequence, t, piece):
-                    next_pos = t + len(piece)
-                    if next_pos <= T:
-                        log_prob = (alpha[t] + 
-                                  self.log_piece_probs[piece_idx] + 
-                                  beta[next_pos] - 
-                                  normalization)
-                        P[t, piece_idx] = torch.exp(log_prob)
+            matches = self._find_matches_at_position(sequence, t)
+            for piece_idx, piece_len in matches:
+                next_pos = t + piece_len
+                if next_pos <= T:
+                    log_prob = (alpha[t] + 
+                              self.log_piece_probs[piece_idx] + 
+                              beta[next_pos] - 
+                              normalization)
+                    P[t, piece_idx] = torch.exp(log_prob)
         
         return P
 
@@ -509,6 +486,16 @@ class Vocab2EmbeddingPipeline:
         self.device = device
         self.config = self._load_config(config_path)
         
+        # Extract all config parameters
+        self.embed_dim = self.config.get('embed_dim', 256)
+        self.max_sequence_length = self.config.get('max_sequence_length', 512)
+        self.epsilon = self.config.get('epsilon', 1e-12)
+        self.max_piece_length = self.config.get('max_piece_length', 16)
+        self.save_intermediate = self.config.get('save_intermediate', True)
+        self.save_numpy_arrays = self.config.get('save_numpy_arrays', True)
+        self.save_json_metadata = self.config.get('save_json_metadata', True)
+        self.add_analysis = self.config.get('add_analysis', False)
+        
         # Initialize components (will be set when vocabulary is loaded)
         self.unigram_lm: Optional[UnigramLM] = None
         self.seed_embedder: Optional[SeedEmbedder] = None  
@@ -529,26 +516,49 @@ class Vocab2EmbeddingPipeline:
         Args:
             vocab_path: Path to vocabulary file from Section 3.1 pipeline
         """
+        if not Path(vocab_path).exists():
+            raise FileNotFoundError(f"Vocabulary file not found: {vocab_path}")
+        
         vocab_dict = {}
+        total_prob = 0.0
+        
+        get_logger().info(f"Loading vocabulary from: {vocab_path}")
         
         with open(vocab_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                entry = json.loads(line)
-                if 'piece' in entry and ('probability' in entry or 'prob' in entry):
-                    # Support both 'probability' and 'prob' field names
-                    prob = entry.get('probability', entry.get('prob'))
-                    if isinstance(prob, str):
-                        prob = float(prob)
-                    vocab_dict[entry['piece']] = prob
+            for line_num, line in enumerate(f, 1):
+                try:
+                    entry = json.loads(line)
+                    if 'piece' in entry and ('probability' in entry or 'prob' in entry):
+                        # Support both 'probability' and 'prob' field names
+                        prob = entry.get('probability', entry.get('prob'))
+                        if isinstance(prob, str):
+                            prob = float(prob)
+                        
+                        if prob <= 0 or prob > 1:
+                            get_logger().warning(f"Line {line_num}: Invalid probability {prob} for piece '{entry['piece']}'")
+                            continue
+                            
+                        vocab_dict[entry['piece']] = prob
+                        total_prob += prob
+                    else:
+                        get_logger().warning(f"Line {line_num}: Missing required fields")
+                except Exception as e:
+                    get_logger().error(f"Line {line_num}: Error parsing vocabulary entry: {e}")
         
-        get_logger().info(f"Loaded vocabulary with {len(vocab_dict)} pieces")
+        # Validate vocabulary properties
+        if not vocab_dict:
+            raise ValueError("No valid vocabulary entries found")
+        
+        get_logger().info(f"Loaded vocabulary: {len(vocab_dict)} pieces, total prob: {total_prob:.6f}")
+        
+        # Check for single codepoints
+        single_chars = {piece for piece in vocab_dict if len(piece) == 1}
+        get_logger().info(f"Single codepoint coverage: {len(single_chars)} unique characters")
         
         # Initialize pipeline components
-        embed_dim = self.config.get('embed_dim', 256)
-        
         self.unigram_lm = UnigramLM(vocab_dict, self.device)
-        self.seed_embedder = SeedEmbedder(vocab_dict, embed_dim, self.device).to(self.device)
-        self.conv_encoder = ConvEncoder(embed_dim, self.device).to(self.device)
+        self.seed_embedder = SeedEmbedder(vocab_dict, self.embed_dim, self.device).to(self.device)
+        self.conv_encoder = ConvEncoder(self.embed_dim, self.device).to(self.device)
         self.candidate_generator = SpanCandidateGenerator(
             vocab_dict,
             tau_vocab=float(self.config.get('tau_vocab', 1e-4)),
@@ -582,7 +592,7 @@ class Vocab2EmbeddingPipeline:
         # Step 4: Candidate generation
         candidates = self.candidate_generator.generate_candidates(sequence)
         
-        return {
+        result = {
             'soft_probabilities': soft_probs.detach().cpu().numpy(),
             'seed_embeddings': seed_embeddings.detach().cpu().numpy(), 
             'contextual_embeddings': contextual_embeddings.detach().cpu().numpy(),
@@ -590,6 +600,19 @@ class Vocab2EmbeddingPipeline:
             'sequence_length': len(sequence),
             'num_candidates': len(candidates)
         }
+        
+        # Add analysis if enabled
+        if self.add_analysis:
+            try:
+                from x_spanformer.embedding.embedding_utils import analyze_embedding_quality
+                result['analysis'] = analyze_embedding_quality(
+                    contextual_embeddings.detach().cpu().numpy()
+                )
+                get_logger().debug("Added embedding quality analysis to results")
+            except Exception as e:
+                get_logger().warning(f"Error during embedding analysis: {e}")
+        
+        return result
 
 
 def parse_args():
@@ -673,73 +696,56 @@ def main():
     pipeline = Vocab2EmbeddingPipeline(args.config, args.device)
     pipeline.load_vocabulary(args.vocab)
     
-    # Process sequences from file
+    # Load sequences using shared utility
+    logger.info(f"Loading sequences from: {args.input}")
+    sequences, stats = load_pretrain_records(args.input, args.max_length)
+    
+    if not sequences:
+        logger.error("No valid sequences found in input file")
+        return
+    
+    logger.info(f"Loaded {len(sequences)} sequences for processing")
+    
+    # Process sequences from loaded data
     processed_count = 0
     start_time = time.time()
-
-    logger.info(f"Processing sequences from: {args.input}")
     
-    with open(args.input, 'r', encoding='utf-8') as infile:
-        for line_num, line in enumerate(infile, 1):
-            try:
-                record = json.loads(line)
+    for seq_id, sequence in enumerate(sequences, 1):
+        try:
+            # Process sequence
+            result = pipeline.process_sequence(sequence)
+            
+            # Save results
+            output_file = output_path / f"embedding_{seq_id:06d}.json"
+            with open(output_file, 'w', encoding='utf-8') as outfile:
+                # Convert numpy arrays to lists for JSON serialization
+                json_result = {
+                    'sequence_id': seq_id,
+                    'sequence': sequence,
+                    'sequence_length': result['sequence_length'],
+                    'num_candidates': result['num_candidates'],
+                    'span_candidates': result['span_candidates'],
+                    'soft_probabilities_shape': result['soft_probabilities'].shape,
+                    'seed_embeddings_shape': result['seed_embeddings'].shape, 
+                    'contextual_embeddings_shape': result['contextual_embeddings'].shape
+                }
+                json.dump(json_result, outfile, ensure_ascii=False, indent=2)
+            
+            # Save embeddings as numpy files for efficient loading
+            np.save(output_path / f"soft_probs_{seq_id:06d}.npy", result['soft_probabilities'])
+            np.save(output_path / f"seed_emb_{seq_id:06d}.npy", result['seed_embeddings'])
+            np.save(output_path / f"context_emb_{seq_id:06d}.npy", result['contextual_embeddings'])
+            
+            processed_count += 1
+            
+            if processed_count % 100 == 0:
+                elapsed = time.time() - start_time
+                rate = processed_count / elapsed
+                logger.info(f"Processed {processed_count} sequences ({rate:.2f} seq/sec)")
                 
-                # Extract sequence using PretrainRecord format only
-                sequence = None
-                if isinstance(record, dict) and 'raw' in record:
-                    sequence = record['raw']
-                    # Skip discarded sequences
-                    if 'meta' in record and record['meta'].get('status') == 'discard':
-                        logger.debug(f"Line {line_num}: Skipping discarded sequence")
-                        continue
-                else:
-                    logger.warning(f"Line {line_num}: Record missing 'raw' field - only PretrainRecord format supported")
-                    continue
-
-                # Validate sequence
-                if not sequence or not sequence.strip():
-                    logger.warning(f"Line {line_num}: Empty sequence")
-                    continue
-                
-                # Skip sequences that are too long
-                if len(sequence) > args.max_length:
-                    logger.warning(f"Line {line_num}: Sequence too long ({len(sequence)} > {args.max_length})")
-                    continue
-                
-                # Process sequence
-                result = pipeline.process_sequence(sequence)
-                
-                # Save results
-                output_file = output_path / f"embedding_{line_num:06d}.json"
-                with open(output_file, 'w', encoding='utf-8') as outfile:
-                    # Convert numpy arrays to lists for JSON serialization
-                    json_result = {
-                        'sequence_id': line_num,
-                        'sequence': sequence,
-                        'sequence_length': result['sequence_length'],
-                        'num_candidates': result['num_candidates'],
-                        'span_candidates': result['span_candidates'],
-                        'soft_probabilities_shape': result['soft_probabilities'].shape,
-                        'seed_embeddings_shape': result['seed_embeddings'].shape, 
-                        'contextual_embeddings_shape': result['contextual_embeddings'].shape
-                    }
-                    json.dump(json_result, outfile, ensure_ascii=False, indent=2)
-                
-                # Save embeddings as numpy files for efficient loading
-                np.save(output_path / f"soft_probs_{line_num:06d}.npy", result['soft_probabilities'])
-                np.save(output_path / f"seed_emb_{line_num:06d}.npy", result['seed_embeddings'])
-                np.save(output_path / f"context_emb_{line_num:06d}.npy", result['contextual_embeddings'])
-                
-                processed_count += 1
-                
-                if processed_count % 100 == 0:
-                    elapsed = time.time() - start_time
-                    rate = processed_count / elapsed
-                    logger.info(f"Processed {processed_count} sequences ({rate:.2f} seq/sec)")
-                    
-            except Exception as e:
-                logger.error(f"Line {line_num}: Error processing sequence: {e}")
-                continue
+        except Exception as e:
+            logger.error(f"Sequence {seq_id}: Error processing sequence: {e}")
+            continue
     
     # Final statistics
     elapsed = time.time() - start_time

@@ -156,9 +156,9 @@ class TestJsonl2VocabPipeline:
         
         corpus = jsonl2vocab.load_corpus([jsonl_file])
         
-        assert len(corpus) == 2
+        assert len(corpus) == 1  # Only the "keep" record should be included
         assert "hello world" in corpus
-        assert "goodbye" in corpus
+        # "goodbye" should be filtered out due to "discard" status
     
     def test_load_corpus_empty_text_filtered(self):
         """Test that empty/whitespace text is filtered out."""

@@ -1,6 +1,8 @@
 # 🧬 Vocab2Embedding Pipeline
 
-The vocab2embedding pipeline implements **Section 3.2** of the X-Spanformer paper: "**Seed Embeddings and Candidate Set Generation**". This pipeline transforms the vocabulary output from Section 3.1 into contextualized embeddings and span candidates ready for downstream processing.
+This pipeline implements Section 3.2 of the X-Spanformer paper, converting vocabulary pieces into contextualized embeddings and generating span candidates for downstream processing. It consists of four main components integrated into a unified processing workflow.
+
+The implementation uses shared text processing utilities from `x_spanformer.pipelines.shared.text_processor` for consistent corpus handling and assumes all dependencies specified in `pyproject.toml` are available (PyTorch, NumPy, matplotlib, seaborn, etc.).
 
 ## 🚀 Overview
 

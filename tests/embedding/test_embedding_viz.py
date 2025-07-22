@@ -21,10 +21,6 @@ from x_spanformer.embedding.embedding_viz import (
     create_comprehensive_visualization
 )
 
-# Skip visualization tests if matplotlib is not available
-pytest.importorskip("matplotlib")
-pytest.importorskip("seaborn")
-
 
 class TestPlotSoftProbabilities:
     """Test soft probabilities visualization."""
