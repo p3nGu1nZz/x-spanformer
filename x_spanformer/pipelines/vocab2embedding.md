@@ -1,282 +1,358 @@
-# 🧬 Vocab2Embedding Pipeline
+# Vocab2Embedding Pipeline Documentation
 
-This pipeline implements Section 3.2 of the X-Spanformer paper, converting vocabulary pieces into contextualized embeddings and generating span candidates for downstream processing. It consists of four main components integrated into a unified processing workflow.
+## Overview
 
-The implementation uses shared text processing utilities from `x_spanformer.pipelines.shared.text_processor` for consistent corpus handling and assumes all dependencies specified in `pyproject.toml` are available (PyTorch, NumPy, matplotlib, seaborn, etc.).
+The `vocab2embedding` pipeline implements **Section 3.2: Seed Embeddings and Candidate Set Generation** from the X-Spanformer paper. This pipeline transforms vocabulary files from the Section 3.1 pipeline into contextualized embeddings and span candidates using a tokenizer-free, span-aware approach.
 
-## 🚀 Overview
+### Key Innovations
 
-The pipeline implements four key components described in the paper:
-
-1. **🧮 Soft Probability Computation** (Section 3.2.1): Forward-backward algorithm adapted from HMMs
-2. **🌱 Seed Embeddings** (Section 3.2.2): Vocabulary-aware Xavier initialization  
-3. **🔄 Contextual Encoding** (Section 3.2.3): Multi-scale dilated convolutions
-4. **📍 Span Candidate Generation** (Section 3.2.4): Vocabulary-informed filtering
+- **Soft Probability Computation**: Forward-backward algorithm for probabilistic piece assignment
+- **Vocabulary-Aware Initialization**: Frequency-scaled Xavier initialization for embedding matrices  
+- **Multi-Scale Contextualization**: Dilated convolutional encoder with configurable receptive fields
+- **Dynamic Span Width**: Corpus-adaptive maximum span width computation
+- **Vocabulary-Informed Filtering**: Three-tier span candidate filtering system
 
 ## Architecture
 
-### UnigramLM Class
-Implements the forward-backward algorithm to compute soft piece probabilities P[t,i] for each position t and vocabulary piece i.
+### 1. Soft Probability Computation (Section 3.2.1)
 
-**Key Features:**
-- Log-space computation for numerical stability
-- Efficient piece matching using prefix trees
-- Handles variable-length pieces correctly
+The `UnigramLM` class implements the forward-backward algorithm to compute position-wise soft piece probabilities:
 
-**Mathematical Implementation:**
 ```
-α_t = probability of generating sequence[0:t]
-β_t = probability of generating sequence[t:T]
-P[t,i] = (α_t × p(u_i) × β_{t+|u_i|}) / α_T
+P[t,i] = Pr(piece u_i starts at position t | sequence, vocabulary)
 ```
 
-### SeedEmbedder Class
-Generates initial embeddings using vocabulary-aware Xavier initialization (Eq. 4).
+**Mathematical Foundation:**
+- **Forward Pass**: `α_{t+1} = Σ_{u_i matches at t} α_t · p(u_i)`
+- **Backward Pass**: `β_t = Σ_{u_i matches at t} p(u_i) · β_{t+|u_i|}`
+- **Soft Probabilities**: `P[t,i] = (α_t · p(u_i) · β_{t+|u_i|}) / α_{T+1}`
+
+### 2. Seed Embedding Generation (Section 3.2.2)
+
+The `SeedEmbedder` class creates initial embeddings using vocabulary-aware initialization:
+
+```
+H^0 = P · W_emb
+```
+
+Where:
+- `P ∈ R^{T×V}`: Soft probability matrix
+- `W_emb ∈ R^{V×d}`: Embedding matrix with frequency-scaled initialization
+- `H^0 ∈ R^{T×d}`: Seed embeddings
 
 **Initialization Strategy:**
-- Single codepoints: `std = sqrt(2/d)`
-- Multi-codepoint pieces: `std = sqrt(2/(d×p(u)))`
-- Higher-probability pieces get more stable gradients
+- **Frequent pieces**: Lower variance (more stable gradients)
+- **Single codepoints**: Standard Xavier initialization
+- **Multi-character pieces**: Frequency-scaled Gaussian initialization
 
-**Forward Pass:**
+### 3. Multi-Scale Contextualization (Section 3.2.3)
+
+The `ConvEncoderKernel` applies multi-scale dilated convolutions:
+
 ```
-H^0 = P × W_emb
+H = ConvEncoder(H^0)
 ```
 
-### ConvEncoder Class
-Multi-scale contextualization using dilated convolutions.
+**Architecture Details:**
+- **Default kernels**: `[3, 5, 7]` for hierarchical pattern capture
+- **Default dilations**: `[1, 2, 4]` for exponential receptive field growth
+- **Total pathways**: `|kernels| × |dilations|` (9 pathways by default)
+- **Receptive fields**: Range from 3 positions to 25 positions
 
-**Architecture:**
-- 3 parallel convolution branches: kernels [3,5,7], dilations [1,2,4]  
-- Concatenation followed by projection back to embedding dimension
-- Residual connections and layer normalization
-- GELU activation functions
+### 4. Dynamic Span Width Computation
 
-### SpanCandidateGenerator Class
-Filters potential spans using three criteria from Algorithm 3:
+**Formula:**
+```
+w_max = max(longest_word_length, max_sequence_length // 2)
+```
 
-1. **Vocabulary Alignment**: `p(span) ≥ τ_vocab`
-2. **Compositional Potential**: Product of piece probabilities ≥ `τ_comp`
-3. **Whitespace Coherence**: Respects linguistic boundaries
+**Implementation:**
+- Analyze corpus for longest whitespace-separated word
+- Hard limit at `max_sequence_length // 2` (default: 256 for 512-length sequences)
+- Ensures linguistic coverage while maintaining computational efficiency
+
+### 5. Span Candidate Generation (Section 3.2.4)
+
+The `SpanCandidateGenerator` applies three filtering criteria:
+
+1. **Vocabulary Alignment**: `span matches high-probability piece (≥ τ_vocab)`
+2. **Compositional Potential**: `segmentation probability ≥ τ_comp`
+3. **Whitespace Coherence**: Complete words or phrase boundaries
+
+**Complexity**: `O(T · w_max)` instead of quadratic `O(T²)`
+
+## Configuration
+
+### Default Configuration (from `config/pipelines/vocab2embedding.yaml`)
+
+```yaml
+# Neural architecture parameters
+architecture:
+  embed_dim: 512                    # Embedding dimensions
+  conv_kernels: [3, 5, 7]          # Multi-scale kernel sizes
+  conv_dilations: [1, 2, 4]        # Dilation rates
+  dropout_rate: 0.1                 # Regularization
+
+# Span generation parameters
+span_generation:
+  tau_vocab: 1e-4                   # Vocabulary alignment threshold
+  tau_comp: 1e-6                    # Compositional potential threshold
+
+# Processing configuration
+processing:
+  device: "cuda"                    # Computation device
+  device_id: 0                      # GPU device ID
+  batch_size: 64                    # Batch processing size
+  max_sequence_length: 512          # Maximum input length
+
+# Numerical stability
+numerical:
+  epsilon: 1e-12                    # Numerical stability constant
+  max_piece_length: 8               # Maximum vocabulary piece length
+
+# Output configuration
+output:
+  save_intermediate: true           # Save intermediate representations
+  save_numpy_arrays: true          # Export .npy files
+  save_json_metadata: true         # Include JSON metadata
+  add_analysis: false               # Detailed analysis
+```
+
+## Input/Output
+
+### Input Format
+
+**Vocabulary File** (`vocab.jsonl` from Section 3.1):
+```json
+{"piece": "the", "probability": 0.0234}
+{"piece": "and", "probability": 0.0198}
+{"piece": " ", "probability": 0.1567}
+```
+
+**Dataset File** (`dataset.jsonl` with PretrainRecord format):
+```json
+{"raw": "Hello world example", "type": "text", "meta": {}}
+{"raw": "function add(x, y) { return x + y; }", "type": "code", "meta": {}}
+```
+
+### Output Structure
+
+```
+output_dir/
+├── json/                         # JSON metadata files
+│   ├── embedding_000001.json
+│   └── embedding_000002.json
+├── seed/                         # Seed embeddings (.npy)
+│   ├── seed_emb_000001.npy
+│   └── seed_emb_000002.npy
+├── context/                      # Contextual embeddings (.npy)
+│   ├── context_emb_000001.npy
+│   └── context_emb_000002.npy
+├── soft_prob/                    # Soft probabilities (.npy)
+│   ├── soft_probs_000001.npy
+│   └── soft_probs_000002.npy
+└── embedding.log                 # Processing log
+```
+
+### JSON Metadata Format
+
+```json
+{
+  "sequence_id": 1,
+  "sequence": "Hello world",
+  "sequence_length": 11,
+  "num_candidates": 24,
+  "span_width": 32,
+  "span_candidates": [[0, 5], [6, 11], [0, 11]],
+  "timestamp": "2025-01-22T10:30:45Z"
+}
+```
+
+### Array Shapes
+
+- **Soft Probabilities**: `(sequence_length, vocabulary_size)`
+- **Seed Embeddings**: `(sequence_length, embed_dim)`
+- **Context Embeddings**: `(sequence_length, embed_dim)`
 
 ## Usage
 
 ### Basic Usage
-```python
-from x_spanformer.pipelines.vocab2embedding import Vocab2EmbeddingPipeline
 
-# Initialize pipeline
-pipeline = Vocab2EmbeddingPipeline('config/pipelines/vocab2embedding.yaml')
-
-# Load vocabulary from Section 3.1 output
-pipeline.load_vocabulary('data/vocab/vocab.jsonl')
-
-# Process sequences
-result = pipeline.process_sequence("the quick brown fox")
-
-# Access results
-embeddings = result['contextual_embeddings']  # Shape: (T, d)
-candidates = result['span_candidates']        # List of (start, end) tuples
-soft_probs = result['soft_probabilities']     # Shape: (T, |V|)
-```
-
-### Command Line Usage
 ```bash
-# Process sequences from PretrainRecord format file
-uv run -m x_spanformer.pipelines.vocab2embedding \
-    --vocab data/vocab/out/vocab.jsonl \
-    --input data/vocab/out/corpus.jsonl \
-    --output data/embeddings/out \
-    --config config/pipelines/vocab2embedding.yaml \
-    --device cuda \
-    --batch-size 32 \
-    --max-length 512
+python -m x_spanformer.pipelines.vocab2embedding \
+  --vocab data/vocab/vocab.jsonl \
+  --input data/pretraining/dataset.jsonl \
+  --output data/embeddings \
+  --config config/pipelines/vocab2embedding.yaml
 ```
 
-### Arguments
+### Advanced Usage
 
-- `--vocab <VOCAB_FILE>`  
-  Path to vocab.jsonl file from Section 3.1 pipeline output
-- `--input <INPUT_FILE>`  
-  Path to input file with PretrainRecord format (dataset.jsonl or corpus.jsonl)
-- `--output <OUTPUT_DIR>`  
-  Output directory for embedding files and metadata  
-- `--config <CONFIG_FILE>` *(optional)*  
-  Path to YAML configuration file (default: `config/pipelines/vocab2embedding.yaml`)
-- `--device <DEVICE>` *(optional)*
-  PyTorch device for computation (default: `cuda` if available, else `cpu`)
-- `--batch-size <SIZE>` *(optional)*
-  Batch size for processing sequences (default: 32)
-- `--max-length <LENGTH>` *(optional)*
-  Maximum sequence length to process (default: 512)
-
-## Input Format Support
-
-The pipeline supports PretrainRecord format from the Section 3.1 pipeline:
-
-### PretrainRecord Format
-Direct usage of dataset.jsonl files from the vocabulary induction pipeline:
-```json
-{"raw": "the quick brown fox", "type": "text", "id": "001", "meta": {"source": "example.txt"}}
-{"raw": "jumps over the lazy dog", "type": "text", "id": "002", "meta": {"status": "validated"}}
+```bash
+# Custom configuration
+python -m x_spanformer.pipelines.vocab2embedding \
+  -v data/vocab/vocab.jsonl \
+  -i data/pretraining/dataset.jsonl \
+  -o data/embeddings \
+  -c config/custom_vocab2embedding.yaml
 ```
 
-**Features:**
-- Extracts text content from the `raw` field of PretrainRecord entries
-- Skips sequences marked as `status: "discard"` in metadata
-- Handles empty lines and malformed JSON gracefully
-- Logs processing statistics and corpus summary
+### Resume Processing
 
-## Configuration
+The pipeline automatically detects and resumes from existing outputs:
 
-The pipeline uses YAML configuration files with the following parameters:
-
-```yaml
-# Embedding parameters
-embed_dim: 256           # Embedding dimension d
-dropout_rate: 0.1        # Dropout rate
-
-# Span filtering thresholds
-tau_vocab: 1.0e-4        # Vocabulary alignment threshold
-tau_comp: 1.0e-6         # Compositional potential threshold  
-w_max: 64                # Maximum span width
-
-# Multi-scale convolution
-conv_kernels: [3, 5, 7]  # Kernel sizes
-conv_dilations: [1, 2, 4] # Dilation rates
-
-# Performance
-max_sequence_length: 512
-batch_size: 32
-device: "cuda"
+```bash
+# This will skip already processed sequences
+python -m x_spanformer.pipelines.vocab2embedding \
+  --vocab data/vocab/vocab.jsonl \
+  --input data/pretraining/dataset.jsonl \
+  --output data/embeddings
 ```
 
-## Output Format
+## Mathematical Details
 
-The pipeline generates several output files for each processed sequence:
+### Forward-Backward Algorithm
 
-### JSON Metadata (`embedding_XXXXXX.json`)
-```json
-{
-  "sequence_id": 1,
-  "sequence": "the quick brown fox",
-  "sequence_length": 18,
-  "num_candidates": 45,
-  "span_candidates": [[0,3], [0,9], [4,9], ...],
-  "soft_probabilities_shape": [18, 5000],
-  "seed_embeddings_shape": [18, 256],
-  "contextual_embeddings_shape": [18, 256]
-}
+**Forward Probabilities:**
+```
+α_1 = 1
+α_{t+1} = Σ_{u_i: match(x,t,u_i)} α_t · p(u_i)
 ```
 
-### Numpy Arrays
-- `soft_probs_XXXXXX.npy`: Soft piece probabilities (T × |V|)
-- `seed_emb_XXXXXX.npy`: Seed embeddings (T × d)  
-- `context_emb_XXXXXX.npy`: Contextual embeddings (T × d)
+**Backward Probabilities:**
+```
+β_{T+1} = 1
+β_t = Σ_{u_i: match(x,t,u_i)} p(u_i) · β_{t+|u_i|}
+```
 
-## Implementation Details
+**Soft Piece Probabilities:**
+```
+P_{t,i} = (α_t · p(u_i) · β_{t+|u_i|}) / α_{T+1}  if match(x,t,u_i), else 0
+```
+
+### Receptive Field Calculations
+
+For kernel size `k` and dilation `d`:
+```
+Receptive Field = 1 + (k-1) × d
+Padding = ((k-1) × d) // 2
+```
+
+**Example configurations:**
+- Kernel=3, Dilation=1: RF=3, Padding=1
+- Kernel=5, Dilation=2: RF=9, Padding=4  
+- Kernel=7, Dilation=4: RF=25, Padding=12
+
+### Dynamic w_max Computation
+
+```python
+import re
+
+def compute_dynamic_w_max(sequences, max_sequence_length):
+    max_word_length = 0
+    for sequence in sequences:
+        words = re.split(r'\s+', sequence.strip())
+        for word in words:
+            if word and len(word) > max_word_length:
+                max_word_length = len(word)
+    
+    corpus_based = max_word_length
+    sequence_based = max_sequence_length // 2
+    return max(corpus_based, sequence_based)
+```
+
+## Performance Characteristics
 
 ### Computational Complexity
-Following Proposition 3 from the paper:
-- **Time**: O(T × |V| × L_max + T × d² + T × w_max²)
-- **Space**: O(T × |V| + T × d)
 
-Where:
-- T = sequence length
-- |V| = vocabulary size
-- L_max = maximum piece length
-- d = embedding dimension
-- w_max = maximum span width
-
-### Memory Optimization
-- Sparse tensor support for probability matrices
-- Chunked processing for very long sequences  
-- GPU memory streaming for batch processing
-- Efficient piece matching with prefix trees
-
-### Numerical Stability
-- Log-space forward-backward computation
-- Gradient clipping in embedding initialization
-- Epsilon constants for zero-probability handling
-
-## Testing
-
-Run comprehensive tests with:
-```bash
-python -m pytest tests/test_pipelines_vocab2embedding.py -v
-```
-
-Tests cover:
-- Forward-backward algorithm correctness
-- Xavier initialization scaling
-- Multi-scale convolution functionality
-- Span candidate filtering logic
-- End-to-end pipeline integration
-- Mathematical formulation compliance
-
-## Integration with Other Pipelines
-
-### Input Dependencies
-- **vocab.jsonl**: Output from `jsonl2vocab.py` (Section 3.1)
-- **dataset.jsonl**: PretrainRecord format files from the vocabulary induction pipeline
-
-### Output Usage  
-- Embeddings feed into span boundary prediction modules
-- Candidates provide search space for span selection
-- Soft probabilities enable differentiable segmentation
-
-## Performance Considerations
-
-### GPU Acceleration
-- All matrix operations are GPU-accelerated
-- Batch processing reduces memory overhead
-- Mixed precision training supported
-
-### Scaling Recommendations
-- **Small datasets** (< 1M sequences): Single GPU sufficient
-- **Medium datasets** (1-10M sequences): Multi-GPU data parallelism  
-- **Large datasets** (> 10M sequences): Distributed processing recommended
+- **Soft Probability Computation**: `O(T × V × L_max)`
+- **Seed Embedding**: `O(T × V × d)`
+- **Convolution**: `O(T × d² × |K| × |D|)`
+- **Span Enumeration**: `O(T × w_max)` (reduced from `O(T²)`)
 
 ### Memory Usage
-Typical memory requirements:
-- **CPU**: 2-4 GB for vocabulary + 1-2 GB per sequence batch
-- **GPU**: 4-8 GB for model + 2-4 GB per sequence batch
+
+- **Soft Probability Matrix**: `T × V × 4 bytes` (float32)
+- **Embeddings**: `T × d × 4 bytes` each for seed and context
+- **Kernel Parameters**: Minimal (reused across sequences)
+
+### Typical Performance
+
+With default configuration (embed_dim=512, T=256):
+- **Processing Time**: ~0.5-2 seconds per sequence (GPU)
+- **Memory per Sequence**: ~10-50 MB depending on vocabulary size
+- **GPU Utilization**: High during convolution, moderate during enumeration
+
+## Logging and Monitoring
+
+### Log Levels
+
+The pipeline provides detailed logging across 5 stages:
+
+1. **PIPELINE INITIALIZATION**: Configuration loading and validation
+2. **VOCABULARY LOADING**: Vocabulary statistics and component initialization  
+3. **SEQUENCE LOADING**: Corpus statistics and preprocessing
+4. **DYNAMIC W_MAX COMPUTATION**: Span width calculation details
+5. **SEQUENCE PROCESSING**: Per-sequence processing statistics
+
+### Key Metrics Logged
+
+- **Vocabulary**: Size, single codepoint coverage, probability distribution
+- **Device**: CUDA availability, selected device, memory usage
+- **Sequences**: Count, length statistics, processing rate
+- **Dynamic w_max**: Corpus-based vs sequence-based values
+- **File Sizes**: Individual array sizes and total storage
+
+### Error Handling
+
+- **Graceful Shutdown**: Handles SIGINT/SIGTERM signals
+- **Resume Capability**: Automatic detection of partial processing
+- **Validation**: Input format validation and error reporting
+- **Resource Management**: Memory cleanup and device management
+
+## Integration
+
+### Upstream Dependencies
+
+- **Section 3.1 Pipeline**: Requires `vocab.jsonl` output
+- **Dataset Format**: PretrainRecord schema with `"raw"` field
+- **Kernel Package**: Uses `x_spanformer.kernel` for validation and convolution
+
+### Downstream Usage
+
+- **Section 3.3+ Pipelines**: Provides contextualized embeddings and span candidates
+- **Analysis Tools**: Compatible with embedding analysis utilities
+- **Export Formats**: NumPy arrays for ML frameworks, JSON for metadata
+
+### Schema Compatibility
+
+- **Input**: `PretrainRecord` and `VocabEntry` schemas
+- **Output**: `EmbeddingResult` schema with numpy array attachments
+- **Configuration**: YAML schema with nested architecture/processing/output sections
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **CUDA Out of Memory**
-   - Reduce batch size or max sequence length
-   - Enable gradient checkpointing
-   - Use CPU fallback for very long sequences
+1. **CUDA Out of Memory**: Reduce `batch_size` or `max_sequence_length`
+2. **Slow Processing**: Check GPU utilization, consider CPU fallback
+3. **Large Output Files**: Disable `save_intermediate` or `add_analysis`
+4. **Resume Failures**: Check file permissions and disk space
 
-2. **Slow Forward-Backward**
-   - Check vocabulary size (prune low-probability pieces)
-   - Verify piece length distribution
-   - Consider approximate algorithms for very large vocabularies
+### Configuration Tuning
 
-3. **Poor Span Candidates**
-   - Adjust threshold parameters (tau_vocab, tau_comp)
-   - Verify vocabulary quality from Section 3.1
-   - Check whitespace coherence implementation
+- **For Large Vocabularies**: Increase GPU memory allocation
+- **For Long Sequences**: Adjust `w_max` computation or sequence truncation
+- **For Speed**: Reduce conv_kernels/dilations or disable analysis
+- **For Quality**: Increase embedding dimensions or add regularization
 
-### Debugging
+### Performance Optimization
 
-Enable verbose logging:
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
-```
+- **Batch Processing**: Pipeline processes sequences individually but efficiently
+- **Memory Management**: Automatic cleanup between sequences
+- **Device Selection**: Automatic NVIDIA GPU selection when available
+- **Caching**: Vocabulary components cached across sequences
 
-Monitor key metrics:
-- Forward-backward convergence  
-- Embedding variance after initialization
-- Candidate set coverage vs. computational cost
+---
 
-## References
-
-- Section 3.2 of X-Spanformer paper
-- Forward-backward algorithm: Baum et al. (1970)
-- Xavier initialization: Glorot & Bengio (2010)
-- Dilated convolutions: Yu & Koltun (2016)
+This pipeline serves as the critical bridge between statistical vocabulary induction (Section 3.1) and span-aware encoding (Section 3.3+), providing the mathematical foundation for tokenizer-free, adaptive text processing in X-Spanformer.
