@@ -82,15 +82,33 @@ soft_probs = result['soft_probabilities']     # Shape: (T, |V|)
 
 ### Command Line Usage
 ```bash
-# Using dataset.jsonl from the Section 3.1 pipeline
-python -m x_spanformer.pipelines.vocab2embedding \
-    --vocab data/vocab/vocab.jsonl \
-    --input data/embedding/in \
+# Process sequences from PretrainRecord format file
+uv run -m x_spanformer.pipelines.vocab2embedding \
+    --vocab data/vocab/out/vocab.jsonl \
+    --input data/vocab/out/corpus.jsonl \
     --output data/embeddings/out \
     --config config/pipelines/vocab2embedding.yaml \
     --device cuda \
-    --batch-size 32
+    --batch-size 32 \
+    --max-length 512
 ```
+
+### Arguments
+
+- `--vocab <VOCAB_FILE>`  
+  Path to vocab.jsonl file from Section 3.1 pipeline output
+- `--input <INPUT_FILE>`  
+  Path to input file with PretrainRecord format (dataset.jsonl or corpus.jsonl)
+- `--output <OUTPUT_DIR>`  
+  Output directory for embedding files and metadata  
+- `--config <CONFIG_FILE>` *(optional)*  
+  Path to YAML configuration file (default: `config/pipelines/vocab2embedding.yaml`)
+- `--device <DEVICE>` *(optional)*
+  PyTorch device for computation (default: `cuda` if available, else `cpu`)
+- `--batch-size <SIZE>` *(optional)*
+  Batch size for processing sequences (default: 32)
+- `--max-length <LENGTH>` *(optional)*
+  Maximum sequence length to process (default: 512)
 
 ## Input Format Support
 
