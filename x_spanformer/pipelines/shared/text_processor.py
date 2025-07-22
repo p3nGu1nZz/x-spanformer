@@ -4,10 +4,14 @@ Shared text processing utilities for pipelines.
 Contains common text splitting, concatenation, and length management functions
 used across different pipeline implementations (pdf2jsonl, repo2jsonl, etc.)
 """
+import json
+import logging
 import re
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Optional
 from x_spanformer.agents.rich_utils import console
+
+logger = logging.getLogger(__name__)
 
 
 def split_long_text(text: str, max_length: int = 512) -> List[str]:
@@ -251,3 +255,76 @@ def normalize_text_segments(spans: List[str], source_mapping: List[str],
         return concatenate_small_segments(expanded_spans, expanded_source_mapping, min_length, max_length)
     
     return expanded_spans, expanded_source_mapping
+
+
+def load_pretrain_records(file_path: str, max_length: Optional[int] = None) -> Tuple[List[str], Dict]:
+    """
+    Shared function for loading PretrainRecord format files.
+    Used by both vocab2embedding and jsonl2vocab pipelines.
+    
+    Args:
+        file_path: Path to JSONL file with PretrainRecord format
+        max_length: Optional maximum sequence length filter
+        
+    Returns:
+        Tuple of (sequences, statistics)
+    """
+    from x_spanformer.schema.pretrain_record import PretrainRecord
+    
+    sequences = []
+    stats = {'total': 0, 'valid': 0, 'discarded': 0, 'invalid': 0, 'too_long': 0}
+    
+    if not Path(file_path).exists():
+        raise FileNotFoundError(f"Corpus file not found: {file_path}")
+    
+    logger.info(f"Loading PretrainRecord sequences from: {file_path}")
+    
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line_num, line in enumerate(f, 1):
+            try:
+                stats['total'] += 1
+                record_data = json.loads(line)
+                
+                # Validate using PretrainRecord schema
+                try:
+                    record = PretrainRecord(**record_data)
+                except Exception as e:
+                    logger.debug(f"Line {line_num}: Schema validation failed: {e}")
+                    stats['invalid'] += 1
+                    continue
+                
+                # Skip explicitly discarded sequences
+                if record.meta and hasattr(record.meta, 'status') and record.meta.status == 'discard':
+                    stats['discarded'] += 1
+                    continue
+                
+                # Extract and validate sequence
+                sequence = record.raw.strip()
+                if not sequence:
+                    stats['invalid'] += 1
+                    continue
+                
+                # Apply length filter
+                if max_length and len(sequence) > max_length:
+                    stats['too_long'] += 1
+                    continue
+                
+                sequences.append(sequence)
+                stats['valid'] += 1
+                
+            except json.JSONDecodeError as e:
+                logger.debug(f"Line {line_num}: JSON decode error: {e}")
+                stats['invalid'] += 1
+            except Exception as e:
+                logger.debug(f"Line {line_num}: Unexpected error: {e}")
+                stats['invalid'] += 1
+    
+    logger.info(f"Loaded {stats['valid']} valid sequences from {stats['total']} total records")
+    if stats['discarded'] > 0:
+        logger.info(f"Skipped {stats['discarded']} explicitly discarded records")
+    if stats['too_long'] > 0:
+        logger.info(f"Skipped {stats['too_long']} sequences longer than {max_length}")
+    if stats['invalid'] > 0:
+        logger.warning(f"Failed to process {stats['invalid']} invalid records")
+    
+    return sequences, stats

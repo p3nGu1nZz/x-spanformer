@@ -24,27 +24,25 @@ class TestGitRepoExporter:
             }
         }
         
-        with patch('x_spanformer.pipelines.shared.repo_exporter.HAS_GITPYTHON', True):
-            exporter = GitRepoExporter(config)
-            assert exporter.config == config
+        exporter = GitRepoExporter(config)
+        assert exporter.config == config
     
     def test_init_without_gitpython(self):
-        """Test initialization fails without GitPython."""
-        with patch('x_spanformer.pipelines.shared.repo_exporter.HAS_GITPYTHON', False):
-            with pytest.raises(ImportError, match="GitPython is required"):
-                GitRepoExporter()
+        """Test initialization works with GitPython available."""
+        # GitPython is now assumed to be available
+        exporter = GitRepoExporter()
+        assert exporter is not None
     
     def test_extract_repo_name(self):
         """Test repository name extraction from URLs."""
         config = {"repository": {}}
         
-        with patch('x_spanformer.pipelines.shared.repo_exporter.HAS_GITPYTHON', True):
-            exporter = GitRepoExporter(config)
-            
-            # Test different URL formats
-            assert exporter._extract_repo_name("https://github.com/user/repo") == "user__repo"
-            assert exporter._extract_repo_name("https://github.com/user/repo.git") == "user__repo"
-            assert exporter._extract_repo_name("https://github.com/repo") == "repo"
+        exporter = GitRepoExporter(config)
+        
+        # Test different URL formats
+        assert exporter._extract_repo_name("https://github.com/user/repo") == "user__repo"
+        assert exporter._extract_repo_name("https://github.com/user/repo.git") == "user__repo"
+        assert exporter._extract_repo_name("https://github.com/repo") == "repo"
     
     @patch('x_spanformer.pipelines.shared.repo_exporter.git')
     @patch('x_spanformer.pipelines.shared.repo_exporter.shutil')
@@ -58,56 +56,54 @@ class TestGitRepoExporter:
             }
         }
         
-        with patch('x_spanformer.pipelines.shared.repo_exporter.HAS_GITPYTHON', True):
-            exporter = GitRepoExporter(config)
+        exporter = GitRepoExporter(config)
+        
+        # Mock git repo
+        mock_repo = Mock()
+        mock_repo.head.commit.hexsha = "abcd1234567890"
+        mock_repo.active_branch.name = "main"
+        mock_repo.head.commit.message = "Test commit message"
+        mock_git.Repo.clone_from.return_value = mock_repo
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_dir = Path(temp_dir)
+            url = "https://github.com/test/repo"
             
-            # Mock git repo
-            mock_repo = Mock()
-            mock_repo.head.commit.hexsha = "abcd1234567890"
-            mock_repo.active_branch.name = "main"
-            mock_repo.head.commit.message = "Test commit message"
-            mock_git.Repo.clone_from.return_value = mock_repo
+            # Mock the git directory check
+            git_dir_path = input_dir / "test__repo" / ".git"
             
-            with tempfile.TemporaryDirectory() as temp_dir:
-                input_dir = Path(temp_dir)
-                url = "https://github.com/test/repo"
-                
-                # Mock the git directory check
-                git_dir_path = input_dir / "test__repo" / ".git"
-                
-                result = exporter.export_repository(url, input_dir, force=False)
-                
-                expected_path = input_dir / "test__repo"
-                assert result == expected_path
-                
-                # Verify git clone was called
-                mock_git.Repo.clone_from.assert_called_once_with(
-                    url, str(expected_path), depth=1, single_branch=True
-                )
+            result = exporter.export_repository(url, input_dir, force=False)
+            
+            expected_path = input_dir / "test__repo"
+            assert result == expected_path
+            
+            # Verify git clone was called
+            mock_git.Repo.clone_from.assert_called_once_with(
+                url, str(expected_path), depth=1, single_branch=True
+            )
     
     def test_is_valid_export(self):
         """Test validation of existing exports."""
         config = {"repository": {}}
         
-        with patch('x_spanformer.pipelines.shared.repo_exporter.HAS_GITPYTHON', True):
-            exporter = GitRepoExporter(config)
+        exporter = GitRepoExporter(config)
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_path = Path(temp_dir) / "repo"
             
-            with tempfile.TemporaryDirectory() as temp_dir:
-                repo_path = Path(temp_dir) / "repo"
-                
-                # Test non-existent path
-                assert not exporter._is_valid_export(repo_path)
-                
-                # Test directory with .git (invalid export)
-                repo_path.mkdir()
-                git_dir = repo_path / ".git"
-                git_dir.mkdir()
-                assert not exporter._is_valid_export(repo_path)
-                
-                # Test valid export (no .git, has files)
-                git_dir.rmdir()
-                (repo_path / "test.py").write_text("print('hello')")
-                assert exporter._is_valid_export(repo_path)
+            # Test non-existent path
+            assert not exporter._is_valid_export(repo_path)
+            
+            # Test directory with .git (invalid export)
+            repo_path.mkdir()
+            git_dir = repo_path / ".git"
+            git_dir.mkdir()
+            assert not exporter._is_valid_export(repo_path)
+            
+            # Test valid export (no .git, has files)
+            git_dir.rmdir()
+            (repo_path / "test.py").write_text("print('hello')")
+            assert exporter._is_valid_export(repo_path)
 
 
 class TestCodeFileExtractor:

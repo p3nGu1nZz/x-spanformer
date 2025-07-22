@@ -25,6 +25,11 @@ dev = [
     "pytest-asyncio>=1.0.0",
 ]
 
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:coroutine.*was never awaited:RuntimeWarning",
+]
+
 [tool.setuptools]
 [tool.setuptools.packages.find]
 where = ["."]

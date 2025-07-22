@@ -11,11 +11,7 @@ from urllib.parse import urlparse
 import re
 import yaml
 
-try:
-    import git
-    HAS_GITPYTHON = True
-except ImportError:
-    HAS_GITPYTHON = False
+import git
 
 from x_spanformer.agents.rich_utils import console
 
@@ -24,11 +20,6 @@ class GitRepoExporter:
     
     def __init__(self, config: Optional[Dict] = None):
         """Initialize with configuration from pipeline config."""
-        if not HAS_GITPYTHON:
-            raise ImportError(
-                "GitPython is required for repository export. "
-                "Install with: pip install gitpython"
-            )
         
         # Load config from repo2jsonl.yaml
         if config is None:

@@ -438,31 +438,31 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
             {
                 "raw": "the quick brown fox jumps over the lazy dog",
                 "type": "text",
-                "id": "001",
+                "id": {"id": "001"},
                 "meta": {"source": "sample.txt", "status": "validated"}
             },
             {
                 "raw": "hello world this is a test sequence",
                 "type": "text", 
-                "id": "002",
+                "id": {"id": "002"},
                 "meta": {"source": "sample.txt", "status": "validated"}
             },
             {
                 "raw": "should be discarded",
                 "type": "text",
-                "id": "003", 
+                "id": {"id": "003"}, 
                 "meta": {"source": "sample.txt", "status": "discard"}
             },
             {
                 "raw": "",  # Empty raw field
                 "type": "text",
-                "id": "004",
+                "id": {"id": "004"},
                 "meta": {"source": "sample.txt", "status": "validated"}
             },
             {
                 "raw": "final valid sequence for testing",
                 "type": "text",
-                "id": "005", 
+                "id": {"id": "005"}, 
                 "meta": {"source": "sample.txt", "status": "validated"}
             }
         ]
@@ -745,11 +745,11 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
             
             with open(log_file, 'r', encoding='utf-8') as f:
                 content = f.read()
-                self.assertIn("STAGE 1: CORPUS LOADING", content)
-                self.assertIn("Total input records: 5", content)
-                self.assertIn("Valid sequences: 3", content)
-                self.assertIn("Discarded sequences: 1", content)
-                self.assertIn("Invalid records: 1", content)
+                # Check for actual log messages from shared text processor
+                self.assertIn("Loading PretrainRecord sequences from:", content)
+                self.assertIn("Loaded 3 valid sequences from 5 total records", content)
+                self.assertIn("Skipped 1 explicitly discarded records", content)
+                self.assertIn("Failed to process 1 invalid records", content)
                 
         finally:
             self.cleanup_logging()
@@ -1287,19 +1287,15 @@ class TestPipelineUtilities(unittest.TestCase):
             result = pipeline.process_sequence("the quick brown fox")
             
             # Test embedding quality analysis if available
-            try:
-                from x_spanformer.embedding.embedding_utils import analyze_embedding_quality
-                
-                quality = analyze_embedding_quality(result['contextual_embeddings'])
-                
-                # Validate quality metrics
-                self.assertIn('mean_embedding_norm', quality)
-                self.assertIn('dimension_variance_ratio', quality)
-                self.assertGreater(quality['mean_embedding_norm'], 0)
-                self.assertGreaterEqual(quality['dimension_variance_ratio'], 0)
-            except ImportError:
-                # Skip if embedding_utils not available
-                pass
+            from x_spanformer.embedding.embedding_utils import analyze_embedding_quality
+            
+            quality = analyze_embedding_quality(result['contextual_embeddings'])
+            
+            # Validate quality metrics
+            self.assertIn('mean_embedding_norm', quality)
+            self.assertIn('dimension_variance_ratio', quality)
+            self.assertGreater(quality['mean_embedding_norm'], 0)
+            self.assertGreaterEqual(quality['dimension_variance_ratio'], 0)
 
     def test_span_analysis_integration(self):
         """Test span analysis functionality integration."""

@@ -152,9 +152,6 @@ def run_pdf2seg(pdf_file: Path, output_dir: Path, force_regenerate: bool = False
             console.print(f"[yellow]Creating fallback CSV for {pdf_file.name}[/yellow]")
             csv_file.write_text("text\n\"sample text\"")
 
-    except ImportError:
-        console.print(f"[red]pdf2seg package not found. Please ensure pdf2seg is installed.[/red]")
-        return None
     except Exception as e:
         error_msg = str(e).replace('[', '\\[').replace(']', '\\]')
         console.print(f"[red]⚠ Error processing {pdf_file.name}: {error_msg}[/red]")
@@ -257,7 +254,7 @@ def run(i: Path, o: Path, f: str, pretty: bool, n: str, w: int, save_interval: i
                 else:
                     console.print(f"[bold blue]📊 Total workload: {total_pages} pages across {len(pdfs)} PDF files[/bold blue]")
             else:
-                console.print(f"[yellow]⚠ Could not determine page counts (pypdf may not be installed)[/yellow]")
+                console.print(f"[yellow]⚠ Could not determine page counts for some PDF files[/yellow]")
     elif i.is_file() and i.suffix.lower() == ".pdf":
         pdfs = [i]
         page_count = count_pdf_pages(i)
@@ -556,11 +553,8 @@ def count_pdf_pages(pdf_path: Path) -> int:
         with pdf_path.open('rb') as file:
             reader = pypdf.PdfReader(file)
             return len(reader.pages)
-    except ImportError:
-        # pypdf not available, return unknown count
-        return -1
     except Exception as e:
-        # If there's any error reading the PDF, return unknown count silently
+        # If there's any error reading the PDF, return -1 to indicate unknown
         return -1
 
 
@@ -612,9 +606,6 @@ def split_large_pdf(pdf_path: Path, temp_dir: Path, pages_per_batch: int = 200) 
             console.print(f"[green]✔ Split into {len(batch_files)} batches[/green]")
             return batch_files
             
-    except ImportError:
-        console.print(f"[yellow]⚠ pypdf not available, cannot split large PDFs. Processing as single file.[/yellow]")
-        return [pdf_path]
     except Exception as e:
         console.print(f"[yellow]⚠ Error splitting PDF {pdf_path.name}: {e}. Processing as single file.[/yellow]")
         return [pdf_path]

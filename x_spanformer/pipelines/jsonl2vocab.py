@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.vocab import VocabStats
+from x_spanformer.pipelines.shared.text_processor import load_pretrain_records
 from x_spanformer.vocab import (
     build_candidate_set,
     validate_vocabulary_completeness,
@@ -117,57 +118,38 @@ def load_corpus(files: List[Path]) -> List[str]:
     logger.info("STAGE 1: CORPUS LOADING")
     logger.info("=" * 50)
     
-    segments = []
-    total_records = 0
-    valid_records = 0
-    invalid_records = 0
+    all_sequences = []
+    total_stats = {'total': 0, 'valid': 0, 'discarded': 0, 'invalid': 0, 'too_long': 0}
     
     for f in files:
         logger.info(f"Processing file: {f}")
         
-        file_valid = 0
-        file_invalid = 0
+        # Use shared function for consistent loading
+        sequences, stats = load_pretrain_records(str(f))
+        all_sequences.extend(sequences)
         
-        with open(f, encoding="utf-8") as fh:
-            for line_num, line in enumerate(fh, 1):
-                total_records += 1
-                try:
-                    rec_dict = json.loads(line)
-                    rec = PretrainRecord(**rec_dict)
-                    # Use raw field as specified in the paper
-                    txt = rec.raw.strip()
-                    if txt:
-                        segments.append(txt)
-                        valid_records += 1
-                        file_valid += 1
-                        logger.debug(f"  Line {line_num}: Loaded {len(txt)} chars")
-                    else:
-                        logger.warning(f"  Line {line_num}: Empty raw field, skipping")
-                        invalid_records += 1
-                        file_invalid += 1
-                except (json.JSONDecodeError, ValueError) as e:
-                    logger.warning(f"  Line {line_num}: Invalid record - {e}")
-                    invalid_records += 1
-                    file_invalid += 1
-                    continue
+        # Accumulate statistics
+        for key in total_stats:
+            total_stats[key] += stats[key]
         
-        logger.info(f"  File summary: {file_valid} valid, {file_invalid} invalid records")
+        logger.info(f"  File summary: {stats['valid']} valid, {stats['invalid']} invalid records")
     
     # Calculate corpus statistics
-    total_chars = sum(len(seg) for seg in segments)
-    avg_segment_length = total_chars / len(segments) if segments else 0
+    total_chars = sum(len(seg) for seg in all_sequences)
+    avg_segment_length = total_chars / len(all_sequences) if all_sequences else 0
     
     logger.info("-" * 50)
     logger.info("CORPUS LOADING SUMMARY:")
-    logger.info(f"  Total input records: {total_records}")
-    logger.info(f"  Valid segments: {valid_records}")
-    logger.info(f"  Invalid records: {invalid_records}")
-    logger.info(f"  Success rate: {valid_records/total_records*100:.1f}%")
+    logger.info(f"  Total input records: {total_stats['total']}")
+    logger.info(f"  Valid segments: {total_stats['valid']}")
+    logger.info(f"  Invalid records: {total_stats['invalid']}")
+    logger.info(f"  Discarded records: {total_stats['discarded']}")
+    logger.info(f"  Success rate: {total_stats['valid']/total_stats['total']*100:.1f}%")
     logger.info(f"  Total characters: {total_chars:,}")
     logger.info(f"  Average segment length: {avg_segment_length:.1f} chars")
     logger.info("-" * 50)
     
-    return segments
+    return all_sequences
 
 
 def build_candidate_set_with_output(corpus: List[str], L_max: int, M: int, out: Path) -> Tuple[List[str], Counter]:

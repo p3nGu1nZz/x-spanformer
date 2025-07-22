@@ -16,11 +16,7 @@ The `repo2jsonl` pipeline exports GitHub repositories using shallow git clone an
 
 ## Installation
 
-Install GitPython dependency:
-
-```bash
-pip install gitpython
-```
+All required dependencies are available as specified in `pyproject.toml`, including `gitpython` for Git operations.
 
 ## Configuration
 
@@ -270,16 +266,12 @@ Same `PretrainRecord` schema as other pipelines:
 
 ## Dependencies
 
-### Required Packages
-```bash
-pip install gitpython pandas rich pydantic asyncio pyyaml
-```
-
 ### System Requirements
 - Python 3.8+
 - Git installed and accessible in PATH
 - Internet connection for repository cloning
 - Configured Judge LLM service (Ollama recommended)
+- All required Python packages are available per `pyproject.toml` (gitpython, pandas, rich, pydantic, asyncio, pyyaml)
 
 ## Integration with X-Spanformer
 

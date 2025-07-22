@@ -205,7 +205,6 @@ Templates: segment_judge
 
 The pipeline includes robust error handling for:
 
-- **Missing pdf2seg**: Graceful fallback when package is not installed
 - **PDF Processing Errors**: Continues with remaining files if individual PDFs fail
 - **Ollama Connection Failures**: Tests connection with retry logic (3 attempts max) before starting
 - **Judge Failures**: Retries individual judge evaluations up to 3 times before failing

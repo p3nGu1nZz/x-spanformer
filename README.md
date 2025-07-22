@@ -73,6 +73,7 @@ uv run -m x_spanformer.pipelines.jsonl2vocab \
 This implements the mathematical formulation from Section 3.1 of our paper (Algorithm 1), featuring:
 
 - **EM + Viterbi segmentation** with adaptive pruning based on perplexity and OOV thresholds
+- **Shared text processing utilities** via `x_spanformer.pipelines.shared.text_processor` for consistent corpus loading across all pipelines
 - **Comprehensive statistics output** including baseline/final perplexity, OOV rates, and pruning metrics
 - **Schema-validated vocabulary pieces** using `VocabPiece` and `VocabStats` models
 - **Multi-stage artifact generation** for transparency and debugging
@@ -98,6 +99,8 @@ This implements the unified algorithm from Section 3.2, featuring:
 - **Vocabulary-informed span filtering** using alignment, compositional potential, and whitespace coherence
 
 The pipeline outputs both `vocab.jsonl` (final vocabulary with probabilities) and `vocab_stats.json` (comprehensive training statistics), enabling detailed analysis of the vocabulary induction process.
+
+All pipelines utilize shared utilities from `x_spanformer.pipelines.shared` for consistent text processing and schema validation, eliminating code duplication and ensuring data format consistency across the preprocessing workflow.
 
 Use the output as either raw training strings (for unsupervised Phase I) or compile with `oxbar` to produce labeled span records.
 
@@ -171,9 +174,12 @@ python -m pytest tests/pipelines/test_pipelines_vocab2embedding.py -v
 x-spanformer/
 ├── x_spanformer/
 │   ├── pipelines/        # Data processing pipelines
+│   │   ├── shared/       # Shared utilities for consistent text processing and schema validation
+│   │   │   └── text_processor.py # Unified corpus loading across all pipelines
 │   │   ├── pdf2jsonl.py  # PDF → JSONL conversion with AI judging
 │   │   ├── jsonl2vocab.py # Hybrid Unigram-LM vocabulary induction
-│   │   └── vocab2embedding.py # Section 3.2: Seed embeddings & span generation
+│   │   ├── vocab2embedding.py # Section 3.2: Seed embeddings & span generation
+│   │   └── repo2jsonl.py # GitHub repository → JSONL conversion
 │   ├── embedding/        # Embedding analysis & utilities (Section 3.2)
 │   │   ├── embedding_utils.py # Loading, analysis, quality metrics
 │   │   ├── span_analysis.py   # Span patterns, hierarchy, coverage
@@ -215,12 +221,18 @@ x-spanformer/
 - **`pdf2jsonl.py`** — Convert PDFs to validated JSONL segments with AI content judging
 - **`jsonl2vocab.py`** — Induce hybrid Unigram-LM vocabulary using EM + Viterbi with adaptive pruning
 - **`vocab2embedding.py`** — Generate seed embeddings and span candidates (Section 3.2: forward-backward algorithm, vocabulary-aware Xavier initialization, multi-scale contextualization)
+- **`repo2jsonl.py`** — Export GitHub repositories to JSONL with shallow cloning and AI judging
+
+### Shared Utilities
+
+- **`shared/text_processor.py`** — Unified corpus loading and text processing across all pipelines for consistency and maintainability
 
 ### Validation & Analysis
 
 - **Schema validation** — Pydantic models ensure data consistency across pipelines
 - **Rich console output** — Detailed progress tracking and statistics reporting
 - **Incremental processing** — Resume interrupted runs and process new data efficiently
+- **Dependency management** — All dependencies from `pyproject.toml` are assumed available (matplotlib, seaborn, pandas, gitpython, pdf2seg, etc.)
 
 ### Configuration
 
@@ -237,7 +249,7 @@ The embedding module provides comprehensive utilities for working with **vocab2e
 
 - **`embedding_utils.py`** — Core utilities for loading and analyzing embeddings
 - **`span_analysis.py`** — Advanced span pattern analysis with hierarchy detection  
-- **`embedding_viz.py`** — Rich visualization tools (requires matplotlib/seaborn)
+- **`embedding_viz.py`** — Rich visualization tools (matplotlib and seaborn assumed available)
 - **`analyze_results.py`** — Command-line analysis workflows
 - **`test_pipeline.py`** — Comprehensive pipeline validation
 
@@ -301,7 +313,7 @@ python x_spanformer/embedding/test_pipeline.py
 
 - **Quality Assessment** — Embedding norms, variance ratios, similarity analysis
 - **Span Pattern Analysis** — Hierarchy detection, coverage gaps, overlap patterns  
-- **Visualization Suite** — Heatmaps, PCA plots, span coverage maps (optional)
+- **Visualization Suite** — Heatmaps, PCA plots, span coverage maps (matplotlib/seaborn integration)
 - **Batch Processing** — Aggregate statistics across multiple sequences
 - **Export Capabilities** — Numpy format, JSON metadata, comprehensive reporting
 
