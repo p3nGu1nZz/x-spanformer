@@ -54,43 +54,10 @@ from x_spanformer.embedding.embedding_logging import setup_embedding_logging, ge
 from x_spanformer.embedding.embedding_utils import (
     analyze_embedding_quality
 )
-from x_spanformer.pipelines.shared.text_processor import load_pretrain_records
+from x_spanformer.pipelines.shared.jsonl_processor import load_pretrain_records
 
 # Module-level logger that gets configured in main()
 logger = None
-
-def get_logger() -> logging.Logger:
-    """Get the module logger, creating a basic one if none exists."""
-    global logger
-    if logger is None:
-        logger = get_embedding_logger('vocab2embedding')
-    return logger
-
-
-def load_corpus(corpus_path: str, max_length: Optional[int] = None) -> List[str]:
-    """
-    Load sequences from a JSONL file using PretrainRecord format.
-    
-    Uses the shared text processor for consistent corpus loading.
-    
-    Args:
-        corpus_path: Path to the JSONL corpus file with PretrainRecord format
-        max_length: Optional maximum sequence length filter
-        
-    Returns:
-        List of text sequences extracted from the corpus
-        
-    Raises:
-        FileNotFoundError: If the corpus file doesn't exist
-        ValueError: If no valid sequences are found
-    """
-    sequences, stats = load_pretrain_records(corpus_path, max_length)
-    
-    if not sequences:
-        raise ValueError(f"No valid sequences found in {corpus_path}. Stats: {stats}")
-    
-    get_logger().info(f"Successfully loaded {len(sequences)} sequences from corpus")
-    return sequences
 
 
 class UnigramLM(nn.Module):
@@ -220,7 +187,7 @@ class UnigramLM(nn.Module):
         
         normalization = alpha[T]  # Total probability of sequence
         if normalization == -float('inf'):
-            get_logger().warning(f"Sequence cannot be segmented with given vocabulary")
+            get_embedding_logger('vocab2embedding').warning(f"Sequence cannot be segmented with given vocabulary")
             return P
         
         for t in range(T):
@@ -392,13 +359,13 @@ class SpanCandidateGenerator:
         if span_text in self.vocab_dict:
             prob = self.vocab_dict[span_text]
             if not isinstance(prob, (int, float)):
-                get_logger().warning(f"Non-numeric probability for '{span_text}': {prob} (type: {type(prob)})")
+                get_embedding_logger('vocab2embedding').warning(f"Non-numeric probability for '{span_text}': {prob} (type: {type(prob)})")
                 return False
             
             # Ensure tau_vocab is also numeric
             tau = self.tau_vocab
             if not isinstance(tau, (int, float)):
-                get_logger().warning(f"Non-numeric tau_vocab: {tau} (type: {type(tau)})")
+                get_embedding_logger('vocab2embedding').warning(f"Non-numeric tau_vocab: {tau} (type: {type(tau)})")
                 return False
                 
             return prob >= tau
@@ -502,7 +469,7 @@ class Vocab2EmbeddingPipeline:
         self.conv_encoder: Optional[ConvEncoder] = None
         self.candidate_generator: Optional[SpanCandidateGenerator] = None
         
-        get_logger().info(f"Initialized vocab2embedding pipeline on {device}")
+        get_embedding_logger('vocab2embedding').info(f"Initialized vocab2embedding pipeline on {device}")
     
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file."""
@@ -522,7 +489,7 @@ class Vocab2EmbeddingPipeline:
         vocab_dict = {}
         total_prob = 0.0
         
-        get_logger().info(f"Loading vocabulary from: {vocab_path}")
+        get_embedding_logger('vocab2embedding').info(f"Loading vocabulary from: {vocab_path}")
         
         with open(vocab_path, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
@@ -535,25 +502,25 @@ class Vocab2EmbeddingPipeline:
                             prob = float(prob)
                         
                         if prob <= 0 or prob > 1:
-                            get_logger().warning(f"Line {line_num}: Invalid probability {prob} for piece '{entry['piece']}'")
+                            get_embedding_logger('vocab2embedding').warning(f"Line {line_num}: Invalid probability {prob} for piece '{entry['piece']}'")
                             continue
                             
                         vocab_dict[entry['piece']] = prob
                         total_prob += prob
                     else:
-                        get_logger().warning(f"Line {line_num}: Missing required fields")
+                        get_embedding_logger('vocab2embedding').warning(f"Line {line_num}: Missing required fields")
                 except Exception as e:
-                    get_logger().error(f"Line {line_num}: Error parsing vocabulary entry: {e}")
+                    get_embedding_logger('vocab2embedding').error(f"Line {line_num}: Error parsing vocabulary entry: {e}")
         
         # Validate vocabulary properties
         if not vocab_dict:
             raise ValueError("No valid vocabulary entries found")
         
-        get_logger().info(f"Loaded vocabulary: {len(vocab_dict)} pieces, total prob: {total_prob:.6f}")
+        get_embedding_logger('vocab2embedding').info(f"Loaded vocabulary: {len(vocab_dict)} pieces, total prob: {total_prob:.6f}")
         
         # Check for single codepoints
         single_chars = {piece for piece in vocab_dict if len(piece) == 1}
-        get_logger().info(f"Single codepoint coverage: {len(single_chars)} unique characters")
+        get_embedding_logger('vocab2embedding').info(f"Single codepoint coverage: {len(single_chars)} unique characters")
         
         # Initialize pipeline components
         self.unigram_lm = UnigramLM(vocab_dict, self.device)
@@ -608,9 +575,9 @@ class Vocab2EmbeddingPipeline:
                 result['analysis'] = analyze_embedding_quality(
                     contextual_embeddings.detach().cpu().numpy()
                 )
-                get_logger().debug("Added embedding quality analysis to results")
+                get_embedding_logger('vocab2embedding').debug("Added embedding quality analysis to results")
             except Exception as e:
-                get_logger().warning(f"Error during embedding analysis: {e}")
+                get_embedding_logger('vocab2embedding').warning(f"Error during embedding analysis: {e}")
         
         return result
 

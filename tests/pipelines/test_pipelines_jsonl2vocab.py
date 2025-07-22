@@ -20,6 +20,7 @@ from collections import Counter
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from x_spanformer.pipelines import jsonl2vocab
+from x_spanformer.pipelines.shared.jsonl_processor import discover_jsonl_files, load_corpus_with_logging
 from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.metadata import RecordMeta
 
@@ -74,7 +75,7 @@ class TestJsonl2VocabPipeline:
         jsonl_file = self.input_dir / "test.jsonl"
         jsonl_file.touch()
         
-        files = jsonl2vocab.find_jsonl_files(self.input_dir)
+        files = discover_jsonl_files(self.input_dir)
         
         assert len(files) == 1
         assert files[0] == jsonl_file
@@ -85,7 +86,7 @@ class TestJsonl2VocabPipeline:
         for filename in files:
             (self.input_dir / filename).touch()
         
-        found_files = jsonl2vocab.find_jsonl_files(self.input_dir)
+        found_files = discover_jsonl_files(self.input_dir)
         
         assert len(found_files) == 3
         filenames = [f.name for f in found_files]
@@ -100,7 +101,7 @@ class TestJsonl2VocabPipeline:
         (self.input_dir / "root.jsonl").touch()
         (subdir / "sub.jsonl").touch()
         
-        files = jsonl2vocab.find_jsonl_files(self.input_dir)
+        files = discover_jsonl_files(self.input_dir)
         
         assert len(files) == 2
         filenames = [f.name for f in files]
@@ -110,13 +111,13 @@ class TestJsonl2VocabPipeline:
     def test_find_jsonl_files_empty_directory(self):
         """Test finding files in empty directory."""
         with pytest.raises(SystemExit):
-            jsonl2vocab.find_jsonl_files(self.input_dir)
+            discover_jsonl_files(self.input_dir)
     
     def test_find_jsonl_files_nonexistent_directory(self):
         """Test finding files in nonexistent directory."""
         nonexistent = self.tmp_dir / "nonexistent"
         with pytest.raises(FileNotFoundError):
-            jsonl2vocab.find_jsonl_files(nonexistent)
+            discover_jsonl_files(nonexistent)
     
     def test_load_corpus_valid_records(self):
         """Test loading corpus from valid JSONL records."""
@@ -154,7 +155,7 @@ class TestJsonl2VocabPipeline:
             for record in sample_records:
                 f.write(json.dumps(record) + '\n')
         
-        corpus = jsonl2vocab.load_corpus([jsonl_file])
+        corpus = load_corpus_with_logging([jsonl_file])
         
         assert len(corpus) == 1  # Only the "keep" record should be included
         assert "hello world" in corpus
@@ -207,7 +208,7 @@ class TestJsonl2VocabPipeline:
             for record in sample_records:
                 f.write(json.dumps(record) + '\n')
         
-        corpus = jsonl2vocab.load_corpus([jsonl_file])
+        corpus = load_corpus_with_logging([jsonl_file])
         
         assert len(corpus) == 1
         assert "valid text" in corpus
@@ -220,7 +221,7 @@ class TestJsonl2VocabPipeline:
             f.write('invalid json line\n')  # This should be skipped
             f.write('{"raw": "also valid", "meta": {"status": "keep", "source_file": "test.pdf", "doc_language": "en", "extracted_by": "test", "confidence": 0.8, "notes": "good", "tags": []}}\n')
         
-        corpus = jsonl2vocab.load_corpus([jsonl_file])
+        corpus = load_corpus_with_logging([jsonl_file])
         
         # Should load valid records and skip invalid line
         assert len(corpus) == 2
@@ -313,8 +314,8 @@ class TestJsonl2VocabPipeline:
     @patch('x_spanformer.pipelines.jsonl2vocab.induce_vocabulary')
     @patch('x_spanformer.pipelines.jsonl2vocab.validate_vocabulary_completeness')
     @patch('x_spanformer.pipelines.jsonl2vocab.build_candidate_set_with_output')
-    @patch('x_spanformer.pipelines.jsonl2vocab.load_corpus')
-    @patch('x_spanformer.pipelines.jsonl2vocab.find_jsonl_files')
+    @patch('x_spanformer.pipelines.jsonl2vocab.load_corpus_with_logging')
+    @patch('x_spanformer.pipelines.jsonl2vocab.discover_jsonl_files')
     @patch('x_spanformer.pipelines.jsonl2vocab.load_hparams')
     def test_main_pipeline_success(self, mock_load_hparams, mock_find_files, mock_load_corpus,
                                  mock_build_candidates, mock_validate, mock_induce_vocab):
@@ -345,7 +346,7 @@ class TestJsonl2VocabPipeline:
             jsonl2vocab.main()
         
         # Verify all stages were called
-        mock_find_files.assert_called_once_with(self.input_dir)
+        mock_find_files.assert_called_once_with(self.input_dir, recursive=True)
         mock_load_corpus.assert_called_once()
         mock_build_candidates.assert_called_once()
         mock_validate.assert_called_once()
@@ -374,7 +375,7 @@ class TestJsonl2VocabEdgeCases:
         # Mock permission error
         with patch('builtins.open', side_effect=PermissionError("Access denied")):
             with pytest.raises(PermissionError):
-                jsonl2vocab.load_corpus([jsonl_file])
+                load_corpus_with_logging([jsonl_file])
     
     def test_save_vocab_creates_directory(self):
         """Test that save_vocab creates output directory if it doesn't exist."""
@@ -422,7 +423,7 @@ class TestJsonl2VocabEdgeCases:
             record2 = {"raw": "text from file 2", **record_template}
             f.write(json.dumps(record2) + '\n')
         
-        corpus = jsonl2vocab.load_corpus([file1, file2])
+        corpus = load_corpus_with_logging([file1, file2])
         
         assert len(corpus) == 2
         assert "text from file 1" in corpus

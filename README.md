@@ -77,6 +77,7 @@ This implements the mathematical formulation from Section 3.1 of our paper (Algo
 - **Comprehensive statistics output** including baseline/final perplexity, OOV rates, and pruning metrics
 - **Schema-validated vocabulary pieces** using `VocabPiece` and `VocabStats` models
 - **Multi-stage artifact generation** for transparency and debugging
+- **Consolidated corpus output** (`corpus.jsonl`) ready for downstream vocab2embedding processing
 
 ### Stage 3: Seed Embeddings & Span Generation
 
@@ -86,7 +87,7 @@ Transform vocabulary into contextualized embeddings and span candidates using Se
 # Generate embeddings from vocabulary and text sequences
 uv run -m x_spanformer.pipelines.vocab2embedding \
   --vocab data/vocab/out/vocab.jsonl \
-  --input data/sequences.jsonl \
+  --input data/vocab/out/corpus.jsonl \
   --output data/embeddings/ \
   --device cuda
 ```
@@ -174,8 +175,9 @@ python -m pytest tests/pipelines/test_pipelines_vocab2embedding.py -v
 x-spanformer/
 ├── x_spanformer/
 │   ├── pipelines/        # Data processing pipelines
-│   │   ├── shared/       # Shared utilities for consistent text processing and schema validation
-│   │   │   └── text_processor.py # Unified corpus loading across all pipelines
+│   │   ├── shared/       # Shared utilities for consistent processing
+│   │   │   ├── text_processor.py  # Text splitting and processing utilities
+│   │   │   └── jsonl_processor.py # JSONL file handling and corpus management
 │   │   ├── pdf2jsonl.py  # PDF → JSONL conversion with AI judging
 │   │   ├── jsonl2vocab.py # Hybrid Unigram-LM vocabulary induction
 │   │   ├── vocab2embedding.py # Section 3.2: Seed embeddings & span generation

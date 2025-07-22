@@ -30,9 +30,9 @@ from x_spanformer.pipelines.vocab2embedding import (
     ConvEncoder,
     SpanCandidateGenerator,
     Vocab2EmbeddingPipeline,
-    load_corpus,
     main
 )
+from x_spanformer.pipelines.shared.jsonl_processor import load_pretrain_records
 
 
 class TestUnigramLM(unittest.TestCase):
@@ -531,7 +531,7 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
                     f.write(json.dumps(record, ensure_ascii=False) + '\n')
             
             # Load corpus
-            sequences = load_corpus(str(input_file))
+            sequences, stats = load_pretrain_records(str(input_file))
             
             # Should load 3 valid sequences (skip discarded and empty)
             self.assertEqual(len(sequences), 3)
@@ -559,7 +559,7 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
                 f.write(json.dumps({"raw": "another valid text", "type": "text"}) + '\n')
             
             # Should handle gracefully
-            sequences = load_corpus(str(input_file))
+            sequences, stats = load_pretrain_records(str(input_file))
             self.assertEqual(len(sequences), 2)
             self.assertIn("valid text", sequences)
             self.assertIn("another valid text", sequences)
@@ -571,14 +571,16 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
             input_file = Path(temp_dir) / "empty.jsonl"
             input_file.touch()
             
-            # Should raise ValueError
-            with self.assertRaises(ValueError):
-                load_corpus(str(input_file))
+            # Should return empty list
+            sequences, stats = load_pretrain_records(str(input_file))
+            self.assertEqual(len(sequences), 0)
+            self.assertEqual(stats['valid'], 0)
+            self.assertEqual(stats['total'], 0)
     
     def test_load_corpus_nonexistent_file(self):
         """Test handling of non-existent corpus file."""
         with self.assertRaises(FileNotFoundError):
-            load_corpus("nonexistent_file.jsonl")
+            load_pretrain_records("nonexistent_file.jsonl")
     
     def test_pipeline_initialization(self):
         """Test pipeline initialization."""
@@ -737,7 +739,7 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
             logger = setup_embedding_logging(log_dir, 'test_integration')
             
             # Load corpus (should log statistics)
-            sequences = load_corpus(str(input_file))
+            sequences, stats = load_pretrain_records(str(input_file))
             
             # Check log file is in the root output directory
             log_file = log_dir / "embedding.log"
