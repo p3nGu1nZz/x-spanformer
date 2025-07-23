@@ -46,6 +46,7 @@ H = ConvEncoder(H^0)    // Kernels [3,5,7], Dilations [1,2,4]
 - **Three parallel convolution branches** capture patterns at different scales
 - **Dilated convolutions** provide exponential receptive field growth
 - **Residual connections + LayerNorm** ensure gradient flow and stability
+- **Device flexibility**: CUDA when specified, CPU default with automatic fallback for CI/CD environments
 
 ### 📍 **Phase 4: Vocabulary-Informed Span Filtering**
 ```
@@ -195,7 +196,7 @@ Each processing stage produces specific outputs for analysis and downstream use:
 |-----------|-------------|---------|------------------|
 | `max_sequence_length` | Input length limit | 512 | Quadratic memory in span generation |
 | `batch_size` | Sequences per batch | 32 | Higher = better GPU utilization |
-| `device` | Computation device | "cuda" | GPU highly recommended for speed |
+| `device` | Computation device | "auto" | Auto-detects CUDA with CPU fallback |
 
 ---
 
@@ -441,7 +442,33 @@ conv_dilations: [1, 3, 9]      # Skip over formulaic patterns
 
 ---
 
-## 🚀 Future Directions
+## � Production Implementation Features
+
+The current pipeline implementation includes several production-ready enhancements:
+
+### **Device Management & CI/CD Compatibility**
+- **Intelligent Device Selection**: CUDA when explicitly specified, CPU default for broad compatibility
+- **Graceful Fallback**: Automatic CPU fallback when CUDA unavailable (e.g., GitHub Actions CI/CD)
+- **Memory Management**: Efficient cleanup and resource management across device types
+
+### **Error Handling & Robustness**
+- **Schema Validation**: Comprehensive input/output validation using Pydantic models
+- **Resume Capability**: Automatic detection and resumption of interrupted processing
+- **Detailed Logging**: Five-stage logging with simplified device information display
+
+### **Performance Optimizations**
+- **Dynamic Span Width**: Corpus-adaptive `w_max` computation for optimal coverage
+- **Sequence Statistics**: Real-time computation of length statistics (avg/min/max) 
+- **Efficient Processing**: O(T·w_max) complexity for span generation instead of O(T²)
+
+### **Integration Benefits**
+- **Shared Utilities**: Consistent text processing across all pipelines via `x_spanformer.pipelines.shared`
+- **Standardized Output**: Schema-validated JSON/JSONL outputs for downstream compatibility
+- **Modular Architecture**: Clean separation between mathematical algorithms and system concerns
+
+---
+
+## �🚀 Future Directions
 
 ### **Immediate Extensions (Version 2.0)**
 - **Batch Processing**: Parallel sequence processing for improved throughput

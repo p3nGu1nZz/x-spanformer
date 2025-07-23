@@ -916,19 +916,15 @@ def main():
     logger.info(f"  Selected device: {pipeline.device}")
     logger.info("-" * 50)
     
-    # Log available GPU devices in streamlined table format
+    # Log available GPU devices in simple list format
     logger.info("DEVICE INFORMATION:")
     if torch.cuda.is_available():
         logger.info("  CUDA Devices:")
-        logger.info("  ┌─────┬─────────────────────────────────┬──────────┐")
-        logger.info("  │ ID  │ Device Name                     │ Memory   │")
-        logger.info("  ├─────┼─────────────────────────────────┼──────────┤")
         for i in range(torch.cuda.device_count()):
             device_name = torch.cuda.get_device_name(i)
             device_memory = torch.cuda.get_device_properties(i).total_memory / (1024**3)
-            logger.info(f"  │ {i:<3} │ {device_name:<31} │ {device_memory:>6.1f}GB │")
-        logger.info("  └─────┴─────────────────────────────────┴──────────┘")
-        logger.info(f"  Selected: Device {pipeline.config.get('device_id', 0)}")
+            logger.info(f"    - {i}: {device_name} ({device_memory:.1f}GB)")
+        logger.info(f"  Selected: Device {pipeline.config.get('processing', {}).get('device_id', 0)}")
     else:
         logger.info("  CUDA: Not available - using CPU")
     
