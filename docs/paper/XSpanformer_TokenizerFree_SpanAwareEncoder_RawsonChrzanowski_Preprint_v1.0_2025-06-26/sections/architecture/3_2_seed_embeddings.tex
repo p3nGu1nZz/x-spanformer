@@ -159,19 +159,19 @@ where \(w_{\max}\) is dynamically computed from the input corpus to balance ling
 
 The maximum span width \(w_{\max}\) is computed adaptively based on the characteristics of the input corpus:
 \begin{equation}
-w_{\max} = \max\left(\max_{\text{word}} \left\{\text{length}(w) \mid w \in \text{Words}(\mathcal{D})\right\}, \left\lfloor \frac{L_{\max}}{2} \right\rfloor\right),
+w_{\max} = \min\left(\max_{\text{word}} \left\{\text{length}(w) \mid w \in \text{Words}(\mathcal{D})\right\}, \left\lfloor \frac{L_{\max}}{2} \right\rfloor\right),
 \label{eq:dynamic-w-max}
 \end{equation}
 where \(\text{Words}(\mathcal{D})\) represents all whitespace-separated words in the input corpus \(\mathcal{D}\), and \(L_{\max}\) is the maximum sequence length parameter.
 
 This dynamic approach ensures that:
 \begin{itemize}
-	\item \textbf{Linguistic Coverage:} All complete words from the corpus can be captured as single spans
-	\item \textbf{Computational Bound:} Span width never exceeds half the maximum sequence length, maintaining linear complexity
-	\item \textbf{Corpus Adaptation:} The model adapts to the specific linguistic characteristics of the input domain
+	\item \textbf{Computational Efficiency:} Span width never exceeds half the maximum sequence length, maintaining linear complexity
+	\item \textbf{Overlapping Coverage:} Long words exceeding \(w_{\max}\) are captured through multiple overlapping spans that are fused via the gated span fusion mechanism (Sections~\ref{sec:span-embedding} and \ref{sec:span-interpolation})
+	\item \textbf{Corpus Adaptation:} The model adapts to typical word lengths while enforcing computational bounds
 \end{itemize}
 
-The corpus-based component \(\max_{\text{word}} \{\text{length}(w)\}\) is computed by tokenizing all input sequences using whitespace separation and finding the longest complete word. This ensures that linguistically meaningful units are preserved as atomic spans during candidate generation.
+The corpus-based component \(\max_{\text{word}} \{\text{length}(w)\}\) is computed by tokenizing all input sequences using whitespace separation and finding the longest complete word. When this exceeds the computational bound \(\lfloor L_{\max}/2 \rfloor\), the overlapping span architecture ensures that long words are still captured through compositional fusion of multiple shorter spans.
 
 \paragraph{Vocabulary-Informed Filtering}
 
@@ -222,7 +222,7 @@ For implementation efficiency, candidates are stored as a sparse tensor \(\mathc
 		\STATE \textbf{// Compute dynamic span width}
 		\STATE \(w_{\text{max-word}} \leftarrow \max\{\text{length}(w) \mid w \in \text{Words}(\mathcal{D})\}\)
 		\STATE \(w_{\text{max-seq}} \leftarrow \lfloor L_{\max} / 2 \rfloor\)
-		\STATE \(w_{\max} \leftarrow \max(w_{\text{max-word}}, w_{\text{max-seq}})\)
+		\STATE \(w_{\max} \leftarrow \min(w_{\text{max-word}}, w_{\text{max-seq}})\)
 		\STATE 
 		\STATE Initialize sparse tensor \(\mathcal{C} \in \{0,1\}^{T \times T}\) with zeros
 		\FOR{\(i = 1\) to \(T-1\)}
@@ -285,7 +285,7 @@ Given raw codepoint sequence \(x = [x_1, \ldots, x_T]\) and induced vocabulary \
 		\STATE \textbf{// Step 0: Dynamic Span Width Computation}
 		\STATE \(w_{\text{max-word}} \leftarrow \max\{\text{length}(w) \mid w \in \text{Words}(\mathcal{D})\}\)
 		\STATE \(w_{\text{max-seq}} \leftarrow \lfloor L_{\max} / 2 \rfloor\)
-		\STATE \(w_{\max} \leftarrow \max(w_{\text{max-word}}, w_{\text{max-seq}})\)
+		\STATE \(w_{\max} \leftarrow \min(w_{\text{max-word}}, w_{\text{max-seq}})\)
 		\STATE
 		\STATE \textbf{// Step 1: Soft Probability Computation}
 		\STATE Initialize forward probabilities: \(\alpha_1 \leftarrow 1\), 

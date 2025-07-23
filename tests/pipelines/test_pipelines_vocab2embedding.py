@@ -477,13 +477,13 @@ class TestVocab2EmbeddingPipeline(unittest.TestCase):
             self.assertEqual(result['sequence_length'], len(sequence))
             
             # Embeddings should not be all zeros
-            seed_norm = float(np.linalg.norm(result['seed_embeddings']))
-            context_norm = float(np.linalg.norm(result['contextual_embeddings']))
+            seed_norm = float(np.linalg.norm(result['seed_embeddings'].detach().cpu().numpy()))
+            context_norm = float(np.linalg.norm(result['contextual_embeddings'].detach().cpu().numpy()))
             self.assertGreater(seed_norm, 0.0)
             self.assertGreater(context_norm, 0.0)
             
             # Probabilities should be valid
-            soft_probs = result['soft_probabilities']
+            soft_probs = result['soft_probabilities'].detach().cpu().numpy()
             self.assertTrue(np.all(soft_probs >= 0))
             self.assertTrue(np.all(soft_probs <= 1))
 
@@ -1044,19 +1044,21 @@ class TestRealisticVocab2EmbeddingPipeline(unittest.TestCase):
                 self.assertEqual(result['contextual_embeddings'].shape, (T, d))
                 
                 # Verify probability constraints
-                soft_probs = result['soft_probabilities']
+                soft_probs = result['soft_probabilities'].detach().cpu().numpy()
                 self.assertTrue(np.all(soft_probs >= 0))
                 # Note: Soft probabilities may exceed 1 due to forward-backward normalization
                 # They represent expected usage, not strict probabilities
                 
                 # Verify embeddings are reasonable
-                seed_norm = np.linalg.norm(result['seed_embeddings'])
-                context_norm = np.linalg.norm(result['contextual_embeddings'])
+                seed_emb_np = result['seed_embeddings'].detach().cpu().numpy()
+                context_emb_np = result['contextual_embeddings'].detach().cpu().numpy()
+                seed_norm = np.linalg.norm(seed_emb_np)
+                context_norm = np.linalg.norm(context_emb_np)
                 self.assertGreater(float(seed_norm), 0.0)
                 self.assertGreater(float(context_norm), 0.0)
                 
                 # Contextualization should modify embeddings
-                diff_norm = np.linalg.norm(result['contextual_embeddings'] - result['seed_embeddings'])
+                diff_norm = np.linalg.norm(context_emb_np - seed_emb_np)
                 self.assertGreater(float(diff_norm), 0.0)
             
             # Test that longer sequences have more candidates
@@ -1147,7 +1149,7 @@ class TestRealisticVocab2EmbeddingPipeline(unittest.TestCase):
             result = pipeline.process_sequence(sequence)
             
             # Test probability properties
-            soft_probs = result['soft_probabilities']
+            soft_probs = result['soft_probabilities'].detach().cpu().numpy()
             
             # Each position should have some non-zero probabilities
             position_sums = np.sum(soft_probs, axis=1)
@@ -1158,8 +1160,8 @@ class TestRealisticVocab2EmbeddingPipeline(unittest.TestCase):
             self.assertGreater(float(max_prob), 0.0)
             
             # Test embedding properties
-            seed_embeddings = result['seed_embeddings']
-            contextual_embeddings = result['contextual_embeddings']
+            seed_embeddings = result['seed_embeddings'].detach().cpu().numpy()
+            contextual_embeddings = result['contextual_embeddings'].detach().cpu().numpy()
             
             # Embeddings should have reasonable magnitude
             seed_var = np.var(seed_embeddings)
@@ -1491,7 +1493,9 @@ class TestPipelineUtilities(unittest.TestCase):
             # Test embedding quality analysis if available
             from x_spanformer.embedding.embedding_utils import analyze_embedding_quality
             
-            quality = analyze_embedding_quality(result['contextual_embeddings'])
+            # Convert to CPU numpy array for analysis
+            context_embeddings_np = result['contextual_embeddings'].detach().cpu().numpy()
+            quality = analyze_embedding_quality(context_embeddings_np)
             
             # Validate quality metrics
             self.assertIn('mean_embedding_norm', quality)
@@ -1632,7 +1636,9 @@ class TestPipelineUtilities(unittest.TestCase):
             # Test embedding analysis if available
             try:
                 from x_spanformer.embedding.embedding_utils import analyze_embedding_quality
-                quality = analyze_embedding_quality(result['contextual_embeddings'])
+                # Convert to CPU numpy array for analysis
+                context_embeddings_np = result['contextual_embeddings'].detach().cpu().numpy()
+                quality = analyze_embedding_quality(context_embeddings_np)
                 self.assertGreater(quality['mean_embedding_norm'], 0)
             except ImportError:
                 pass

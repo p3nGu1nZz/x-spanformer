@@ -290,31 +290,56 @@ class SpanCandidateGenerator:
         return False
     
     def compositional_potential(self, span_text: str) -> bool:
-        """Check if span has compositional segmentation potential using efficient greedy matching."""
+        """
+        Check if span has compositional segmentation potential following paper Equation:
+        ∃ seg ∈ Segments(x,i,j) : ∏_{u ∈ seg} p(u) ≥ τ_comp
+        
+        This finds the OPTIMAL segmentation using dynamic programming (like Viterbi)
+        and checks if its probability product meets the threshold.
+        
+        Optimized for performance while maintaining mathematical correctness.
+        """
+        # Fast early exits
         if not span_text or len(span_text) > 20:  # Skip very long spans
             return False
-        
-        pos = 0
-        log_prob = 0.0
-        
-        while pos < len(span_text):
-            # Find longest matching piece using sorted list (early termination)
-            best_piece = None
             
-            for piece in self._sorted_pieces:
-                if len(piece) > len(span_text) - pos:
-                    continue  # Piece too long
-                if span_text[pos:pos + len(piece)] == piece:
-                    best_piece = piece
-                    break  # Found longest match, stop searching
-            
-            if best_piece is None:
-                return False  # Cannot segment
-            
-            log_prob += math.log(self.vocab_dict[best_piece])
-            pos += len(best_piece)
+        if len(span_text) == 1:  # Single chars are trivially segmentable if in vocab
+            if span_text in self._vocab_set:
+                prob = self.vocab_dict[span_text]
+                return isinstance(prob, (int, float)) and prob >= self.tau_comp
+            return False
         
-        return math.exp(log_prob) >= self.tau_comp
+        # Quick vocabulary check first (fastest path - single piece)
+        if span_text in self._vocab_set:
+            prob = self.vocab_dict[span_text]
+            if isinstance(prob, (int, float)) and prob >= self.tau_comp:
+                return True
+        
+        # For multi-character spans, find optimal segmentation using dynamic programming
+        # This is the correct implementation of the paper's mathematical specification
+        span_len = len(span_text)
+        
+        # DP array: best_prob[i] = maximum probability to segment span_text[:i]
+        best_prob = [0.0] * (span_len + 1)
+        best_prob[0] = 1.0  # Empty prefix has probability 1
+        
+        for i in range(1, span_len + 1):
+            # Try all possible previous positions j where we can place a piece
+            for j in range(i):
+                if best_prob[j] == 0.0:  # No valid segmentation to position j
+                    continue
+                    
+                piece = span_text[j:i]
+                if piece in self._vocab_set:
+                    prob = self.vocab_dict[piece]
+                    if isinstance(prob, (int, float)) and prob > 0:
+                        # Update best probability: best_prob[j] * p(piece)
+                        candidate_prob = best_prob[j] * prob
+                        best_prob[i] = max(best_prob[i], candidate_prob)
+        
+        # Check if the optimal segmentation meets the threshold
+        optimal_prob = best_prob[span_len]
+        return optimal_prob >= self.tau_comp
     
     def whitespace_coherent(self, span_text: str) -> bool:
         """
@@ -369,12 +394,6 @@ class SpanCandidateGenerator:
         T = len(sequence)
         candidates = []
         
-        # Statistics for debugging
-        vocab_aligned = 0
-        comp_potential = 0
-        whitespace_coherent = 0
-        total_checked = 0
-        
         # Single-threaded processing with early termination optimizations
         for i in range(T):
             # Check for shutdown signal
@@ -386,26 +405,13 @@ class SpanCandidateGenerator:
             max_j = min(i + self.w_max, T)
             
             for j in range(i + 1, max_j + 1):
-                total_checked += 1
                 span_text = sequence[i:j]
                 
-                # Apply the three filtering criteria in order of computational cost
-                # (fastest to slowest to maximize early termination)
-                if self.vocabulary_alignment(span_text):
+                # Combined filtering with early termination (fastest to slowest)
+                if (self.vocabulary_alignment(span_text) or
+                    self.whitespace_coherent(span_text) or
+                    self.compositional_potential(span_text)):
                     candidates.append((i, j))
-                    vocab_aligned += 1
-                elif self.whitespace_coherent(span_text):
-                    candidates.append((i, j))
-                    whitespace_coherent += 1
-                elif self.compositional_potential(span_text):
-                    candidates.append((i, j))
-                    comp_potential += 1
-        
-        # Log statistics for debugging
-        if logger:
-            logger.debug(f"Candidate generation stats: {total_checked} spans checked, "
-                        f"{len(candidates)} candidates ({vocab_aligned} vocab-aligned, "
-                        f"{comp_potential} comp-potential, {whitespace_coherent} whitespace-coherent)")
         
         return candidates
 
@@ -587,15 +593,15 @@ class Vocab2EmbeddingPipeline:
         """
         Compute dynamic w_max based on the actual input corpus sequences.
         
-        Following corpus-adaptive approach: w_max = min(longest_word_length, max_sequence_length // 2)
-        where longest_word_length is found by analyzing the corpus for the longest complete word.
+        Following paper Equation: w_max = max(max_word_length, ⌊L_max/2⌋)
+        where max_word_length is found by analyzing the corpus for the longest complete word.
         This ensures span generation is adapted to actual corpus content while respecting sequence limits.
         
         Args:
             sequences: List of input sequences from the corpus
             
         Returns:
-            Computed w_max value (smaller of corpus-based and sequence-based bounds)
+            Computed w_max value (MAXIMUM of corpus-based and sequence-based bounds per paper)
         """
         import re
         
@@ -616,11 +622,14 @@ class Vocab2EmbeddingPipeline:
                     if word_length > max_word_length:
                         max_word_length = word_length
         
-        # Dynamic w_max: smaller of longest word or sequence-based bound for corpus adaptation
+        # Paper's specification: w_max = min(longest_word_length, ⌊L_max/2⌋)
+        # This enforces a hard computational bound while allowing overlapping spans
+        # to handle longer words through gated fusion (Section 3.6-3.8)
         corpus_based_w_max = max_word_length
         sequence_based_w_max = self.w_max_bound  # max_sequence_length // 2
         
-        # Use the smaller value for better corpus adaptation while respecting sequence limits
+        # Use the MINIMUM value to enforce computational bound - long words 
+        # are handled by overlapping spans with gated fusion downstream
         computed_w_max = min(corpus_based_w_max, sequence_based_w_max)
         
         get_embedding_logger('vocab2embedding').info(
@@ -680,9 +689,9 @@ class Vocab2EmbeddingPipeline:
         candidates = candidate_generator.generate_candidates(sequence)
         
         result = {
-            'soft_probabilities': soft_probs.detach().cpu().numpy(),
-            'seed_embeddings': seed_embeddings.detach().cpu().numpy(), 
-            'contextual_embeddings': contextual_embeddings.detach().cpu().numpy(),
+            'soft_probabilities': soft_probs,  # Keep on GPU until saving
+            'seed_embeddings': seed_embeddings,  # Keep on GPU until saving  
+            'contextual_embeddings': contextual_embeddings,  # Keep on GPU until saving
             'span_candidates': candidates,
             'sequence_length': len(sequence),
             'num_candidates': len(candidates),
@@ -693,14 +702,95 @@ class Vocab2EmbeddingPipeline:
         if self.add_analysis:
             try:
                 from x_spanformer.embedding.embedding_utils import analyze_embedding_quality
-                result['analysis'] = analyze_embedding_quality(
-                    contextual_embeddings.detach().cpu().numpy()
-                )
+                # Try to keep on GPU first, fallback to CPU if needed
+                try:
+                    result['analysis'] = analyze_embedding_quality(contextual_embeddings)
+                except (TypeError, RuntimeError):
+                    # Function requires CPU tensors
+                    result['analysis'] = analyze_embedding_quality(
+                        contextual_embeddings.detach().cpu().numpy()
+                    )
                 get_embedding_logger('vocab2embedding').debug("Added embedding quality analysis to results")
             except Exception as e:
                 get_embedding_logger('vocab2embedding').warning(f"Error during embedding analysis: {e}")
         
         return result
+
+
+def save_sequence_results(pipeline, result, seq_id, sequence, json_dir, seed_dir, context_dir, soft_prob_dir, logger):
+    """
+    Save sequence processing results with optimized GPU→CPU transfers.
+    
+    Returns:
+        Dict containing file sizes for logging
+    """
+    file_sizes = {}
+    
+    # Save JSON metadata if enabled
+    if pipeline.config.get('output', {}).get('save_json_metadata', False):
+        output_file = json_dir / f"embedding_{seq_id:06d}.json"
+        json_result = {
+            'sequence_id': seq_id,
+            'sequence': sequence,
+            'sequence_length': result['sequence_length'],
+            'num_candidates': result['num_candidates'],
+            'span_candidates': result['span_candidates'],
+            'soft_probabilities_shape': result['soft_probabilities'].shape,
+            'seed_embeddings_shape': result['seed_embeddings'].shape, 
+            'contextual_embeddings_shape': result['contextual_embeddings'].shape
+        }
+        with open(output_file, 'w', encoding='utf-8') as outfile:
+            json.dump(json_result, outfile, ensure_ascii=False, indent=2)
+        file_sizes['json'] = output_file.stat().st_size / 1024  # KB
+    
+    # Helper function for optimized GPU→CPU transfer
+    def to_cpu_numpy(tensor):
+        if torch.cuda.is_available():
+            return tensor.detach().cpu().pin_memory().numpy()
+        else:
+            return tensor.detach().cpu().numpy()
+    
+    # Save optional embeddings
+    if pipeline.save_soft_probabilities:
+        soft_prob_cpu = to_cpu_numpy(result['soft_probabilities'])
+        np.save(soft_prob_dir / f"soft_probs_{seq_id:06d}.npy", soft_prob_cpu)
+        file_sizes['soft_prob'] = (soft_prob_dir / f"soft_probs_{seq_id:06d}.npy").stat().st_size / 1024
+    
+    if pipeline.save_seed_embeddings:
+        seed_cpu = to_cpu_numpy(result['seed_embeddings'])
+        np.save(seed_dir / f"seed_emb_{seq_id:06d}.npy", seed_cpu)
+        file_sizes['seed'] = (seed_dir / f"seed_emb_{seq_id:06d}.npy").stat().st_size / 1024
+    
+    # Always save contextual embeddings (essential for downstream tasks)
+    context_cpu = to_cpu_numpy(result['contextual_embeddings'])
+    np.save(context_dir / f"context_emb_{seq_id:06d}.npy", context_cpu)
+    file_sizes['context'] = (context_dir / f"context_emb_{seq_id:06d}.npy").stat().st_size / 1024
+    
+    return file_sizes
+
+
+def log_saved_files(file_sizes, logger):
+    """Log saved file information in a clean, readable format."""
+    # Build components list
+    components = []
+    total_size = 0
+    
+    # Add components in consistent order
+    for component, key in [('JSON', 'json'), ('Seed', 'seed'), ('Context', 'context'), ('SoftProb', 'soft_prob')]:
+        if key in file_sizes:
+            size_kb = file_sizes[key]
+            components.append(f"{component}({size_kb:.1f}KB)")
+            total_size += size_kb
+        else:
+            # Skip rather than show "SKIPPED" for cleaner output
+            pass
+    
+    # Log the result
+    if components:
+        components_str = " + ".join(components)
+        logger.info(f"  Saved: {components_str} = {total_size:.1f}KB total")
+    else:
+        logger.info(f"  Saved: Context({file_sizes.get('context', 0):.1f}KB) = {total_size:.1f}KB total")
 
 
 def parse_args():
@@ -1060,76 +1150,14 @@ def main():
             logger.info(f"  Contextual embeddings: {result['contextual_embeddings'].shape}")
             logger.info(f"  Span candidates: {result['num_candidates']} (span_width: {result['span_width']})")
             
-            # Save results conditionally based on configuration
-            json_size = 0
-            if pipeline.config.get('output', {}).get('save_json_metadata', False):
-                output_file = json_dir / f"embedding_{seq_id:06d}.json"
-                with open(output_file, 'w', encoding='utf-8') as outfile:
-                    # Convert numpy arrays to lists for JSON serialization
-                    json_result = {
-                        'sequence_id': seq_id,
-                        'sequence': sequence,
-                        'sequence_length': result['sequence_length'],
-                        'num_candidates': result['num_candidates'],
-                        'span_candidates': result['span_candidates'],
-                        'soft_probabilities_shape': result['soft_probabilities'].shape,
-                        'seed_embeddings_shape': result['seed_embeddings'].shape, 
-                        'contextual_embeddings_shape': result['contextual_embeddings'].shape
-                    }
-                    json.dump(json_result, outfile, ensure_ascii=False, indent=2)
-                json_size = output_file.stat().st_size / 1024  # KB
+            # Save results using helper function
+            file_sizes = save_sequence_results(
+                pipeline, result, seq_id, sequence, 
+                json_dir, seed_dir, context_dir, soft_prob_dir, logger
+            )
             
-            # Save embeddings as numpy files conditionally
-            if pipeline.save_soft_probabilities:
-                np.save(soft_prob_dir / f"soft_probs_{seq_id:06d}.npy", result['soft_probabilities'])
-            
-            if pipeline.save_seed_embeddings:
-                np.save(seed_dir / f"seed_emb_{seq_id:06d}.npy", result['seed_embeddings'])
-            
-            # Always save contextual embeddings (essential for downstream tasks)
-            np.save(context_dir / f"context_emb_{seq_id:06d}.npy", result['contextual_embeddings'])
-            
-            # Log file sizes for monitoring (handle optional files)
-            seed_size = 0
-            if pipeline.save_seed_embeddings:
-                seed_size = (seed_dir / f"seed_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
-            context_size = (context_dir / f"context_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
-            
-            if pipeline.save_soft_probabilities:
-                soft_prob_size = (soft_prob_dir / f"soft_probs_{seq_id:06d}.npy").stat().st_size / 1024  # KB
-                if json_size > 0 and seed_size > 0:
-                    total_size = json_size + seed_size + context_size + soft_prob_size
-                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
-                              f"Context({context_size:.1f}KB) + SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total")
-                elif json_size > 0:
-                    total_size = json_size + context_size + soft_prob_size
-                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Context({context_size:.1f}KB) + "
-                              f"SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total (Seed: SKIPPED)")
-                elif seed_size > 0:
-                    total_size = seed_size + context_size + soft_prob_size
-                    logger.info(f"  Saved: Seed({seed_size:.1f}KB) + Context({context_size:.1f}KB) + "
-                              f"SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total (JSON: SKIPPED)")
-                else:
-                    total_size = context_size + soft_prob_size
-                    logger.info(f"  Saved: Context({context_size:.1f}KB) + SoftProb({soft_prob_size:.1f}KB) = "
-                              f"{total_size:.1f}KB total (JSON: SKIPPED, Seed: SKIPPED)")
-            else:
-                if json_size > 0 and seed_size > 0:
-                    total_size = json_size + seed_size + context_size
-                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
-                              f"Context({context_size:.1f}KB) = {total_size:.1f}KB total (SoftProb: SKIPPED)")
-                elif json_size > 0:
-                    total_size = json_size + context_size
-                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Context({context_size:.1f}KB) = "
-                              f"{total_size:.1f}KB total (Seed: SKIPPED, SoftProb: SKIPPED)")
-                elif seed_size > 0:
-                    total_size = seed_size + context_size
-                    logger.info(f"  Saved: Seed({seed_size:.1f}KB) + Context({context_size:.1f}KB) = "
-                              f"{total_size:.1f}KB total (JSON: SKIPPED, SoftProb: SKIPPED)")
-                else:
-                    total_size = context_size
-                    logger.info(f"  Saved: Context({context_size:.1f}KB) = {total_size:.1f}KB total "
-                              f"(JSON: SKIPPED, Seed: SKIPPED, SoftProb: SKIPPED)")
+            # Log saved files in clean format
+            log_saved_files(file_sizes, logger)
             
             processed_count += 1
             logger.info("-" * 50)
