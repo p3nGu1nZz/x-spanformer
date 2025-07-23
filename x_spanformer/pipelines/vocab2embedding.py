@@ -466,6 +466,7 @@ class Vocab2EmbeddingPipeline:
         self.save_numpy_arrays = output_config.get('save_numpy_arrays', True)
         self.save_json_metadata = output_config.get('save_json_metadata', True)
         self.add_analysis = output_config.get('add_analysis', False)
+        self.save_soft_probabilities = output_config.get('save_soft_probabilities', True)
         
         # Dynamic w_max calculation based on max_sequence_length and vocabulary
         # Set as half of max sequence length as computational bound
@@ -1033,21 +1034,27 @@ def main():
                 json.dump(json_result, outfile, ensure_ascii=False, indent=2)
             
             # Save embeddings as numpy files
-            np.save(soft_prob_dir / f"soft_probs_{seq_id:06d}.npy", result['soft_probabilities'])
+            if pipeline.save_soft_probabilities:
+                np.save(soft_prob_dir / f"soft_probs_{seq_id:06d}.npy", result['soft_probabilities'])
             np.save(seed_dir / f"seed_emb_{seq_id:06d}.npy", result['seed_embeddings'])
             np.save(context_dir / f"context_emb_{seq_id:06d}.npy", result['contextual_embeddings'])
-            
-            processed_count += 1
             
             # Log file sizes for monitoring
             json_size = (json_dir / f"embedding_{seq_id:06d}.json").stat().st_size / 1024  # KB
             seed_size = (seed_dir / f"seed_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
             context_size = (context_dir / f"context_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
-            soft_prob_size = (soft_prob_dir / f"soft_probs_{seq_id:06d}.npy").stat().st_size / 1024  # KB
             
-            total_size = json_size + seed_size + context_size + soft_prob_size
-            logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
-                       f"Context({context_size:.1f}KB) + SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total")
+            if pipeline.save_soft_probabilities:
+                soft_prob_size = (soft_prob_dir / f"soft_probs_{seq_id:06d}.npy").stat().st_size / 1024  # KB
+                total_size = json_size + seed_size + context_size + soft_prob_size
+                logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
+                          f"Context({context_size:.1f}KB) + SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total")
+            else:
+                total_size = json_size + seed_size + context_size
+                logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
+                          f"Context({context_size:.1f}KB) = {total_size:.1f}KB total (SoftProb: SKIPPED)")
+            
+            processed_count += 1
             logger.info("-" * 50)
                 
         except Exception as e:

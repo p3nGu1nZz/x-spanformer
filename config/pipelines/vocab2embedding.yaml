@@ -44,14 +44,21 @@ numerical:
 
 # Output configuration  
 output:
-  # Save intermediate representations for analysis
-  save_intermediate: true
+  # Save intermediate representations for analysis (disable by default for performance)
+  save_intermediate: false
 
-  # Export numpy arrays for downstream processing
+  # Export numpy arrays for downstream processing - ESSENTIAL (always keep these)
   save_numpy_arrays: true
 
-  # Include JSON metadata with embeddings
+  # Include JSON metadata with embeddings (lightweight, useful for introspection)
   save_json_metadata: true
 
-  # Add detailed analysis to outputs
+  # Add detailed analysis to outputs (disable by default)
   add_analysis: false
+
+  # PERFORMANCE OPTIMIZATION: Disable soft probability saving by default
+  # Soft probabilities (P matrix) are only used to compute seed embeddings
+  # Once seed embeddings are computed, soft probs are not needed downstream
+  # This saves ~30MB per sequence and significantly speeds up I/O
+  # Set to true only when you need to introspect the forward-backward probabilities
+  save_soft_probabilities: false
