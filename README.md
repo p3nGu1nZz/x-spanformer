@@ -105,6 +105,8 @@ The pipeline outputs both `vocab.jsonl` (final vocabulary with probabilities) an
 
 All pipelines utilize shared utilities from `x_spanformer.pipelines.shared` for consistent text processing and schema validation, eliminating code duplication and ensuring data format consistency across the preprocessing workflow.
 
+All pipelines utilize shared utilities from `x_spanformer.pipelines.shared` for consistent text processing and schema validation, eliminating code duplication and ensuring data format consistency across the preprocessing workflow.
+
 Use the output as either raw training strings (for unsupervised Phase I) or compile with `oxbar` to produce labeled span records.
 
 This enables X-Spanformer to bootstrap span boundaries from real-world documents with high structural signal, without relying on brittle tokenization.
