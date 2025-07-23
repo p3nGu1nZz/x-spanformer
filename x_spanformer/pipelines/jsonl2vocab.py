@@ -28,7 +28,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.vocab import VocabStats
-from x_spanformer.pipelines.shared.text_processor import load_pretrain_records
+from x_spanformer.pipelines.shared.jsonl_processor import (
+    discover_jsonl_files, 
+    load_corpus_with_logging,
+    save_consolidated_corpus
+)
 from x_spanformer.vocab import (
     build_candidate_set,
     validate_vocabulary_completeness,
@@ -38,14 +42,6 @@ from x_spanformer.vocab.vocab_logging import setup_vocab_logging, get_vocab_logg
 
 # Module-level logger that gets configured in main()
 logger = None
-
-
-def get_logger() -> logging.Logger:
-    """Get the module logger, creating a basic one if none exists."""
-    global logger
-    if logger is None:
-        logger = get_vocab_logger('jsonl2vocab')
-    return logger
 
 
 def parse_args():
@@ -74,7 +70,7 @@ def parse_args():
 
 def load_hparams(path: Path) -> dict:
     """Load hyperparameters from YAML configuration file."""
-    logger = get_logger()
+    logger = get_vocab_logger('jsonl2vocab')
     logger.info(f"Loading hyperparameters from: {path}")
     if not path.exists():
         logger.error(f"Config not found: {path}")
@@ -90,66 +86,7 @@ def load_hparams(path: Path) -> dict:
     return hparams
 
 
-def find_jsonl_files(indir: Path) -> List[Path]:
-    """Find all JSONL files recursively in the input directory."""
-    logger = get_logger()
-    logger.info(f"Searching for JSONL files in: {indir}")
-    
-    if not indir.exists():
-        logger.error(f"Input directory does not exist: {indir}")
-        raise FileNotFoundError(f"Input directory not found: {indir}")
-    
-    files = list(indir.rglob("*.jsonl"))
-    if not files:
-        logger.error(f"No JSONL files found under: {indir}")
-        raise SystemExit(1)
-    
-    logger.info(f"Found {len(files)} JSONL files:")
-    for i, f in enumerate(files, 1):
-        logger.debug(f"  {i:3d}. {f}")
-    
-    return files
 
-
-def load_corpus(files: List[Path]) -> List[str]:
-    """Load corpus from JSONL files using PretrainRecord schema."""
-    logger = get_logger()
-    logger.info("=" * 50)
-    logger.info("STAGE 1: CORPUS LOADING")
-    logger.info("=" * 50)
-    
-    all_sequences = []
-    total_stats = {'total': 0, 'valid': 0, 'discarded': 0, 'invalid': 0, 'too_long': 0}
-    
-    for f in files:
-        logger.info(f"Processing file: {f}")
-        
-        # Use shared function for consistent loading
-        sequences, stats = load_pretrain_records(str(f))
-        all_sequences.extend(sequences)
-        
-        # Accumulate statistics
-        for key in total_stats:
-            total_stats[key] += stats[key]
-        
-        logger.info(f"  File summary: {stats['valid']} valid, {stats['invalid']} invalid records")
-    
-    # Calculate corpus statistics
-    total_chars = sum(len(seg) for seg in all_sequences)
-    avg_segment_length = total_chars / len(all_sequences) if all_sequences else 0
-    
-    logger.info("-" * 50)
-    logger.info("CORPUS LOADING SUMMARY:")
-    logger.info(f"  Total input records: {total_stats['total']}")
-    logger.info(f"  Valid segments: {total_stats['valid']}")
-    logger.info(f"  Invalid records: {total_stats['invalid']}")
-    logger.info(f"  Discarded records: {total_stats['discarded']}")
-    logger.info(f"  Success rate: {total_stats['valid']/total_stats['total']*100:.1f}%")
-    logger.info(f"  Total characters: {total_chars:,}")
-    logger.info(f"  Average segment length: {avg_segment_length:.1f} chars")
-    logger.info("-" * 50)
-    
-    return all_sequences
 
 
 def build_candidate_set_with_output(corpus: List[str], L_max: int, M: int, out: Path) -> Tuple[List[str], Counter]:
@@ -171,7 +108,7 @@ def build_candidate_set_with_output(corpus: List[str], L_max: int, M: int, out: 
     Returns:
         Tuple of (candidate_vocabulary_U_0, frequency_counter)
     """
-    logger = get_logger()
+    logger = get_vocab_logger('jsonl2vocab')
     logger.info("=" * 50)
     logger.info("STAGE 2: CANDIDATE SET GENERATION")
     logger.info("=" * 50)
@@ -246,7 +183,7 @@ def build_candidate_set_with_output(corpus: List[str], L_max: int, M: int, out: 
 
 def save_vocab(path: Path, V: List[str], p_u: Dict[str, float], stats: Dict) -> None:
     """Save the final vocabulary to JSONL format using the schema structure."""
-    logger = get_logger()
+    logger = get_vocab_logger('jsonl2vocab')
     logger.info("=" * 50)
     logger.info("STAGE 4: VOCABULARY SERIALIZATION")
     logger.info("=" * 50)
@@ -341,8 +278,15 @@ def main():
     pipeline_start_time = time.time()
     
     # Algorithm Step 1: Extract candidate substrings up to length L_max from corpus
-    files = find_jsonl_files(args.indir)
-    corpus = load_corpus(files)
+    logger.info(f"Searching for JSONL files in: {args.indir}")
+    
+    try:
+        files = discover_jsonl_files(args.indir, recursive=True)
+    except (FileNotFoundError, ValueError) as e:
+        logger.error(str(e))
+        raise SystemExit(1)
+    
+    corpus = load_corpus_with_logging(files, stage_name="CORPUS LOADING")
     
     # Build initial vocabulary U_0 with frequency-based candidate selection
     U_0, freq = build_candidate_set_with_output(corpus, h["L_max"], h["M_candidates"], out)
@@ -365,6 +309,9 @@ def main():
     
     logger.info("EM algorithm completed successfully")
     
+    # Save consolidated corpus for downstream pipelines (renamed to corpus.jsonl)
+    corpus_path = save_consolidated_corpus(corpus, out, filename="corpus.jsonl", source_info="jsonl2vocab")
+    
     # Save final vocabulary with statistics following VocabStats schema
     save_vocab(out / "vocab.jsonl", V_final, p_final, stats)
 
@@ -378,11 +325,13 @@ def main():
     logger.info(f"Pipeline completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"Total execution time: {pipeline_time:.2f} seconds")
     logger.info(f"Final vocabulary size: {len(V_final)} pieces")
+    logger.info(f"Consolidated corpus: {corpus_path} ({len(corpus)} sequences)")
     logger.info(f"Output files saved to: {out}")
     logger.info("=" * 80)
 
     logger.info(f"[bold green]✅ Vocabulary induction complete! → {out / 'vocab.jsonl'}[/bold green]")
     logger.info(f"[dim]Final vocabulary size: {len(V_final)} pieces[/dim]")
+    logger.info(f"[dim]Consolidated corpus: {corpus_path.name} ({len(corpus)} sequences)[/dim]")
     logger.info(f"[dim]Baseline PPL: {stats.get('baseline_ppl', 'N/A'):.2f}, Final PPL: {stats.get('final_ppl', 'N/A'):.2f}[/dim]")
     logger.info(f"[dim]OOV rate: {stats.get('oov_rate', 0.0):.4f}, EM iterations: {stats.get('em_iterations', 0)}[/dim]")
     logger.info(f"[dim]Pipeline completed in {pipeline_time:.1f}s[/dim]")

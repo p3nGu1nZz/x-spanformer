@@ -35,13 +35,6 @@ from x_spanformer.pipelines.shared.repo_exporter import GitRepoExporter, CodeFil
 # Module-level logger that gets configured in main()
 logger = None
 
-def get_logger():
-    """Get the module logger, creating a basic one if none exists."""
-    global logger
-    if logger is None:
-        logger = get_vocab_logger('repo2jsonl')
-    return logger
-
 def load_pipeline_config() -> Dict:
     """Load pipeline configuration from repo2jsonl.yaml."""
     config_path = Path(__file__).parent.parent.parent / "config" / "pipelines" / "repo2jsonl.yaml"

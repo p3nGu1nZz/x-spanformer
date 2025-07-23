@@ -158,6 +158,12 @@ All per-stage files are written under the specified output directory (`--out`):
        "pruned_pieces": 2847
      }
      ```
+   - `corpus.jsonl`: consolidated corpus for downstream processing, compatible with `vocab2embedding.py`:
+     ```json
+     {"raw": "The quick brown fox...", "type": "mixed", "id": {"id": "corpus-seq-00000001"}, "meta": {...}}
+     {"raw": "X-SPANFORMER implementation...", "type": "mixed", "id": {"id": "corpus-seq-00000002"}, "meta": {...}}
+     …
+     ```
 
 ---
 
@@ -225,7 +231,18 @@ data/vocab/out/
 │   └── candidates.txt
 ├── pruning/
 │   └── final_probs.json
-└── vocab.jsonl
+├── vocab.jsonl
+├── vocab_stats.json
+└── corpus.jsonl               # ← New: consolidated corpus for vocab2embedding.py
+```
+
+The generated `corpus.jsonl` can be used directly with the vocab2embedding pipeline:
+
+```bash
+uv run -m x_spanformer.pipelines.vocab2embedding \
+  --vocab data/vocab/out/vocab.jsonl \
+  --input data/vocab/out/corpus.jsonl \
+  --output data/embeddings/out
 ```
 
 ---

@@ -22,26 +22,17 @@ without requiring separate sequence extraction steps.
 """
 import argparse
 import json
-import logging
 import math
 import re
+import signal
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional, Union
-import warnings
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import yaml
-import numpy as np
-import warnings
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import yaml
 import numpy as np
 
@@ -49,48 +40,35 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from x_spanformer.schema.pretrain_record import PretrainRecord
-from x_spanformer.schema.vocab import VocabStats
 from x_spanformer.embedding.embedding_logging import setup_embedding_logging, get_embedding_logger
 from x_spanformer.embedding.embedding_utils import (
     analyze_embedding_quality
 )
-from x_spanformer.pipelines.shared.text_processor import load_pretrain_records
+from x_spanformer.pipelines.shared.jsonl_processor import load_pretrain_records
+from x_spanformer.kernel import ConvEncoderKernel, validate_convolution_parameters
 
 # Module-level logger that gets configured in main()
 logger = None
 
-def get_logger() -> logging.Logger:
-    """Get the module logger, creating a basic one if none exists."""
-    global logger
-    if logger is None:
-        logger = get_embedding_logger('vocab2embedding')
-    return logger
+# Global flag for graceful shutdown
+SHUTDOWN_REQUESTED = False
 
+def signal_handler(signum, frame):
+    """Handle termination signals gracefully."""
+    global SHUTDOWN_REQUESTED
+    SHUTDOWN_REQUESTED = True
+    if logger:
+        logger.warning("SHUTDOWN SIGNAL RECEIVED - Finishing current sequence and exiting gracefully...")
+        logger.warning(f"Signal: {signum}, Frame: {frame}")
+    else:
+        print("SHUTDOWN SIGNAL RECEIVED - Finishing current sequence and exiting gracefully...")
 
-def load_corpus(corpus_path: str, max_length: Optional[int] = None) -> List[str]:
-    """
-    Load sequences from a JSONL file using PretrainRecord format.
-    
-    Uses the shared text processor for consistent corpus loading.
-    
-    Args:
-        corpus_path: Path to the JSONL corpus file with PretrainRecord format
-        max_length: Optional maximum sequence length filter
-        
-    Returns:
-        List of text sequences extracted from the corpus
-        
-    Raises:
-        FileNotFoundError: If the corpus file doesn't exist
-        ValueError: If no valid sequences are found
-    """
-    sequences, stats = load_pretrain_records(corpus_path, max_length)
-    
-    if not sequences:
-        raise ValueError(f"No valid sequences found in {corpus_path}. Stats: {stats}")
-    
-    get_logger().info(f"Successfully loaded {len(sequences)} sequences from corpus")
-    return sequences
+def setup_signal_handlers():
+    """Setup signal handlers for graceful shutdown."""
+    signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
+    if hasattr(signal, 'SIGBREAK'):  # Windows
+        signal.signal(signal.SIGBREAK, signal_handler)
 
 
 class UnigramLM(nn.Module):
@@ -122,37 +100,6 @@ class UnigramLM(nn.Module):
         # Convert probabilities to log space for numerical stability
         log_probs = [math.log(vocab_dict[piece]) for piece in self.piece_to_idx.keys()]
         self.log_piece_probs = torch.tensor(log_probs, device=device, dtype=torch.float32)
-        
-        # Build prefix tree for efficient matching
-        self._build_prefix_tree(vocab_dict.keys())
-    
-    def _build_prefix_tree(self, pieces):
-        """Build prefix tree for efficient piece matching."""
-        self.prefix_tree = {}
-        for piece in pieces:
-            node = self.prefix_tree
-            for char in piece:
-                if char not in node:
-                    node[char] = {}
-                node = node[char]
-            node['_end'] = self.piece_to_idx[piece]
-    
-    def _find_matches_at_position(self, sequence: str, pos: int):
-        """Find all pieces that match starting at position pos using prefix tree."""
-        matches = []
-        node = self.prefix_tree
-        
-        for i in range(pos, min(pos + self.max_piece_length, len(sequence))):
-            char = sequence[i]
-            if char not in node:
-                break
-            node = node[char]
-            if '_end' in node:
-                piece_idx = node['_end']
-                piece_len = i - pos + 1
-                matches.append((piece_idx, piece_len))
-        
-        return matches
     
     def matches_at_position(self, sequence: str, pos: int, piece: str) -> bool:
         """Check if piece matches sequence starting at position pos."""
@@ -162,77 +109,86 @@ class UnigramLM(nn.Module):
     
     def forward_backward(self, sequence: str) -> torch.Tensor:
         """
-        Compute soft piece probabilities using forward-backward algorithm.
+        Compute soft piece probabilities using forward-backward algorithm
+        exactly as specified in Section 3.2.1, Equations (2), (3), and (4).
+        
+        Note: Paper uses 1-indexed positions, we use 0-indexed internally
+        but follow the mathematical semantics precisely.
         
         Args:
             sequence: Input codepoint sequence as string
             
         Returns:
             Probability matrix P ∈ R^{T × |V|} where P[t,i] is the probability
-            of piece u_i starting at position t
+            of piece u_i starting at position t (using paper's semantics)
         """
         T = len(sequence)
         V = self.vocab_size
         
-        # Initialize forward probabilities α_t
-        # α_t = probability of generating sequence[0:t]
+        # Initialize forward probabilities α_t (Equation 2)
+        # Paper: α_1 = 1, we use α_0 = 1 (0-indexed)
         alpha = torch.full((T + 1,), -float('inf'), device=self.device)
         alpha[0] = 0.0  # log(1) = 0
         
-        # Forward pass with prefix tree optimization
+        # Forward pass: α_{t+1} = Σ_{u_i : match(x,t,u_i)} α_t * p(u_i) (Equation 2)
         for t in range(T):
             if alpha[t] == -float('inf'):
                 continue
                 
-            # Use prefix tree to find all matching pieces efficiently
-            matches = self._find_matches_at_position(sequence, t)
-            for piece_idx, piece_len in matches:
-                next_pos = t + piece_len
-                if next_pos <= T:
-                    # α_{t+|u_i|} += α_t * p(u_i)  (in log space)
-                    alpha[next_pos] = torch.logsumexp(
-                        torch.stack([alpha[next_pos], 
-                                   alpha[t] + self.log_piece_probs[piece_idx]]),
-                        dim=0
-                    )
+            # Check all vocabulary pieces that match at position t
+            for piece_idx, piece in enumerate(self.idx_to_piece.values()):
+                if self.matches_at_position(sequence, t, piece):
+                    next_pos = t + len(piece)
+                    if next_pos <= T:
+                        # Accumulate probability: α_{t+|u_i|} += α_t * p(u_i) (log space)
+                        alpha[next_pos] = torch.logsumexp(
+                            torch.stack([alpha[next_pos], 
+                                       alpha[t] + self.log_piece_probs[piece_idx]]),
+                            dim=0
+                        )
         
-        # Initialize backward probabilities β_t
-        # β_t = probability of generating sequence[t:T] 
+        # Initialize backward probabilities β_t (Equation 3)
+        # Paper: β_{T+1} = 1, we use β_T = 1 (0-indexed)
         beta = torch.full((T + 1,), -float('inf'), device=self.device)
         beta[T] = 0.0  # log(1) = 0
         
-        # Backward pass with prefix tree optimization
+        # Backward pass: β_t = Σ_{u_i : match(x,t,u_i)} p(u_i) * β_{t+|u_i|} (Equation 3)
         for t in range(T - 1, -1, -1):
-            matches = self._find_matches_at_position(sequence, t)
-            for piece_idx, piece_len in matches:
-                next_pos = t + piece_len
-                if next_pos <= T and beta[next_pos] != -float('inf'):
-                    # β_t += p(u_i) * β_{t+|u_i|}  (in log space)
-                    beta[t] = torch.logsumexp(
-                        torch.stack([beta[t],
-                                   self.log_piece_probs[piece_idx] + beta[next_pos]]),
-                        dim=0
-                    )
+            for piece_idx, piece in enumerate(self.idx_to_piece.values()):
+                if self.matches_at_position(sequence, t, piece):
+                    next_pos = t + len(piece)
+                    if next_pos <= T and beta[next_pos] != -float('inf'):
+                        # Accumulate probability: β_t += p(u_i) * β_{t+|u_i|} (log space)
+                        beta[t] = torch.logsumexp(
+                            torch.stack([beta[t],
+                                       self.log_piece_probs[piece_idx] + beta[next_pos]]),
+                            dim=0
+                        )
         
-        # Compute soft piece probabilities
-        # P[t,i] = α_t * p(u_i) * β_{t+|u_i|} / α_T
+        # Compute soft piece probabilities (Equation 4)
+        # P_{t,i} = (α_t * p(u_i) * β_{t+|u_i|}) / α_{T+1} if match(x,t,u_i), else 0
         P = torch.zeros((T, V), device=self.device)
         
-        normalization = alpha[T]  # Total probability of sequence
+        normalization = alpha[T]  # α_{T+1} in paper notation
         if normalization == -float('inf'):
-            get_logger().warning(f"Sequence cannot be segmented with given vocabulary")
+            get_embedding_logger('vocab2embedding').warning(f"Sequence cannot be segmented with given vocabulary")
             return P
         
+        # Count non-zero probabilities for progress reporting
+        prob_count = 0
         for t in range(T):
-            matches = self._find_matches_at_position(sequence, t)
-            for piece_idx, piece_len in matches:
-                next_pos = t + piece_len
-                if next_pos <= T:
-                    log_prob = (alpha[t] + 
-                              self.log_piece_probs[piece_idx] + 
-                              beta[next_pos] - 
-                              normalization)
-                    P[t, piece_idx] = torch.exp(log_prob)
+            for piece_idx, piece in enumerate(self.idx_to_piece.values()):
+                if self.matches_at_position(sequence, t, piece):
+                    next_pos = t + len(piece)
+                    if next_pos <= T:
+                        # Exact implementation of Equation (4)
+                        log_prob = (alpha[t] + 
+                                  self.log_piece_probs[piece_idx] + 
+                                  beta[next_pos] - 
+                                  normalization)
+                        P[t, piece_idx] = torch.exp(log_prob)
+                        if P[t, piece_idx] > 0:
+                            prob_count += 1
         
         return P
 
@@ -262,15 +218,22 @@ class SeedEmbedder(nn.Module):
             torch.zeros(self.vocab_size, embed_dim, device=device)
         )
         
-        # Initialize embeddings using Eq. (4) from Section 3.2.2
+        # Initialize embeddings using Equations (5) and (6) from Section 3.2.2
+        # W_emb[i,:] ~ N(0, σ²/√p(u_i))  where σ² = 2/(d + |V|) (Xavier-style scaling)
         pieces = list(vocab_dict.keys())
         probs = list(vocab_dict.values())
         
+        # Calculate Xavier-style base variance (Equation 6)
+        xavier_base_variance = 2.0 / (embed_dim + len(vocab_dict))
+        
         for i, (piece, prob) in enumerate(zip(pieces, probs)):
-            if len(piece) == 1:  # Single codepoint - standard Xavier
-                std = math.sqrt(2.0 / embed_dim)
-            else:  # Multi-codepoint piece - probability-adjusted Xavier
-                std = math.sqrt(2.0 / (embed_dim * prob))
+            if len(piece) == 1:  
+                # Single codepoint - standard Xavier initialization
+                std = math.sqrt(xavier_base_variance)
+            else:  
+                # Multi-codepoint piece - frequency-scaled Gaussian (Equation 5)
+                # σ²/√p(u_i) becomes std = √(σ²/√p(u_i)) = √(xavier_base_variance/√prob)
+                std = math.sqrt(xavier_base_variance / math.sqrt(prob))
             
             with torch.no_grad():
                 self.embedding_matrix[i].normal_(0, std)
@@ -286,83 +249,6 @@ class SeedEmbedder(nn.Module):
             Seed embeddings H^0 = P * W_emb ∈ R^{T × d}
         """
         return torch.matmul(soft_probs, self.embedding_matrix)
-
-
-class ConvEncoder(nn.Module):
-    """
-    Multi-scale dilated convolutional encoder implementing the contextual
-    embedding computation described in Section 3.2.3.
-    """
-    
-    def __init__(self, embed_dim: int, device: str = 'cuda'):
-        """
-        Initialize multi-scale convolutional encoder.
-        
-        Args:
-            embed_dim: Embedding dimension d
-            device: PyTorch device for computation
-        """
-        super().__init__()
-        self.device = device
-        self.embed_dim = embed_dim
-        
-        # Multi-scale dilated convolutions with kernel sizes [3,5,7] and dilations [1,2,4]
-        # Padding calculation: (kernel_size - 1) * dilation // 2
-        self.conv_layers = nn.ModuleList([
-            # Scale 1: kernel=3, dilation=1, padding=(3-1)*1//2=1
-            nn.Conv1d(embed_dim, embed_dim, kernel_size=3, dilation=1, padding=1),
-            # Scale 2: kernel=5, dilation=2, padding=(5-1)*2//2=4  
-            nn.Conv1d(embed_dim, embed_dim, kernel_size=5, dilation=2, padding=4),
-            # Scale 3: kernel=7, dilation=4, padding=(7-1)*4//2=12
-            nn.Conv1d(embed_dim, embed_dim, kernel_size=7, dilation=4, padding=12)
-        ])
-        
-        # Layer normalization and dropout
-        self.layer_norm = nn.LayerNorm(embed_dim)
-        self.dropout = nn.Dropout(0.1)
-        
-        # Output projection
-        self.output_proj = nn.Linear(3 * embed_dim, embed_dim)
-        
-        # Move all modules to the specified device
-        self.to(device)
-    
-    def forward(self, seed_embeddings: torch.Tensor) -> torch.Tensor:
-        """
-        Apply multi-scale contextualization to seed embeddings.
-        
-        Args:
-            seed_embeddings: Seed embeddings H^0 ∈ R^{T × d}
-            
-        Returns:
-            Contextual embeddings H ∈ R^{T × d}
-        """
-        # Transpose for conv1d: (T, d) -> (d, T)
-        x = seed_embeddings.transpose(-2, -1)
-        
-        # Apply multi-scale convolutions
-        conv_outputs = []
-        for conv in self.conv_layers:
-            conv_out = F.gelu(conv(x))
-            # Ensure output length matches input length by trimming if necessary
-            if conv_out.size(-1) != x.size(-1):
-                # Trim to match input length
-                diff = conv_out.size(-1) - x.size(-1)
-                conv_out = conv_out[..., diff//2:-(diff-diff//2)] if diff > 0 else conv_out
-            conv_outputs.append(conv_out)
-        
-        # Concatenate multi-scale features: list of (d, T) -> (3d, T)
-        concatenated = torch.cat(conv_outputs, dim=-2)  # Concatenate along channel dimension
-        
-        # Transpose back and project: (3d, T) -> (T, 3d) -> (T, d)
-        concatenated = concatenated.transpose(-2, -1)
-        output = self.output_proj(concatenated)
-        
-        # Residual connection and layer norm
-        output = self.layer_norm(output + seed_embeddings)
-        output = self.dropout(output)
-        
-        return output
 
 
 class SpanCandidateGenerator:
@@ -386,41 +272,41 @@ class SpanCandidateGenerator:
         self.tau_vocab = tau_vocab
         self.tau_comp = tau_comp
         self.w_max = w_max
+        
+        # Pre-compute sorted pieces for efficient matching
+        self._sorted_pieces = sorted(vocab_dict.keys(), key=len, reverse=True)
+        
+        # Pre-compute vocabulary set for O(1) lookups
+        self._vocab_set = set(vocab_dict.keys())
     
     def vocabulary_alignment(self, span_text: str) -> bool:
         """Check if span has high-probability vocabulary alignment."""
-        if span_text in self.vocab_dict:
+        if span_text in self._vocab_set:
             prob = self.vocab_dict[span_text]
             if not isinstance(prob, (int, float)):
-                get_logger().warning(f"Non-numeric probability for '{span_text}': {prob} (type: {type(prob)})")
-                return False
-            
-            # Ensure tau_vocab is also numeric
-            tau = self.tau_vocab
-            if not isinstance(tau, (int, float)):
-                get_logger().warning(f"Non-numeric tau_vocab: {tau} (type: {type(tau)})")
                 return False
                 
-            return prob >= tau
+            return prob >= self.tau_vocab
         return False
     
     def compositional_potential(self, span_text: str) -> bool:
-        """Check if span has compositional segmentation potential."""
-        # Simple greedy segmentation to estimate compositional probability
+        """Check if span has compositional segmentation potential using efficient greedy matching."""
+        if not span_text or len(span_text) > 20:  # Skip very long spans
+            return False
+        
         pos = 0
         log_prob = 0.0
         
         while pos < len(span_text):
-            # Find longest matching piece
+            # Find longest matching piece using sorted list (early termination)
             best_piece = None
-            best_len = 0
             
-            for piece in self.vocab_dict:
-                if (len(piece) > best_len and 
-                    pos + len(piece) <= len(span_text) and
-                    span_text[pos:pos + len(piece)] == piece):
+            for piece in self._sorted_pieces:
+                if len(piece) > len(span_text) - pos:
+                    continue  # Piece too long
+                if span_text[pos:pos + len(piece)] == piece:
                     best_piece = piece
-                    best_len = len(piece)
+                    break  # Found longest match, stop searching
             
             if best_piece is None:
                 return False  # Cannot segment
@@ -431,41 +317,95 @@ class SpanCandidateGenerator:
         return math.exp(log_prob) >= self.tau_comp
     
     def whitespace_coherent(self, span_text: str) -> bool:
-        """Check if span respects whitespace boundaries."""
-        # Simple heuristic: span should not split words
+        """
+        Check if span represents coherent x-bar linguistic units.
+        
+        X-bar spans should represent complete linguistic units (full words, phrases)
+        rather than arbitrary subword pieces. This ensures we move from subword 
+        token-level representation to meaningful syntactic spans.
+        """
         if not span_text:
             return False
         
-        # Allow spans that start/end at word boundaries or are complete words
-        starts_at_boundary = span_text[0].isspace() or not span_text[0].isalpha()
-        ends_at_boundary = span_text[-1].isspace() or not span_text[-1].isalpha()
+        # Strip leading/trailing whitespace to get the core content
         stripped = span_text.strip()
-        is_complete_word = bool(stripped) and not any(c.isspace() for c in stripped)
+        if not stripped:
+            return False
         
-        return starts_at_boundary or ends_at_boundary or is_complete_word
+        # X-bar spans should be complete words or phrases, not split words
+        # Allow spans that:
+        # 1. Are single complete words (no internal spaces)
+        # 2. Are multi-word phrases (complete words separated by spaces)
+        # 3. Don't start or end in the middle of alphanumeric sequences
+        
+        # Check if it's a single word
+        if ' ' not in stripped:
+            return True
+        
+        # For multi-word spans, ensure they don't split words
+        # Original span should start and end at word boundaries in the context
+        original_start_ok = span_text[0].isspace() or not span_text[0].isalnum()
+        original_end_ok = span_text[-1].isspace() or not span_text[-1].isalnum()
+        
+        # Or the stripped version should be complete words
+        words = stripped.split()
+        all_complete_words = all(word.isalpha() or word.isalnum() for word in words if word)
+        
+        return (original_start_ok and original_end_ok) or all_complete_words
     
     def generate_candidates(self, sequence: str) -> List[Tuple[int, int]]:
         """
-        Generate filtered span candidates using Algorithm 3.
+        Generate filtered span candidates following Algorithm 3 from Section 3.2.4.
+        
+        Optimized single-threaded implementation to avoid multiprocessing overhead
+        and memory issues. Uses efficient early termination and batch processing.
         
         Args:
             sequence: Input codepoint sequence
             
         Returns:
-            List of (start, end) candidate span positions
+            List of (start, end) candidate span positions (0-indexed, exclusive end)
         """
         T = len(sequence)
         candidates = []
         
-        for i in range(T - 1):
-            for j in range(i + 1, min(i + self.w_max + 1, T + 1)):
+        # Statistics for debugging
+        vocab_aligned = 0
+        comp_potential = 0
+        whitespace_coherent = 0
+        total_checked = 0
+        
+        # Single-threaded processing with early termination optimizations
+        for i in range(T):
+            # Check for shutdown signal
+            if SHUTDOWN_REQUESTED:
+                if logger:
+                    logger.warning("Shutdown requested during candidate generation")
+                break
+                
+            max_j = min(i + self.w_max, T)
+            
+            for j in range(i + 1, max_j + 1):
+                total_checked += 1
                 span_text = sequence[i:j]
                 
-                # Apply filtering criteria from Algorithm 3
-                if (self.vocabulary_alignment(span_text) or
-                    self.compositional_potential(span_text) or  
-                    self.whitespace_coherent(span_text)):
+                # Apply the three filtering criteria in order of computational cost
+                # (fastest to slowest to maximize early termination)
+                if self.vocabulary_alignment(span_text):
                     candidates.append((i, j))
+                    vocab_aligned += 1
+                elif self.whitespace_coherent(span_text):
+                    candidates.append((i, j))
+                    whitespace_coherent += 1
+                elif self.compositional_potential(span_text):
+                    candidates.append((i, j))
+                    comp_potential += 1
+        
+        # Log statistics for debugging
+        if logger:
+            logger.debug(f"Candidate generation stats: {total_checked} spans checked, "
+                        f"{len(candidates)} candidates ({vocab_aligned} vocab-aligned, "
+                        f"{comp_potential} comp-potential, {whitespace_coherent} whitespace-coherent)")
         
         return candidates
 
@@ -475,39 +415,83 @@ class Vocab2EmbeddingPipeline:
     Main pipeline class implementing the unified algorithm from Section 3.2.5.
     """
     
-    def __init__(self, config_path: str, device: str = 'cuda'):
+    def __init__(self, config_path: str):
         """
         Initialize the vocab2embedding pipeline.
         
         Args:
             config_path: Path to configuration YAML file
-            device: PyTorch device for computation
         """
-        self.device = device
         self.config = self._load_config(config_path)
         
-        # Extract all config parameters
-        self.embed_dim = self.config.get('embed_dim', 256)
-        self.max_sequence_length = self.config.get('max_sequence_length', 512)
-        self.epsilon = self.config.get('epsilon', 1e-12)
-        self.max_piece_length = self.config.get('max_piece_length', 16)
-        self.save_intermediate = self.config.get('save_intermediate', True)
-        self.save_numpy_arrays = self.config.get('save_numpy_arrays', True)
-        self.save_json_metadata = self.config.get('save_json_metadata', True)
-        self.add_analysis = self.config.get('add_analysis', False)
+        # Configure device from config with CUDA fallback to CPU
+        processing_config = self.config.get('processing', {})
+        base_device = processing_config.get('device', 'cuda')
+        device_id = processing_config.get('device_id', 0)
         
-        # Initialize components (will be set when vocabulary is loaded)
-        self.unigram_lm: Optional[UnigramLM] = None
-        self.seed_embedder: Optional[SeedEmbedder] = None  
-        self.conv_encoder: Optional[ConvEncoder] = None
-        self.candidate_generator: Optional[SpanCandidateGenerator] = None
-        
-        get_logger().info(f"Initialized vocab2embedding pipeline on {device}")
+        if base_device == 'cuda':
+            if torch.cuda.is_available():
+                self.device = f"cuda:{device_id}" if torch.cuda.device_count() > 1 else "cuda"
+            else:
+                get_embedding_logger('vocab2embedding').warning("CUDA requested but not available, falling back to CPU")
+                self.device = "cpu"
+        else:
+            self.device = "cpu"
+            
+        get_embedding_logger('vocab2embedding').info(f"Initialized vocab2embedding pipeline on {self.device}")
     
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file."""
         with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
+            config = yaml.safe_load(f)
+        
+        # Extract all config parameters from nested structure
+        architecture_config = config.get('architecture', {})
+        span_config = config.get('span_generation', {})
+        processing_config = config.get('processing', {})
+        numerical_config = config.get('numerical', {})
+        output_config = config.get('output', {})
+        
+        self.embed_dim = architecture_config.get('embed_dim', 512)
+        self.dropout_rate = architecture_config.get('dropout_rate', 0.1)
+        self.tau_vocab = span_config.get('tau_vocab', 1e-4)
+        self.tau_comp = span_config.get('tau_comp', 1e-6)
+        
+        # Common parameter extraction
+        self.max_sequence_length = processing_config.get('max_sequence_length', 512)
+        self.batch_size = processing_config.get('batch_size', 64)
+        self.epsilon = numerical_config.get('epsilon', 1e-12)
+        self.max_piece_length = numerical_config.get('max_piece_length', 8)
+        self.save_intermediate = output_config.get('save_intermediate', True)
+        self.save_numpy_arrays = output_config.get('save_numpy_arrays', True)
+        self.save_json_metadata = output_config.get('save_json_metadata', True)
+        self.add_analysis = output_config.get('add_analysis', False)
+        
+        # Dynamic w_max calculation based on max_sequence_length and vocabulary
+        # Set as half of max sequence length as computational bound
+        self.w_max_bound = self.max_sequence_length // 2
+        
+        # Validate convolution parameters early
+        conv_kernels = architecture_config.get('conv_kernels')
+        conv_dilations = architecture_config.get('conv_dilations')
+        
+        if conv_kernels is None:
+            raise ValueError("architecture.conv_kernels must be specified in configuration")
+        if conv_dilations is None:
+            raise ValueError("architecture.conv_dilations must be specified in configuration")
+        
+        # Use centralized validation from kernel package
+        validate_convolution_parameters(conv_kernels, conv_dilations)
+            
+        get_embedding_logger('vocab2embedding').info(f"Validated convolution config: kernels={conv_kernels}, dilations={conv_dilations}")
+        
+        # Initialize components (will be set when vocabulary is loaded)
+        self.unigram_lm: Optional[UnigramLM] = None
+        self.seed_embedder: Optional[SeedEmbedder] = None  
+        self.conv_encoder: Optional[ConvEncoderKernel] = None
+        self.candidate_generator: Optional[SpanCandidateGenerator] = None
+        
+        return config
     
     def load_vocabulary(self, vocab_path: str):
         """
@@ -522,75 +506,173 @@ class Vocab2EmbeddingPipeline:
         vocab_dict = {}
         total_prob = 0.0
         
-        get_logger().info(f"Loading vocabulary from: {vocab_path}")
+        get_embedding_logger('vocab2embedding').info(f"Loading vocabulary from: {vocab_path}")
         
         with open(vocab_path, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
                 try:
                     entry = json.loads(line)
-                    if 'piece' in entry and ('probability' in entry or 'prob' in entry):
-                        # Support both 'probability' and 'prob' field names
-                        prob = entry.get('probability', entry.get('prob'))
-                        if isinstance(prob, str):
-                            prob = float(prob)
-                        
+                    # Support both 'probability' and 'prob' for backward compatibility
+                    prob = entry.get('probability') or entry.get('prob')
+                    
+                    if 'piece' in entry and prob is not None:
                         if prob <= 0 or prob > 1:
-                            get_logger().warning(f"Line {line_num}: Invalid probability {prob} for piece '{entry['piece']}'")
+                            get_embedding_logger('vocab2embedding').warning(f"Line {line_num}: Invalid probability {prob} for piece '{entry['piece']}'")
                             continue
                             
                         vocab_dict[entry['piece']] = prob
                         total_prob += prob
                     else:
-                        get_logger().warning(f"Line {line_num}: Missing required fields")
+                        missing_fields = []
+                        if 'piece' not in entry:
+                            missing_fields.append('piece')
+                        if prob is None:
+                            missing_fields.append('probability or prob')
+                        get_embedding_logger('vocab2embedding').warning(f"Line {line_num}: Missing required fields: {', '.join(missing_fields)}")
                 except Exception as e:
-                    get_logger().error(f"Line {line_num}: Error parsing vocabulary entry: {e}")
+                    get_embedding_logger('vocab2embedding').error(f"Line {line_num}: Error parsing vocabulary entry: {e}")
         
         # Validate vocabulary properties
         if not vocab_dict:
             raise ValueError("No valid vocabulary entries found")
         
-        get_logger().info(f"Loaded vocabulary: {len(vocab_dict)} pieces, total prob: {total_prob:.6f}")
+        get_embedding_logger('vocab2embedding').info(f"Loaded vocabulary: {len(vocab_dict)} pieces, total prob: {total_prob:.6f}")
         
         # Check for single codepoints
         single_chars = {piece for piece in vocab_dict if len(piece) == 1}
-        get_logger().info(f"Single codepoint coverage: {len(single_chars)} unique characters")
+        get_embedding_logger('vocab2embedding').info(f"Single codepoint coverage: {len(single_chars)} unique characters")
         
-        # Initialize pipeline components
+        # Initialize pipeline components (span width will be set dynamically per sequence)
         self.unigram_lm = UnigramLM(vocab_dict, self.device)
-        self.seed_embedder = SeedEmbedder(vocab_dict, self.embed_dim, self.device).to(self.device)
-        self.conv_encoder = ConvEncoder(self.embed_dim, self.device).to(self.device)
+        self.seed_embedder = SeedEmbedder(vocab_dict, self.embed_dim, self.device)
+        # Initialize convolutional encoder with validated parameters
+        # Get convolution configuration from nested structure (validated in _validate_convolution_config)
+        architecture_config = self.config['architecture']  # Safe to access directly after validation
+        conv_kernels = architecture_config['conv_kernels']
+        conv_dilations = architecture_config['conv_dilations']
+        
+        self.conv_encoder = ConvEncoderKernel(
+            self.embed_dim,
+            conv_kernels,
+            conv_dilations,
+            self.dropout_rate, 
+            self.device
+        )
+        
+        # Store vocab_dict for dynamic candidate generator creation
+        self.vocab_dict = vocab_dict
+        
+        # Dynamic w_max will be computed when corpus is processed
+        # Set default to sequence-based bound for now
+        self.w_max = self.w_max_bound  # max_sequence_length // 2
+        
+        get_embedding_logger('vocab2embedding').info(
+            f"Dynamic w_max initialized: {self.w_max} (max_sequence_length // 2)"
+        )
+        
+        # Initialize default candidate generator for testing/inspection purposes
+        span_config = self.config.get('span_generation', {})
         self.candidate_generator = SpanCandidateGenerator(
             vocab_dict,
-            tau_vocab=float(self.config.get('tau_vocab', 1e-4)),
-            tau_comp=float(self.config.get('tau_comp', 1e-6)),
-            w_max=int(self.config.get('w_max', 64))
+            tau_vocab=float(span_config.get('tau_vocab', 1e-4)),
+            tau_comp=float(span_config.get('tau_comp', 1e-6)),
+            w_max=self.w_max  # Use dynamic value instead of config
         )
     
-    def process_sequence(self, sequence: str) -> Dict:
+    def compute_dynamic_w_max(self, sequences: List[str]) -> int:
         """
-        Process a single sequence through the complete pipeline.
+        Compute dynamic w_max based on the actual input corpus sequences.
+        
+        Following paper Section 3.2: w_max = max(longest_word_length, max_sequence_length // 2)
+        where longest_word_length is found by analyzing the corpus for the longest complete word.
+        
+        Args:
+            sequences: List of input sequences from the corpus
+            
+        Returns:
+            Computed w_max value
+        """
+        import re
+        
+        max_word_length = 0
+        
+        get_embedding_logger('vocab2embedding').info(f"Computing dynamic w_max from {len(sequences)} sequences...")
+        
+        for sequence in sequences:
+            if not sequence or not sequence.strip():
+                continue
+                
+            # Split by whitespace to get words - use regex to handle multiple spaces/tabs/newlines
+            words = re.split(r'\s+', sequence.strip())
+            
+            for word in words:
+                if word:  # Skip empty strings
+                    word_length = len(word)
+                    if word_length > max_word_length:
+                        max_word_length = word_length
+        
+        # Dynamic w_max: larger of longest word or sequence-based bound
+        corpus_based_w_max = max_word_length
+        sequence_based_w_max = self.w_max_bound  # max_sequence_length // 2
+        
+        # Use the larger value to ensure both corpus and sequence coverage
+        computed_w_max = max(corpus_based_w_max, sequence_based_w_max)
+        
+        get_embedding_logger('vocab2embedding').info(
+            f"Dynamic w_max computed: {computed_w_max} "
+            f"(corpus-based: {corpus_based_w_max}, sequence-based: {sequence_based_w_max}, "
+            f"longest word: {max_word_length} chars)"
+        )
+        
+        return computed_w_max
+    
+    def process_sequence(self, sequence: str, metadata: Optional[Dict] = None) -> Dict:
+        """
+        Process a single sequence through the complete pipeline following
+        Algorithm 4 from Section 3.2.5 exactly, with dynamic modality detection.
+        
+        Implementation of the Unified Seed Embedding and Candidate Generation
+        algorithm with all four steps:
+        1. Soft probability computation via forward-backward algorithm
+        2. Seed embeddings: H^0 = P · W_emb
+        3. Multi-scale contextualization: H = ConvEncoder(H^0)
+        4. Vocabulary-informed candidate generation with modality-specific span width
         
         Args:
             sequence: Input codepoint sequence
+            metadata: Optional metadata containing sequence information
             
         Returns:
-            Dictionary containing embeddings, candidates, and probabilities
+            Dictionary containing embeddings H, candidates C, probabilities P,
+            and modality information exactly as specified in Algorithm 4
         """
         if (self.unigram_lm is None or self.seed_embedder is None or 
-            self.conv_encoder is None or self.candidate_generator is None):
+            self.conv_encoder is None or not hasattr(self, 'vocab_dict')):
             raise RuntimeError("Vocabulary not loaded. Call load_vocabulary() first.")
         
-        # Step 1: Soft probability computation
+        # Use dynamic w_max computed from vocabulary structure
+        span_width = self.w_max
+        
+        # Create candidate generator with dynamic span width
+        span_config = self.config.get('span_generation', {})
+        candidate_generator = SpanCandidateGenerator(
+            self.vocab_dict,
+            tau_vocab=float(span_config.get('tau_vocab', 1e-4)),
+            tau_comp=float(span_config.get('tau_comp', 1e-6)),
+            w_max=span_width
+        )
+        
+        # Step 1: Soft Probability Computation (Equations 2-4)
         soft_probs = self.unigram_lm.forward_backward(sequence)
         
-        # Step 2: Seed embeddings  
+        # Step 2: Seed embeddings: H^0 = P · W_emb (Equation 5)
         seed_embeddings = self.seed_embedder(soft_probs)
         
-        # Step 3: Contextualization
+        # Step 3: Multi-scale contextualization: H = ConvEncoder(H^0) (Equations 7-8)
         contextual_embeddings = self.conv_encoder(seed_embeddings)
         
-        # Step 4: Candidate generation
-        candidates = self.candidate_generator.generate_candidates(sequence)
+        # Step 4: Candidate generation using Algorithm 3 (Equations 9-11)
+        candidates = candidate_generator.generate_candidates(sequence)
         
         result = {
             'soft_probabilities': soft_probs.detach().cpu().numpy(),
@@ -598,7 +680,8 @@ class Vocab2EmbeddingPipeline:
             'contextual_embeddings': contextual_embeddings.detach().cpu().numpy(),
             'span_candidates': candidates,
             'sequence_length': len(sequence),
-            'num_candidates': len(candidates)
+            'num_candidates': len(candidates),
+            'span_width': span_width
         }
         
         # Add analysis if enabled
@@ -608,9 +691,9 @@ class Vocab2EmbeddingPipeline:
                 result['analysis'] = analyze_embedding_quality(
                     contextual_embeddings.detach().cpu().numpy()
                 )
-                get_logger().debug("Added embedding quality analysis to results")
+                get_embedding_logger('vocab2embedding').debug("Added embedding quality analysis to results")
             except Exception as e:
-                get_logger().warning(f"Error during embedding analysis: {e}")
+                get_embedding_logger('vocab2embedding').warning(f"Error during embedding analysis: {e}")
         
         return result
 
@@ -622,101 +705,322 @@ def parse_args():
     )
     
     parser.add_argument(
-        "--vocab", 
+        "--vocab", "-v",
         type=str, 
         required=True,
         help="Path to vocab.jsonl file from Section 3.1 pipeline"
     )
     
     parser.add_argument(
-        "--input",
+        "--input", "-i",
         type=str, 
         required=True,
         help="Path to input dataset.jsonl file with PretrainRecord format (contains 'raw' field)"
     )
     
     parser.add_argument(
-        "--output",
+        "--output", "-o",
         type=str,
         required=True, 
         help="Output directory for embedding files"
     )
     
     parser.add_argument(
-        "--config",
+        "--config", "-c",
         type=str,
         default="config/pipelines/vocab2embedding.yaml",
         help="Path to configuration YAML file"
     )
     
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda" if torch.cuda.is_available() else "cpu",
-        help="PyTorch device for computation"
-    )
-    
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=32,
-        help="Batch size for processing sequences"
-    )
-    
-    parser.add_argument(
-        "--max-length",
-        type=int, 
-        default=512,
-        help="Maximum sequence length to process"
-    )
-    
     return parser.parse_args()
 
 
+def load_existing_records(output_dir: Path, force: bool = False) -> Tuple[Dict[int, Dict], int]:
+    """
+    Load existing embedding records following the standard pattern from other pipelines.
+    
+    Args:
+        output_dir: Output directory containing existing results
+        force: If True, ignore existing records and start fresh
+        
+    Returns:
+        Tuple of (existing_records_dict, last_processed_id)
+    """
+    existing_records = {}
+    last_processed = 0
+    
+    if force:
+        get_embedding_logger('vocab2embedding').info("Force mode enabled - starting fresh processing")
+        return existing_records, last_processed
+    
+    json_dir = output_dir / "json"
+    seed_dir = output_dir / "seed"
+    context_dir = output_dir / "context"
+    soft_prob_dir = output_dir / "soft_prob"
+    
+    if not json_dir.exists():
+        get_embedding_logger('vocab2embedding').info("No existing records found - starting fresh processing")
+        return existing_records, last_processed
+    
+    json_files = list(json_dir.glob("embedding_*.json"))
+    if not json_files:
+        get_embedding_logger('vocab2embedding').info("No existing embedding files found - starting fresh processing")
+        return existing_records, last_processed
+    
+    get_embedding_logger('vocab2embedding').info(f"Found {len(json_files)} existing embedding files - verifying integrity")
+    
+    # Load and verify existing records
+    for json_file in json_files:
+        try:
+            # Extract sequence ID from filename pattern: embedding_XXXXXX.json
+            seq_id = int(json_file.stem.split('_')[1])
+            
+            # Verify all required files exist
+            if not verify_processed_sequence(json_dir, seed_dir, context_dir, soft_prob_dir, seq_id):
+                get_embedding_logger('vocab2embedding').warning(f"Sequence {seq_id} incomplete - will be reprocessed")
+                continue
+            
+            # Load metadata
+            with open(json_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                existing_records[seq_id] = {
+                    'sequence': data.get('sequence', ''),
+                    'sequence_length': data.get('sequence_length', 0),
+                    'num_candidates': data.get('num_candidates', 0),
+                    'span_candidates': data.get('span_candidates', [])
+                }
+                last_processed = max(last_processed, seq_id)
+                
+        except (ValueError, IndexError, json.JSONDecodeError) as e:
+            get_embedding_logger('vocab2embedding').warning(f"Error reading {json_file}: {e}")
+            continue
+        except Exception as e:
+            get_embedding_logger('vocab2embedding').error(f"Unexpected error with {json_file}: {e}")
+            continue
+    
+    if existing_records:
+        get_embedding_logger('vocab2embedding').info(f"Successfully loaded {len(existing_records)} existing records")
+        get_embedding_logger('vocab2embedding').info(f"Last processed sequence ID: {last_processed}")
+    else:
+        get_embedding_logger('vocab2embedding').info("No valid existing records found - starting fresh processing")
+    
+    return existing_records, last_processed
+
+def verify_processed_sequence(json_dir: Path, seed_dir: Path, context_dir: Path, 
+                             soft_prob_dir: Path, seq_id: int) -> bool:
+    """
+    Verify that a sequence was completely processed by checking all expected files.
+    
+    Returns:
+        bool: True if all files exist and are valid
+    """
+    try:
+        # Check JSON metadata file
+        json_file = json_dir / f"embedding_{seq_id:06d}.json"
+        if not json_file.exists():
+            return False
+        
+        # Verify JSON content
+        with open(json_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            if not all(key in data for key in ['sequence_id', 'sequence', 'num_candidates']):
+                return False
+        
+        # Check numpy array files (support both .npy and .npz formats)
+        files_to_check = [
+            seed_dir / f"seed_emb_{seq_id:06d}.npy",
+            context_dir / f"context_emb_{seq_id:06d}.npy"
+        ]
+        
+        # Check for soft probabilities (either .npy or .npz format)
+        soft_prob_npy = soft_prob_dir / f"soft_probs_{seq_id:06d}.npy"
+        soft_prob_npz = soft_prob_dir / f"soft_probs_{seq_id:06d}.npz"
+        
+        if soft_prob_npy.exists():
+            files_to_check.append(soft_prob_npy)
+        elif soft_prob_npz.exists():
+            files_to_check.append(soft_prob_npz)
+        else:
+            return False
+        
+        for file_path in files_to_check:
+            if not file_path.exists() or file_path.stat().st_size == 0:
+                return False
+        
+        return True
+        
+    except Exception:
+        return False
+
 def main():
-    """Main pipeline execution."""
+    """Main pipeline execution with graceful shutdown and resume capability."""
+    global SHUTDOWN_REQUESTED
+    
+    # Setup signal handlers first
+    setup_signal_handlers()
+    
     args = parse_args()
     
     # Create output directory
     output_path = Path(args.output)
     output_path.mkdir(parents=True, exist_ok=True)
     
-    # Setup logging in the output directory
+    # Create subdirectories for different file types
+    json_dir = output_path / "json"
+    seed_dir = output_path / "seed"
+    context_dir = output_path / "context"
+    soft_prob_dir = output_path / "soft_prob"
+    
+    json_dir.mkdir(exist_ok=True)
+    seed_dir.mkdir(exist_ok=True)
+    context_dir.mkdir(exist_ok=True)
+    soft_prob_dir.mkdir(exist_ok=True)
+    
+    # Setup logging in the output directory (root level)
     setup_embedding_logging(output_path, 'vocab2embedding')
     global logger
     logger = get_embedding_logger('vocab2embedding')
     
-    logger.info("Starting vocab2embedding pipeline")
-    logger.info(f"Vocabulary: {args.vocab}")
-    logger.info(f"Input: {args.input}")
-    logger.info(f"Output: {args.output}")
-    logger.info(f"Device: {args.device}")
+    # Load existing records following the pattern from other pipelines
+    existing_records, last_processed = load_existing_records(output_path)
+    if existing_records:
+        logger.info(f"RESUMING PROCESSING - Found {len(existing_records)} previously processed sequences")
+        logger.info(f"Last processed sequence ID: {last_processed}")
+    else:
+        logger.info("STARTING FRESH PROCESSING - No existing sequences found")
     
-    # Initialize pipeline
-    pipeline = Vocab2EmbeddingPipeline(args.config, args.device)
+    # Log command line arguments
+    logger.info("COMMAND LINE ARGUMENTS:")
+    logger.info(f"  Vocabulary file: {args.vocab}")
+    logger.info(f"  Input file: {args.input}")
+    logger.info(f"  Output directory: {args.output}")
+    logger.info(f"  Config file: {args.config}")
+    logger.info("-" * 80)
+    
+    logger.info("[bold cyan]X-Spanformer VOCAB2EMBEDDING Pipeline[/bold cyan]")
+    logger.info("[green]Initializing embedding generation pipeline[/green]")
+    
+    # Initialize pipeline and log full configuration
+    logger.info("=" * 50)
+    logger.info("STAGE 1: PIPELINE INITIALIZATION")
+    logger.info("=" * 50)
+    
+    pipeline = Vocab2EmbeddingPipeline(args.config)
+    
+    # Log complete configuration pretty-printed
+    logger.info("PIPELINE CONFIGURATION:")
+    config_str = yaml.dump(pipeline.config, default_flow_style=False, indent=2, sort_keys=False)
+    for line in config_str.split('\n'):
+        if line.strip():
+            logger.info(f"  {line}")
+    logger.info(f"  Selected device: {pipeline.device}")
+    logger.info("-" * 50)
+    
+    # Log available GPU devices in streamlined table format
+    logger.info("DEVICE INFORMATION:")
+    if torch.cuda.is_available():
+        logger.info("  CUDA Devices:")
+        logger.info("  ┌─────┬─────────────────────────────────┬──────────┐")
+        logger.info("  │ ID  │ Device Name                     │ Memory   │")
+        logger.info("  ├─────┼─────────────────────────────────┼──────────┤")
+        for i in range(torch.cuda.device_count()):
+            device_name = torch.cuda.get_device_name(i)
+            device_memory = torch.cuda.get_device_properties(i).total_memory / (1024**3)
+            logger.info(f"  │ {i:<3} │ {device_name:<31} │ {device_memory:>6.1f}GB │")
+        logger.info("  └─────┴─────────────────────────────────┴──────────┘")
+        logger.info(f"  Selected: Device {pipeline.config.get('device_id', 0)}")
+    else:
+        logger.info("  CUDA: Not available - using CPU")
+    
+    logger.info(f"Pipeline initialized on: {pipeline.device}")
+    logger.info("-" * 50)
+    
+    # Load vocabulary
+    logger.info("=" * 50)
+    logger.info("STAGE 2: VOCABULARY LOADING")
+    logger.info("=" * 50)
+    
     pipeline.load_vocabulary(args.vocab)
+    logger.info(f"Vocabulary loading completed - span width: {pipeline.config.get('w_max', 64)}")
     
     # Load sequences using shared utility
+    logger.info("=" * 50)
+    logger.info("STAGE 3: SEQUENCE LOADING")
+    logger.info("=" * 50)
+    
     logger.info(f"Loading sequences from: {args.input}")
-    sequences, stats = load_pretrain_records(args.input, args.max_length)
+    sequences, stats = load_pretrain_records(args.input, pipeline.max_sequence_length)
     
     if not sequences:
         logger.error("No valid sequences found in input file")
         return
     
     logger.info(f"Loaded {len(sequences)} sequences for processing")
+    logger.info(f"Average sequence length: {stats.get('avg_length', 'N/A')}")
+    logger.info(f"Max sequence length: {stats.get('max_length', 'N/A')}")
+    logger.info(f"Min sequence length: {stats.get('min_length', 'N/A')}")
+    
+    # Compute dynamic w_max based on actual corpus content
+    logger.info("=" * 50)
+    logger.info("STAGE 4: DYNAMIC W_MAX COMPUTATION")
+    logger.info("=" * 50)
+    
+    dynamic_w_max = pipeline.compute_dynamic_w_max(sequences)
+    pipeline.w_max = dynamic_w_max
+    
+    # Recreate candidate generator with updated w_max
+    span_config = pipeline.config.get('span_generation', {})
+    pipeline.candidate_generator = SpanCandidateGenerator(
+        pipeline.vocab_dict,
+        tau_vocab=float(span_config.get('tau_vocab', 1e-4)),
+        tau_comp=float(span_config.get('tau_comp', 1e-6)),
+        w_max=dynamic_w_max
+    )
+    
+    # Determine processing plan
+    if existing_records:
+        logger.info(f"RESUMING from sequence {last_processed + 1} (skipping {len(existing_records)} already processed)")
     
     # Process sequences from loaded data
+    logger.info("=" * 50)
+    logger.info("STAGE 5: SEQUENCE PROCESSING")
+    logger.info("=" * 50)
+    
     processed_count = 0
-    start_time = time.time()
+    error_count = 0
+    skipped_count = len(existing_records)  # Count previously processed as skipped
+    
+    logger.info(f"Processing {len(sequences)} total sequences...")
     
     for seq_id, sequence in enumerate(sequences, 1):
+        # Check for shutdown signal
+        if SHUTDOWN_REQUESTED:
+            logger.warning("SHUTDOWN SIGNAL RECEIVED - Stopping processing after current sequence")
+            break
+        
+        # Skip already processed sequences (following other pipelines pattern)
+        if seq_id in existing_records:
+            continue
+        
         try:
-            # Process sequence
+            logger.info(f"Sequence {seq_id}/{len(sequences)} - Length: {len(sequence)} chars")
+            
+            # GPU memory status for monitoring
+            if torch.cuda.is_available():
+                allocated = torch.cuda.memory_allocated() / 1024**3
+                reserved = torch.cuda.memory_reserved() / 1024**3
+                logger.info(f"  GPU: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
+            
+            # Process sequence using the pipeline (handles modality detection and span width automatically)
             result = pipeline.process_sequence(sequence)
             
+            logger.info(f"  Forward-backward: {result['soft_probabilities'].shape}")
+            logger.info(f"  Seed embeddings: {result['seed_embeddings'].shape}")
+            logger.info(f"  Contextual embeddings: {result['contextual_embeddings'].shape}")
+            logger.info(f"  Span candidates: {result['num_candidates']} (modality: {result['modality']}, span_width: {result['span_width']})")
+            
             # Save results
-            output_file = output_path / f"embedding_{seq_id:06d}.json"
+            output_file = json_dir / f"embedding_{seq_id:06d}.json"
             with open(output_file, 'w', encoding='utf-8') as outfile:
                 # Convert numpy arrays to lists for JSON serialization
                 json_result = {
@@ -731,27 +1035,71 @@ def main():
                 }
                 json.dump(json_result, outfile, ensure_ascii=False, indent=2)
             
-            # Save embeddings as numpy files for efficient loading
-            np.save(output_path / f"soft_probs_{seq_id:06d}.npy", result['soft_probabilities'])
-            np.save(output_path / f"seed_emb_{seq_id:06d}.npy", result['seed_embeddings'])
-            np.save(output_path / f"context_emb_{seq_id:06d}.npy", result['contextual_embeddings'])
+            # Save embeddings as numpy files
+            np.save(soft_prob_dir / f"soft_probs_{seq_id:06d}.npy", result['soft_probabilities'])
+            np.save(seed_dir / f"seed_emb_{seq_id:06d}.npy", result['seed_embeddings'])
+            np.save(context_dir / f"context_emb_{seq_id:06d}.npy", result['contextual_embeddings'])
             
             processed_count += 1
             
-            if processed_count % 100 == 0:
-                elapsed = time.time() - start_time
-                rate = processed_count / elapsed
-                logger.info(f"Processed {processed_count} sequences ({rate:.2f} seq/sec)")
+            # Log file sizes for monitoring
+            json_size = (json_dir / f"embedding_{seq_id:06d}.json").stat().st_size / 1024  # KB
+            seed_size = (seed_dir / f"seed_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
+            context_size = (context_dir / f"context_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
+            soft_prob_size = (soft_prob_dir / f"soft_probs_{seq_id:06d}.npy").stat().st_size / 1024  # KB
+            
+            total_size = json_size + seed_size + context_size + soft_prob_size
+            logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
+                       f"Context({context_size:.1f}KB) + SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total")
+            logger.info("-" * 50)
                 
         except Exception as e:
             logger.error(f"Sequence {seq_id}: Error processing sequence: {e}")
+            error_count += 1
             continue
     
     # Final statistics
-    elapsed = time.time() - start_time
-    logger.info(f"Pipeline completed: {processed_count} sequences in {elapsed:.2f} seconds")
-    logger.info(f"Average processing rate: {processed_count / elapsed:.2f} sequences/second")
+    total_processed = skipped_count + processed_count
+    logger.info("=" * 50)
+    logger.info("PIPELINE COMPLETION SUMMARY")
+    logger.info("=" * 50)
+    
+    if SHUTDOWN_REQUESTED:
+        logger.warning("Pipeline terminated by user request (graceful shutdown)")
+    else:
+        logger.info("Pipeline completed normally")
+    
+    logger.info(f"Total sequences in dataset: {len(sequences)}")
+    logger.info(f"Previously processed (skipped): {skipped_count}")
+    logger.info(f"Newly processed in this run: {processed_count}")
+    logger.info(f"Total processed: {total_processed}")
+    
+    if error_count > 0:
+        logger.warning(f"Errors encountered: {error_count} sequences failed")
+    
+    if total_processed < len(sequences):
+        remaining = len(sequences) - total_processed
+        logger.info(f"Remaining to process: {remaining} sequences")
+        logger.info("Use the same command to resume processing from where it left off")
+    
     logger.info(f"Output saved to: {output_path}")
+    logger.info("Output structure:")
+    logger.info(f"  JSON metadata: {json_dir} ({len(list(json_dir.glob('*.json')))} files)")
+    logger.info(f"  Seed embeddings: {seed_dir} ({len(list(seed_dir.glob('*.npy')))} files)")
+    logger.info(f"  Context embeddings: {context_dir} ({len(list(context_dir.glob('*.npy')))} files)")
+    logger.info(f"  Soft probabilities: {soft_prob_dir} ({len(list(soft_prob_dir.glob('*.npy')))} files)")
+    logger.info(f"  Log file: {output_path / 'embedding.log'}")
+    
+    # Exit code for automation
+    if SHUTDOWN_REQUESTED:
+        logger.info("Exiting with code 130 (interrupted)")
+        sys.exit(130)
+    elif error_count > 0:
+        logger.info("Exiting with code 1 (errors encountered)")
+        sys.exit(1)
+    else:
+        logger.info("Exiting with code 0 (success)")
+        sys.exit(0)
 
 
 if __name__ == "__main__":

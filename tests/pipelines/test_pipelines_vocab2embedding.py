@@ -27,12 +27,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from x_spanformer.pipelines.vocab2embedding import (
     UnigramLM,
     SeedEmbedder, 
-    ConvEncoder,
     SpanCandidateGenerator,
     Vocab2EmbeddingPipeline,
-    load_corpus,
     main
 )
+from x_spanformer.kernel import ConvEncoderKernel
+from x_spanformer.pipelines.shared.jsonl_processor import load_pretrain_records
 
 
 class TestUnigramLM(unittest.TestCase):
@@ -146,23 +146,92 @@ class TestSeedEmbedder(unittest.TestCase):
         self.assertGreater(torch.norm(embeddings).item(), 0)
 
 
-class TestConvEncoder(unittest.TestCase):
-    """Test the ConvEncoder multi-scale processing."""
+class TestConvEncoderKernel(unittest.TestCase):
+    """Test the ConvEncoderKernel multi-scale processing and validation."""
     
     def setUp(self):
         """Set up test encoder."""
         self.embed_dim = 64
         self.device = 'cpu'
-        self.encoder = ConvEncoder(self.embed_dim, self.device)
+        self.kernels = [3, 5, 7]
+        self.dilations = [1, 2, 4]
+        self.encoder = ConvEncoderKernel(
+            self.embed_dim, 
+            self.kernels, 
+            self.dilations, 
+            device=self.device
+        )
     
     def test_initialization(self):
-        """Test encoder initialization."""
-        self.assertEqual(len(self.encoder.conv_layers), 3)
+        """Test encoder initialization with dynamic pathway calculation."""
+        expected_pathways = len(self.kernels) * len(self.dilations)  # 3 * 3 = 9
+        self.assertEqual(len(self.encoder.conv_layers), expected_pathways)
+        self.assertEqual(self.encoder.get_pathway_count(), expected_pathways)
         
         # Check that all layers have correct dimensions
         for conv in self.encoder.conv_layers:
             self.assertEqual(conv.in_channels, self.embed_dim)
             self.assertEqual(conv.out_channels, self.embed_dim)
+    
+    def test_receptive_fields(self):
+        """Test receptive field calculations."""
+        receptive_field_info = self.encoder.get_receptive_field_info()
+        expected_info = []
+        for k in self.kernels:
+            for d in self.dilations:
+                rf = 1 + (k - 1) * d
+                expected_info.append((k, d, rf))
+        
+        self.assertEqual(len(receptive_field_info), len(expected_info))
+        
+        # Check specific expected values
+        receptive_fields = [rf for _, _, rf in receptive_field_info]
+        self.assertIn(3, receptive_fields)   # k=3, d=1: 1+(3-1)*1=3
+        self.assertIn(25, receptive_fields)  # k=7, d=4: 1+(7-1)*4=25
+    
+    def test_validation_required_parameters(self):
+        """Test that kernels and dilations are required."""
+        with self.assertRaises(ValueError) as cm:
+            ConvEncoderKernel(self.embed_dim, None, self.dilations)  # type: ignore
+        self.assertIn("kernels parameter is required", str(cm.exception))
+        
+        with self.assertRaises(ValueError) as cm:
+            ConvEncoderKernel(self.embed_dim, self.kernels, None)  # type: ignore
+        self.assertIn("dilations parameter is required", str(cm.exception))
+    
+    def test_validation_kernel_requirements(self):
+        """Test kernel validation requirements."""
+        # Test empty kernels
+        with self.assertRaises(ValueError) as cm:
+            ConvEncoderKernel(self.embed_dim, [], self.dilations)
+        self.assertIn("non-empty list", str(cm.exception))
+        
+        # Test even kernels (invalid)
+        with self.assertRaises(ValueError) as cm:
+            ConvEncoderKernel(self.embed_dim, [2, 4, 6], self.dilations)
+        self.assertIn("positive odd integers", str(cm.exception))
+        
+        # Test zero/negative kernels
+        with self.assertRaises(ValueError) as cm:
+            ConvEncoderKernel(self.embed_dim, [0, 3, 5], self.dilations)
+        self.assertIn("positive odd integers", str(cm.exception))
+    
+    def test_validation_dilation_requirements(self):
+        """Test dilation validation requirements."""
+        # Test empty dilations
+        with self.assertRaises(ValueError) as cm:
+            ConvEncoderKernel(self.embed_dim, self.kernels, [])
+        self.assertIn("non-empty list", str(cm.exception))
+        
+        # Test zero dilations (invalid)
+        with self.assertRaises(ValueError) as cm:
+            ConvEncoderKernel(self.embed_dim, self.kernels, [0, 1, 2])
+        self.assertIn("positive integers", str(cm.exception))
+        
+        # Test negative dilations
+        with self.assertRaises(ValueError) as cm:
+            ConvEncoderKernel(self.embed_dim, self.kernels, [-1, 1, 2])
+        self.assertIn("positive integers", str(cm.exception))
     
     def test_forward_pass(self):
         """Test contextual encoding."""
@@ -195,6 +264,20 @@ class TestConvEncoder(unittest.TestCase):
         # Output should be different but similar magnitude
         self.assertGreater(float(diff_norm), 0.0)
         self.assertLess(float(diff_norm), original_norm * 2.0)  # Not too different
+    
+    def test_dynamic_pathway_calculation(self):
+        """Test different kernel/dilation combinations."""
+        # Test smaller configuration
+        small_encoder = ConvEncoderKernel(
+            self.embed_dim, [3, 5], [1, 2], device=self.device
+        )
+        self.assertEqual(small_encoder.get_pathway_count(), 4)  # 2 * 2 = 4
+        
+        # Test larger configuration
+        large_encoder = ConvEncoderKernel(
+            self.embed_dim, [1, 3, 5, 7], [1, 2, 4, 8], device=self.device
+        )
+        self.assertEqual(large_encoder.get_pathway_count(), 16)  # 4 * 4 = 16
 
 
 class TestSpanCandidateGenerator(unittest.TestCase):
@@ -279,10 +362,32 @@ class TestVocab2EmbeddingPipeline(unittest.TestCase):
         # Create temporary config file
         self.temp_config = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False)
         config_data = {
-            'embed_dim': 32,  # Small for testing
-            'tau_vocab': 0.05,
-            'tau_comp': 1e-6,
-            'w_max': 8
+            'architecture': {
+                'embed_dim': 32,  # Small for testing
+                'conv_kernels': [3, 5, 7],
+                'conv_dilations': [1, 2, 4],
+                'dropout_rate': 0.1
+            },
+            'span_generation': {
+                'tau_vocab': 0.05,
+                'tau_comp': 1e-6,
+                'w_max': 8
+            },
+            'processing': {
+                'device': self.device,
+                'batch_size': 64,
+                'max_sequence_length': 512
+            },
+            'numerical': {
+                'epsilon': 1e-12,
+                'max_piece_length': 8
+            },
+            'output': {
+                'save_intermediate': True,
+                'save_numpy_arrays': True,
+                'save_json_metadata': True,
+                'add_analysis': False
+            }
         }
         yaml.dump(config_data, self.temp_config)
         self.temp_config.close()
@@ -302,7 +407,7 @@ class TestVocab2EmbeddingPipeline(unittest.TestCase):
         self.temp_vocab.close()
         
         # Initialize pipeline
-        self.pipeline = Vocab2EmbeddingPipeline(self.temp_config.name, self.device)
+        self.pipeline = Vocab2EmbeddingPipeline(self.temp_config.name)
     
     def tearDown(self):
         """Clean up temporary files."""
@@ -312,7 +417,7 @@ class TestVocab2EmbeddingPipeline(unittest.TestCase):
     def test_pipeline_initialization(self):
         """Test pipeline initialization."""
         self.assertIsNotNone(self.pipeline.config)
-        self.assertEqual(self.pipeline.device, self.device)
+        self.assertIsNotNone(self.pipeline.device)
         
         # Components should be None before vocabulary loading
         self.assertIsNone(self.pipeline.unigram_lm)
@@ -497,12 +602,34 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
             {"piece": " ", "probability": 0.15}  # Space
         ]
         
-        # Sample configuration
+        # Sample configuration using nested structure
         self.sample_config = {
-            "embed_dim": 64,
-            "tau_vocab": 1e-4,
-            "tau_comp": 1e-6,
-            "w_max": 32
+            "architecture": {
+                "embed_dim": 64,
+                "conv_kernels": [3, 5, 7],
+                "conv_dilations": [1, 2, 4],
+                "dropout_rate": 0.1
+            },
+            "span_generation": {
+                "tau_vocab": 1e-4,
+                "tau_comp": 1e-6,
+                "w_max": 32
+            },
+            "processing": {
+                "device": "cpu",
+                "batch_size": 64,
+                "max_sequence_length": 512
+            },
+            "numerical": {
+                "epsilon": 1e-12,
+                "max_piece_length": 8
+            },
+            "output": {
+                "save_intermediate": True,
+                "save_numpy_arrays": True,
+                "save_json_metadata": True,
+                "add_analysis": False
+            }
         }
     
     def cleanup_logging(self):
@@ -531,7 +658,7 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
                     f.write(json.dumps(record, ensure_ascii=False) + '\n')
             
             # Load corpus
-            sequences = load_corpus(str(input_file))
+            sequences, stats = load_pretrain_records(str(input_file))
             
             # Should load 3 valid sequences (skip discarded and empty)
             self.assertEqual(len(sequences), 3)
@@ -559,7 +686,7 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
                 f.write(json.dumps({"raw": "another valid text", "type": "text"}) + '\n')
             
             # Should handle gracefully
-            sequences = load_corpus(str(input_file))
+            sequences, stats = load_pretrain_records(str(input_file))
             self.assertEqual(len(sequences), 2)
             self.assertIn("valid text", sequences)
             self.assertIn("another valid text", sequences)
@@ -571,14 +698,16 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
             input_file = Path(temp_dir) / "empty.jsonl"
             input_file.touch()
             
-            # Should raise ValueError
-            with self.assertRaises(ValueError):
-                load_corpus(str(input_file))
+            # Should return empty list
+            sequences, stats = load_pretrain_records(str(input_file))
+            self.assertEqual(len(sequences), 0)
+            self.assertEqual(stats['valid'], 0)
+            self.assertEqual(stats['total'], 0)
     
     def test_load_corpus_nonexistent_file(self):
         """Test handling of non-existent corpus file."""
         with self.assertRaises(FileNotFoundError):
-            load_corpus("nonexistent_file.jsonl")
+            load_pretrain_records("nonexistent_file.jsonl")
     
     def test_pipeline_initialization(self):
         """Test pipeline initialization."""
@@ -589,7 +718,7 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
                 yaml.dump(self.sample_config, f)
             
             # Initialize pipeline
-            pipeline = Vocab2EmbeddingPipeline(str(config_file), device='cpu')
+            pipeline = Vocab2EmbeddingPipeline(str(config_file))
             
             self.assertEqual(pipeline.device, 'cpu')
             self.assertEqual(pipeline.config, self.sample_config)
@@ -613,7 +742,7 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
                     f.write(json.dumps(entry, ensure_ascii=False) + '\n')
             
             # Initialize and load
-            pipeline = Vocab2EmbeddingPipeline(str(config_file), device='cpu')
+            pipeline = Vocab2EmbeddingPipeline(str(config_file))
             pipeline.load_vocabulary(str(vocab_file))
             
             # Check components are initialized
@@ -642,7 +771,7 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
                 for entry in self.sample_vocab:
                     f.write(json.dumps(entry, ensure_ascii=False) + '\n')
             
-            pipeline = Vocab2EmbeddingPipeline(str(config_file), device='cpu')
+            pipeline = Vocab2EmbeddingPipeline(str(config_file))
             pipeline.load_vocabulary(str(vocab_file))
             
             # Process sequence
@@ -660,7 +789,7 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
             # Check shapes
             seq_len = len(test_sequence)
             vocab_size = len(self.sample_vocab)
-            embed_dim = self.sample_config['embed_dim']
+            embed_dim = self.sample_config['architecture']['embed_dim']
             
             self.assertEqual(result['soft_probabilities'].shape, (seq_len, vocab_size))
             self.assertEqual(result['seed_embeddings'].shape, (seq_len, embed_dim))
@@ -677,7 +806,7 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
             with open(config_file, 'w') as f:
                 yaml.dump(self.sample_config, f)
             
-            pipeline = Vocab2EmbeddingPipeline(str(config_file), device='cpu')
+            pipeline = Vocab2EmbeddingPipeline(str(config_file))
             
             # Try to process without loading vocabulary
             with self.assertRaises(RuntimeError):
@@ -702,7 +831,7 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
                 for entry in vocab_with_prob:
                     f.write(json.dumps(entry, ensure_ascii=False) + '\n')
             
-            pipeline = Vocab2EmbeddingPipeline(str(config_file), device='cpu')
+            pipeline = Vocab2EmbeddingPipeline(str(config_file))
             pipeline.load_vocabulary(str(vocab_file))
             
             # Should work with 'prob' field
@@ -737,7 +866,7 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
             logger = setup_embedding_logging(log_dir, 'test_integration')
             
             # Load corpus (should log statistics)
-            sequences = load_corpus(str(input_file))
+            sequences, stats = load_pretrain_records(str(input_file))
             
             # Check log file is in the root output directory
             log_file = log_dir / "embedding.log"
@@ -836,14 +965,32 @@ class TestRealisticVocab2EmbeddingPipeline(unittest.TestCase):
         
         # Configuration for testing
         self.config_data = {
-            'embed_dim': 128,
-            'tau_vocab': 0.001,  # Lower threshold to include more candidates
-            'tau_comp': 1e-8,
-            'w_max': 32,
-            'conv_kernels': [3, 5, 7],
-            'conv_dilations': [1, 2, 4],
-            'dropout_rate': 0.1,
-            'device': 'cpu'  # Use CPU for deterministic testing
+            'architecture': {
+                'embed_dim': 128,
+                'conv_kernels': [3, 5, 7],
+                'conv_dilations': [1, 2, 4],
+                'dropout_rate': 0.1
+            },
+            'span_generation': {
+                'tau_vocab': 0.001,  # Lower threshold to include more candidates
+                'tau_comp': 1e-8,
+                'w_max': 32
+            },
+            'processing': {
+                'device': 'cpu',  # Use CPU for deterministic testing
+                'batch_size': 64,
+                'max_sequence_length': 512
+            },
+            'numerical': {
+                'epsilon': 1e-12,
+                'max_piece_length': 8
+            },
+            'output': {
+                'save_intermediate': True,
+                'save_numpy_arrays': True,
+                'save_json_metadata': True,
+                'add_analysis': False
+            }
         }
         
         # Test sequences of varying complexity (ensure all can be segmented)
@@ -869,21 +1016,13 @@ class TestRealisticVocab2EmbeddingPipeline(unittest.TestCase):
                     vocab_file.write('\n')
                 vocab_path = vocab_file.name
             
-            # Create config file manually to avoid yaml.dump coroutine issues
+            # Create config file using nested structure
             config_fd, config_path = tempfile.mkstemp(suffix='.yaml')
             with os.fdopen(config_fd, 'w') as config_file:
-                config_file.write(f"""embed_dim: {self.config_data['embed_dim']}
-tau_vocab: {self.config_data['tau_vocab']}
-tau_comp: {self.config_data['tau_comp']}
-w_max: {self.config_data['w_max']}
-conv_kernels: {self.config_data['conv_kernels']}
-conv_dilations: {self.config_data['conv_dilations']}
-dropout_rate: {self.config_data['dropout_rate']}
-device: {self.config_data['device']}
-""")
+                yaml.dump(self.config_data, config_file)
 
             # Initialize and test pipeline
-            pipeline = Vocab2EmbeddingPipeline(config_path, self.config_data['device'])
+            pipeline = Vocab2EmbeddingPipeline(config_path)
             pipeline.load_vocabulary(vocab_path)
             
             results = []
@@ -896,7 +1035,7 @@ device: {self.config_data['device']}
                 self.assertGreater(result['num_candidates'], 0)
                 
                 # Verify tensor shapes
-                T, d = len(sequence), self.config_data['embed_dim']
+                T, d = len(sequence), self.config_data['architecture']['embed_dim']
                 # Get actual vocabulary size from the pipeline (handles deduplication)
                 if pipeline.unigram_lm is not None:
                     V = pipeline.unigram_lm.vocab_size
@@ -946,21 +1085,12 @@ device: {self.config_data['device']}
                     vocab_file.write('\n')
                 vocab_path = vocab_file.name
             
-            # Create config file directly without using yaml.dump to avoid coroutine issues
+            # Create config file using nested structure
             with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as config_file:
-                # Write config manually to avoid yaml.dump which seems to trigger coroutine creation
-                config_file.write(f"""embed_dim: {self.config_data['embed_dim']}
-tau_vocab: {self.config_data['tau_vocab']}
-tau_comp: {self.config_data['tau_comp']}
-w_max: {self.config_data['w_max']}
-conv_kernels: {self.config_data['conv_kernels']}
-conv_dilations: {self.config_data['conv_dilations']}
-dropout_rate: {self.config_data['dropout_rate']}
-device: {self.config_data['device']}
-""")
+                yaml.dump(self.config_data, config_file)
                 config_path = config_file.name
             
-            pipeline = Vocab2EmbeddingPipeline(config_path, self.config_data['device'])
+            pipeline = Vocab2EmbeddingPipeline(config_path)
             pipeline.load_vocabulary(vocab_path)
             
             # Test specific sequence
@@ -1005,20 +1135,12 @@ device: {self.config_data['device']}
                     vocab_file.write('\n')
                 vocab_path = vocab_file.name
             
-            # Create config file manually to avoid yaml.dump coroutine issues
+            # Create config file using nested structure
             with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as config_file:
-                config_file.write(f"""embed_dim: {self.config_data['embed_dim']}
-tau_vocab: {self.config_data['tau_vocab']}
-tau_comp: {self.config_data['tau_comp']}
-w_max: {self.config_data['w_max']}
-conv_kernels: {self.config_data['conv_kernels']}
-conv_dilations: {self.config_data['conv_dilations']}
-dropout_rate: {self.config_data['dropout_rate']}
-device: {self.config_data['device']}
-""")
+                yaml.dump(self.config_data, config_file)
                 config_path = config_file.name
             
-            pipeline = Vocab2EmbeddingPipeline(config_path, self.config_data['device'])
+            pipeline = Vocab2EmbeddingPipeline(config_path)
             pipeline.load_vocabulary(vocab_path)
             
             sequence = "the"  # Simple sequence for mathematical verification
@@ -1068,20 +1190,12 @@ device: {self.config_data['device']}
                     vocab_file.write('\n')
                 vocab_path = vocab_file.name
             
-            # Create config file manually to avoid yaml.dump coroutines
+            # Create config file using nested structure
             config_fd, config_path = tempfile.mkstemp(suffix='.yaml')
             with os.fdopen(config_fd, 'w') as config_file:
-                config_file.write(f"""embed_dim: {self.config_data['embed_dim']}
-tau_vocab: {self.config_data['tau_vocab']}
-tau_comp: {self.config_data['tau_comp']}
-w_max: {self.config_data['w_max']}
-conv_kernels: {self.config_data['conv_kernels']}
-conv_dilations: {self.config_data['conv_dilations']}
-dropout_rate: {self.config_data['dropout_rate']}
-device: {self.config_data['device']}
-""")
+                yaml.dump(self.config_data, config_file)
             
-            pipeline = Vocab2EmbeddingPipeline(config_path, self.config_data['device'])
+            pipeline = Vocab2EmbeddingPipeline(config_path)
             pipeline.load_vocabulary(vocab_path)
             
             # Test sequences of different lengths
@@ -1174,15 +1288,37 @@ class TestPipelineUtilities(unittest.TestCase):
                 # Create minimal config for testing
                 config_path = temp_path / "config.yaml"
                 config_data = {
-                    'embed_dim': 64,
-                    'tau_vocab': 1e-4,
-                    'tau_comp': 1e-6,
-                    'w_max': 32
+                    'architecture': {
+                        'embed_dim': 64,
+                        'conv_kernels': [3, 5, 7],
+                        'conv_dilations': [1, 2, 4],
+                        'dropout_rate': 0.1
+                    },
+                    'span_generation': {
+                        'tau_vocab': 1e-4,
+                        'tau_comp': 1e-6,
+                        'w_max': 32
+                    },
+                    'processing': {
+                        'device': 'auto',
+                        'batch_size': 64,
+                        'max_sequence_length': 512
+                    },
+                    'numerical': {
+                        'epsilon': 1e-12,
+                        'max_piece_length': 8
+                    },
+                    'output': {
+                        'save_intermediate': True,
+                        'save_numpy_arrays': True,
+                        'save_json_metadata': True,
+                        'add_analysis': False
+                    }
                 }
                 with open(config_path, 'w') as f:
                     yaml.dump(config_data, f)
             
-            pipeline = Vocab2EmbeddingPipeline(str(config_path), 'cpu')
+            pipeline = Vocab2EmbeddingPipeline(str(config_path))
             
             self.assertIsNotNone(pipeline)
             self.assertTrue(hasattr(pipeline, 'load_vocabulary'))
@@ -1200,15 +1336,37 @@ class TestPipelineUtilities(unittest.TestCase):
             # Create config
             config_path = temp_path / "config.yaml"
             config_data = {
-                'embed_dim': 64,
-                'tau_vocab': 1e-4,
-                'tau_comp': 1e-6,
-                'w_max': 32
+                'architecture': {
+                    'embed_dim': 64,
+                    'conv_kernels': [3, 5, 7],
+                    'conv_dilations': [1, 2, 4],
+                    'dropout_rate': 0.1
+                },
+                'span_generation': {
+                    'tau_vocab': 1e-4,
+                    'tau_comp': 1e-6,
+                    'w_max': 32
+                },
+                'processing': {
+                    'device': 'auto',
+                    'batch_size': 64,
+                    'max_sequence_length': 512
+                },
+                'numerical': {
+                    'epsilon': 1e-12,
+                    'max_piece_length': 8
+                },
+                'output': {
+                    'save_intermediate': True,
+                    'save_numpy_arrays': True,
+                    'save_json_metadata': True,
+                    'add_analysis': False
+                }
             }
             with open(config_path, 'w') as f:
                 yaml.dump(config_data, f)
             
-            pipeline = Vocab2EmbeddingPipeline(str(config_path), 'cpu')
+            pipeline = Vocab2EmbeddingPipeline(str(config_path))
             
             # Load vocabulary - should not raise exception
             pipeline.load_vocabulary(str(vocab_path))
@@ -1231,15 +1389,37 @@ class TestPipelineUtilities(unittest.TestCase):
             # Create config
             config_path = temp_path / "config.yaml"
             config_data = {
-                'embed_dim': 64,
-                'tau_vocab': 1e-4,
-                'tau_comp': 1e-6,
-                'w_max': 32
+                'architecture': {
+                    'embed_dim': 64,
+                    'conv_kernels': [3, 5, 7],
+                    'conv_dilations': [1, 2, 4],
+                    'dropout_rate': 0.1
+                },
+                'span_generation': {
+                    'tau_vocab': 1e-4,
+                    'tau_comp': 1e-6,
+                    'w_max': 32
+                },
+                'processing': {
+                    'device': 'auto',
+                    'batch_size': 64,
+                    'max_sequence_length': 512
+                },
+                'numerical': {
+                    'epsilon': 1e-12,
+                    'max_piece_length': 8
+                },
+                'output': {
+                    'save_intermediate': True,
+                    'save_numpy_arrays': True,
+                    'save_json_metadata': True,
+                    'add_analysis': False
+                }
             }
             with open(config_path, 'w') as f:
                 yaml.dump(config_data, f)
             
-            pipeline = Vocab2EmbeddingPipeline(str(config_path), 'cpu')
+            pipeline = Vocab2EmbeddingPipeline(str(config_path))
             pipeline.load_vocabulary(str(vocab_path))
             
             # Process a test sequence
@@ -1272,15 +1452,37 @@ class TestPipelineUtilities(unittest.TestCase):
             # Create config
             config_path = temp_path / "config.yaml"
             config_data = {
-                'embed_dim': 64,
-                'tau_vocab': 1e-4,
-                'tau_comp': 1e-6,
-                'w_max': 32
+                'architecture': {
+                    'embed_dim': 64,
+                    'conv_kernels': [3, 5, 7],
+                    'conv_dilations': [1, 2, 4],
+                    'dropout_rate': 0.1
+                },
+                'span_generation': {
+                    'tau_vocab': 1e-4,
+                    'tau_comp': 1e-6,
+                    'w_max': 32
+                },
+                'processing': {
+                    'device': 'auto',
+                    'batch_size': 64,
+                    'max_sequence_length': 512
+                },
+                'numerical': {
+                    'epsilon': 1e-12,
+                    'max_piece_length': 8
+                },
+                'output': {
+                    'save_intermediate': True,
+                    'save_numpy_arrays': True,
+                    'save_json_metadata': True,
+                    'add_analysis': False
+                }
             }
             with open(config_path, 'w') as f:
                 yaml.dump(config_data, f)
             
-            pipeline = Vocab2EmbeddingPipeline(str(config_path), 'cpu')
+            pipeline = Vocab2EmbeddingPipeline(str(config_path))
             
             # Load vocabulary and process sequence
             pipeline.load_vocabulary(str(vocab_path))
@@ -1309,15 +1511,37 @@ class TestPipelineUtilities(unittest.TestCase):
             # Create config
             config_path = temp_path / "config.yaml"
             config_data = {
-                'embed_dim': 64,
-                'tau_vocab': 1e-4,
-                'tau_comp': 1e-6,
-                'w_max': 32
+                'architecture': {
+                    'embed_dim': 64,
+                    'conv_kernels': [3, 5, 7],
+                    'conv_dilations': [1, 2, 4],
+                    'dropout_rate': 0.1
+                },
+                'span_generation': {
+                    'tau_vocab': 1e-4,
+                    'tau_comp': 1e-6,
+                    'w_max': 32
+                },
+                'processing': {
+                    'device': 'auto',
+                    'batch_size': 64,
+                    'max_sequence_length': 512
+                },
+                'numerical': {
+                    'epsilon': 1e-12,
+                    'max_piece_length': 8
+                },
+                'output': {
+                    'save_intermediate': True,
+                    'save_numpy_arrays': True,
+                    'save_json_metadata': True,
+                    'add_analysis': False
+                }
             }
             with open(config_path, 'w') as f:
                 yaml.dump(config_data, f)
             
-            pipeline = Vocab2EmbeddingPipeline(str(config_path), 'cpu')
+            pipeline = Vocab2EmbeddingPipeline(str(config_path))
             
             # Load vocabulary and process sequence
             test_sequence = "the quick brown fox"
@@ -1361,16 +1585,38 @@ class TestPipelineUtilities(unittest.TestCase):
             # Create config
             config_path = temp_path / "config.yaml"
             config_data = {
-                'embed_dim': 64,
-                'tau_vocab': 1e-4,
-                'tau_comp': 1e-6,
-                'w_max': 32
+                'architecture': {
+                    'embed_dim': 64,
+                    'conv_kernels': [3, 5, 7],
+                    'conv_dilations': [1, 2, 4],
+                    'dropout_rate': 0.1
+                },
+                'span_generation': {
+                    'tau_vocab': 1e-4,
+                    'tau_comp': 1e-6,
+                    'w_max': 32
+                },
+                'processing': {
+                    'device': 'auto',
+                    'batch_size': 64,
+                    'max_sequence_length': 512
+                },
+                'numerical': {
+                    'epsilon': 1e-12,
+                    'max_piece_length': 8
+                },
+                'output': {
+                    'save_intermediate': True,
+                    'save_numpy_arrays': True,
+                    'save_json_metadata': True,
+                    'add_analysis': False
+                }
             }
             with open(config_path, 'w') as f:
                 yaml.dump(config_data, f)
             
             # Initialize pipeline
-            pipeline = Vocab2EmbeddingPipeline(str(config_path), 'cpu')
+            pipeline = Vocab2EmbeddingPipeline(str(config_path))
             
             # Load vocabulary
             pipeline.load_vocabulary(str(vocab_path))
