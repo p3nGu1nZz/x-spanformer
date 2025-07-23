@@ -64,13 +64,13 @@ H = ConvEncoder(H^0)
 
 **Formula:**
 ```
-w_max = max(longest_word_length, max_sequence_length // 2)
+w_max = min(longest_word_length, max_sequence_length // 2)
 ```
 
 **Implementation:**
 - Analyze corpus for longest whitespace-separated word
-- Hard limit at `max_sequence_length // 2` (default: 256 for 512-length sequences)
-- Ensures linguistic coverage while maintaining computational efficiency
+- Use the smaller value for corpus-adaptive span generation while respecting sequence limits
+- Ensures span generation is tailored to actual content while maintaining computational efficiency
 
 ### 5. Span Candidate Generation (Section 3.2.4)
 
@@ -259,7 +259,7 @@ def compute_dynamic_w_max(sequences, max_sequence_length):
     
     corpus_based = max_word_length
     sequence_based = max_sequence_length // 2
-    return max(corpus_based, sequence_based)
+    return min(corpus_based, sequence_based)  # Use smaller value for corpus adaptation
 ```
 
 ## Performance Characteristics

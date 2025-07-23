@@ -583,14 +583,15 @@ class Vocab2EmbeddingPipeline:
         """
         Compute dynamic w_max based on the actual input corpus sequences.
         
-        Following paper Section 3.2: w_max = max(longest_word_length, max_sequence_length // 2)
+        Following corpus-adaptive approach: w_max = min(longest_word_length, max_sequence_length // 2)
         where longest_word_length is found by analyzing the corpus for the longest complete word.
+        This ensures span generation is adapted to actual corpus content while respecting sequence limits.
         
         Args:
             sequences: List of input sequences from the corpus
             
         Returns:
-            Computed w_max value
+            Computed w_max value (smaller of corpus-based and sequence-based bounds)
         """
         import re
         
@@ -611,12 +612,12 @@ class Vocab2EmbeddingPipeline:
                     if word_length > max_word_length:
                         max_word_length = word_length
         
-        # Dynamic w_max: larger of longest word or sequence-based bound
+        # Dynamic w_max: smaller of longest word or sequence-based bound for corpus adaptation
         corpus_based_w_max = max_word_length
         sequence_based_w_max = self.w_max_bound  # max_sequence_length // 2
         
-        # Use the larger value to ensure both corpus and sequence coverage
-        computed_w_max = max(corpus_based_w_max, sequence_based_w_max)
+        # Use the smaller value for better corpus adaptation while respecting sequence limits
+        computed_w_max = min(corpus_based_w_max, sequence_based_w_max)
         
         get_embedding_logger('vocab2embedding').info(
             f"Dynamic w_max computed: {computed_w_max} "
