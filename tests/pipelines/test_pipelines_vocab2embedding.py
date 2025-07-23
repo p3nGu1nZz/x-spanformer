@@ -1650,6 +1650,343 @@ class TestPipelineUtilities(unittest.TestCase):
             self.assertGreater(result['num_candidates'], 5)  # Should have reasonable span coverage
 
 
+class TestDynamicWMaxComputation(unittest.TestCase):
+    """Test dynamic w_max computation and its correct usage in span generation."""
+    
+    def setUp(self):
+        """Set up test pipeline for w_max computation."""
+        self.temp_dir = tempfile.mkdtemp()
+        
+        # Create test vocabulary with some multi-character pieces
+        self.vocab_dict = {
+            'a': 0.2, 'b': 0.2, 'c': 0.2,
+            ' ': 0.15,  # Space character
+            'ab': 0.1,
+            'long': 0.05,
+            'verylongword': 0.05,  # 12 chars - this should be our longest word
+            'short': 0.05
+        }
+        
+        # Create temporary config file
+        self.temp_config = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False)
+        config_data = {
+            'architecture': {
+                'embed_dim': 64,
+                'conv_kernels': [3],
+                'conv_dilations': [1],
+                'dropout_rate': 0.1
+            },
+            'span_generation': {
+                'tau_vocab': 1e-4,
+                'tau_comp': 1e-6
+            },
+            'processing': {
+                'device': 'cpu',
+                'max_sequence_length': 128  # This gives w_max_bound = 64
+            },
+            'numerical': {
+                'epsilon': 1e-12,
+                'max_piece_length': 16
+            },
+            'output': {
+                'save_intermediate': True,
+                'save_numpy_arrays': True,
+                'save_json_metadata': True,
+                'add_analysis': False
+            }
+        }
+        yaml.dump(config_data, self.temp_config)
+        self.temp_config.close()
+        
+        # Create temporary vocabulary file
+        self.temp_vocab = tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False)
+        for piece, prob in self.vocab_dict.items():
+            json.dump({'piece': piece, 'probability': prob}, self.temp_vocab)
+            self.temp_vocab.write('\n')
+        self.temp_vocab.close()
+        
+        # Initialize pipeline
+        self.pipeline = Vocab2EmbeddingPipeline(self.temp_config.name)
+        self.pipeline.load_vocabulary(self.temp_vocab.name)
+    
+    def tearDown(self):
+        """Clean up temporary directory."""
+        import shutil
+        shutil.rmtree(self.temp_dir)
+        Path(self.temp_config.name).unlink()
+        Path(self.temp_vocab.name).unlink()
+    
+    def test_compute_dynamic_w_max_corpus_based(self):
+        """Test that w_max uses the smaller of corpus-based and sequence-based values."""
+        # Test sequences with known longest words
+        test_sequences = [
+            "short words here",  # longest: "short" = 5 chars
+            "a b c",  # longest: single chars = 1 char
+            "verylongword appears",  # longest: "verylongword" = 12 chars
+            "normal sentence with typical words"  # longest: "sentence" = 8 chars  
+        ]
+        
+        # Compute dynamic w_max
+        computed_w_max = self.pipeline.compute_dynamic_w_max(test_sequences)
+        
+        # NEW ALGORITHM: min(longest_word_length, sequence_based)
+        # Should be min(12, 64) = 12 (use the smaller corpus-based value)
+        expected_corpus_based = 12  # Length of "verylongword"
+        expected_sequence_based = 64  # max_sequence_length // 2
+        expected_w_max = min(expected_corpus_based, expected_sequence_based)
+        
+        self.assertEqual(computed_w_max, expected_w_max)
+        self.assertEqual(computed_w_max, 12)  # Should use corpus-based value
+        
+        # Manually update pipeline w_max (simulating what main() does)
+        self.pipeline.w_max = computed_w_max
+        
+        # Verify pipeline's w_max is updated
+        self.assertEqual(self.pipeline.w_max, computed_w_max)
+    
+    def test_compute_dynamic_w_max_word_dominates(self):
+        """Test case where sequence-based bound is smaller and gets used."""
+        # Create a smaller config
+        temp_config_small = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False)
+        config_data_small = {
+            'architecture': {
+                'embed_dim': 64,
+                'conv_kernels': [3],
+                'conv_dilations': [1],
+                'dropout_rate': 0.1
+            },
+            'span_generation': {
+                'tau_vocab': 1e-4,
+                'tau_comp': 1e-6
+            },
+            'processing': {
+                'device': 'cpu',
+                'max_sequence_length': 20  # w_max_bound = 10
+            },
+            'numerical': {
+                'epsilon': 1e-12,
+                'max_piece_length': 16
+            },
+            'output': {
+                'save_intermediate': True,
+                'save_numpy_arrays': True,
+                'save_json_metadata': True,
+                'add_analysis': False
+            }
+        }
+        yaml.dump(config_data_small, temp_config_small)
+        temp_config_small.close()
+        
+        try:
+            small_pipeline = Vocab2EmbeddingPipeline(temp_config_small.name)
+            small_pipeline.load_vocabulary(self.temp_vocab.name)
+            
+            # Test with long word that exceeds sequence bound
+            test_sequences = ["verylongword short"]  # "verylongword" = 12 chars > 10
+            
+            computed_w_max = small_pipeline.compute_dynamic_w_max(test_sequences)
+            
+            # NEW ALGORITHM: min(12, 10) = 10 (sequence-based limit is smaller)
+            self.assertEqual(computed_w_max, 10)
+            self.assertEqual(small_pipeline.w_max, 10)
+        finally:
+            Path(temp_config_small.name).unlink()
+    
+    def test_span_generation_uses_dynamic_w_max(self):
+        """Test that span generation actually uses the computed dynamic w_max."""
+        # Set up sequences with known longest word
+        test_sequences = ["verylongword short words"]
+        
+        # Compute dynamic w_max (should be 12 from corpus, not 64 from sequence bound)
+        dynamic_w_max = self.pipeline.compute_dynamic_w_max(test_sequences)
+        # NEW ALGORITHM: w_max = min(longest_word=12, sequence_based=64) = 12
+        self.assertEqual(dynamic_w_max, 12)
+        
+        # Update pipeline w_max (simulating what main() does)
+        self.pipeline.w_max = dynamic_w_max
+        
+        # Process the sequence
+        test_sequence = "verylongword short words"
+        result = self.pipeline.process_sequence(test_sequence)
+        
+        # Verify the result reports the correct span_width
+        self.assertEqual(result['span_width'], 12)
+        self.assertEqual(result['span_width'], dynamic_w_max)
+        
+        # Verify candidates are generated with correct w_max
+        # Maximum span length should not exceed w_max
+        for start, end in result['span_candidates']:
+            span_length = end - start  # end is exclusive in Python slice notation
+            self.assertLessEqual(span_length, dynamic_w_max, 
+                f"Span [{start}, {end}) length {span_length} exceeds w_max {dynamic_w_max}")
+    
+    def test_algorithm_correctness_explanation(self):
+        """Test to demonstrate the NEW algorithm behavior: w_max = min(longest_word, sequence_based)."""
+        # Test case similar to the user's real data
+        # max_sequence_length = 512, so sequence_based = 256
+        temp_config_real = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False)
+        config_data_real = {
+            'architecture': {
+                'embed_dim': 64,
+                'conv_kernels': [3],
+                'conv_dilations': [1],
+                'dropout_rate': 0.1
+            },
+            'span_generation': {
+                'tau_vocab': 1e-4,
+                'tau_comp': 1e-6
+            },
+            'processing': {
+                'device': 'cpu',
+                'max_sequence_length': 512  # sequence_based = 256
+            },
+            'numerical': {
+                'epsilon': 1e-12,
+                'max_piece_length': 16
+            },
+            'output': {
+                'save_intermediate': True,
+                'save_numpy_arrays': True,
+                'save_json_metadata': True,
+                'add_analysis': False
+            }
+        }
+        yaml.dump(config_data_real, temp_config_real)
+        temp_config_real.close()
+        
+        try:
+            real_pipeline = Vocab2EmbeddingPipeline(temp_config_real.name)
+            real_pipeline.load_vocabulary(self.temp_vocab.name)
+            
+            # Simulate the user's case: longest word is 84 chars
+            # Let's create a mock 84-character word
+            long_word_84 = "a" * 84  # 84-character word
+            test_sequences = [
+                f"{long_word_84} short words",
+                "normal text here",
+                "more typical content"
+            ]
+            
+            # Compute dynamic w_max
+            computed_w_max = real_pipeline.compute_dynamic_w_max(test_sequences)
+            
+            # NEW EXPECTED: min(84, 256) = 84 (use the corpus-based value!)
+            self.assertEqual(computed_w_max, 84)  # This is the NEW desired behavior
+            
+            # Update pipeline w_max (simulating what main() does)
+            real_pipeline.w_max = computed_w_max
+            
+            # The algorithm now chooses the smaller value for better corpus adaptation
+            # This allows for more targeted span generation based on actual content
+            
+            # Process a sequence and verify
+            result = real_pipeline.process_sequence("short normal text")
+            self.assertEqual(result['span_width'], 84)
+            
+        finally:
+            Path(temp_config_real.name).unlink()
+    
+    def test_realistic_corpus_w_max_usage(self):
+        """Test with realistic corpus that should use corpus-based w_max.""" 
+        # Create test data with moderate sequence length
+        temp_config_large = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False)
+        config_data_large = {
+            'architecture': {
+                'embed_dim': 64,
+                'conv_kernels': [3],
+                'conv_dilations': [1],
+                'dropout_rate': 0.1
+            },
+            'span_generation': {
+                'tau_vocab': 1e-4,
+                'tau_comp': 1e-6
+            },
+            'processing': {
+                'device': 'cpu',
+                'max_sequence_length': 200  # w_max_bound = 100
+            },
+            'numerical': {
+                'epsilon': 1e-12,
+                'max_piece_length': 16
+            },
+            'output': {
+                'save_intermediate': True,
+                'save_numpy_arrays': True,
+                'save_json_metadata': True,
+                'add_analysis': False
+            }
+        }
+        yaml.dump(config_data_large, temp_config_large)
+        temp_config_large.close()
+        
+        try:
+            pipeline = Vocab2EmbeddingPipeline(temp_config_large.name)
+            pipeline.load_vocabulary(self.temp_vocab.name)
+            
+            # Test sequences where longest word is much shorter than bound
+            test_sequences = [
+                "short words only",
+                "a b c d e f",
+                "normal text with typical words",
+                "nothing verylongword here"  # verylongword = 12 chars << 100
+            ]
+            
+            # Before dynamic computation, w_max should be sequence-based
+            self.assertEqual(pipeline.w_max, 100)
+            
+            # Compute dynamic w_max - should now be corpus-based since min(12, 100) = 12
+            dynamic_w_max = pipeline.compute_dynamic_w_max(test_sequences)
+            self.assertEqual(dynamic_w_max, 12)  # min(12, 100) = 12
+            
+            # Update pipeline w_max (simulating what main() does)
+            pipeline.w_max = dynamic_w_max
+            
+            # Process a sequence and verify w_max usage
+            result = pipeline.process_sequence("verylongword normal text")
+            self.assertEqual(result['span_width'], 12)
+            
+            # All span candidates should respect the w_max
+            for start, end in result['span_candidates']:
+                span_length = end - start  # end is exclusive in Python slice notation
+                self.assertLessEqual(span_length, 12)
+        finally:
+            Path(temp_config_large.name).unlink()
+    
+    def test_w_max_propagation_to_candidate_generator(self):
+        """Test that w_max is correctly propagated to SpanCandidateGenerator."""
+        test_sequences = ["verylongword test"]
+        
+        # Get initial candidate generator w_max
+        initial_w_max = self.pipeline.candidate_generator.w_max if self.pipeline.candidate_generator else 64
+        
+        # Compute dynamic w_max
+        dynamic_w_max = self.pipeline.compute_dynamic_w_max(test_sequences)
+        
+        # The pipeline should recreate the candidate generator with new w_max
+        # (This happens in main(), but we test the component behavior)
+        new_generator = SpanCandidateGenerator(
+            self.vocab_dict,
+            tau_vocab=1e-4,
+            tau_comp=1e-6, 
+            w_max=dynamic_w_max
+        )
+        
+        self.assertEqual(new_generator.w_max, dynamic_w_max)
+        
+        # Test candidate generation with both generators
+        test_sequence = "verylongword short"
+        
+        if self.pipeline.candidate_generator:
+            old_candidates = self.pipeline.candidate_generator.generate_candidates(test_sequence)
+            # Both should respect their respective w_max bounds
+            for start, end in old_candidates:
+                self.assertLessEqual(end - start, initial_w_max)  # end is exclusive
+        
+        new_candidates = new_generator.generate_candidates(test_sequence)
+        for start, end in new_candidates:
+            self.assertLessEqual(end - start, dynamic_w_max)  # end is exclusive
+
+
 if __name__ == '__main__':
     # Set up logging to avoid noise during testing
     import logging

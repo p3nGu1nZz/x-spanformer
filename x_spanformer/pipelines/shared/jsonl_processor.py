@@ -78,6 +78,7 @@ def load_pretrain_records(file_path: str, max_length: Optional[int] = None) -> T
     
     sequences = []
     stats = {'total': 0, 'valid': 0, 'discarded': 0, 'invalid': 0, 'too_long': 0}
+    sequence_lengths = []
     
     if not Path(file_path).exists():
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -115,6 +116,7 @@ def load_pretrain_records(file_path: str, max_length: Optional[int] = None) -> T
                     continue
                 
                 sequences.append(sequence)
+                sequence_lengths.append(len(sequence))
                 stats['valid'] += 1
                 
             except json.JSONDecodeError as e:
@@ -131,6 +133,16 @@ def load_pretrain_records(file_path: str, max_length: Optional[int] = None) -> T
         logger.info(f"Skipped {stats['too_long']} sequences longer than {max_length}")
     if stats['invalid'] > 0:
         logger.warning(f"Failed to process {stats['invalid']} invalid records")
+    
+    # Compute sequence length statistics
+    if sequence_lengths:
+        stats['avg_length'] = int(sum(sequence_lengths) / len(sequence_lengths))
+        stats['max_length'] = max(sequence_lengths)
+        stats['min_length'] = min(sequence_lengths)
+    else:
+        stats['avg_length'] = 0
+        stats['max_length'] = 0
+        stats['min_length'] = 0
     
     return sequences, stats
 

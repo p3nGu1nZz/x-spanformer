@@ -47,7 +47,7 @@ Where:
 
 ### 3. Multi-Scale Contextualization (Section 3.2.3)
 
-The `ConvEncoderKernel` applies multi-scale dilated convolutions:
+The `ConvEncoderKernel` applies multi-scale dilated convolutions with automatic device fallback:
 
 ```
 H = ConvEncoder(H^0)
@@ -58,18 +58,19 @@ H = ConvEncoder(H^0)
 - **Default dilations**: `[1, 2, 4]` for exponential receptive field growth
 - **Total pathways**: `|kernels| × |dilations|` (9 pathways by default)
 - **Receptive fields**: Range from 3 positions to 25 positions
+- **Device Handling**: CUDA when specified, CPU default with intelligent fallback for CI/CD environments
 
 ### 4. Dynamic Span Width Computation
 
 **Formula:**
 ```
-w_max = max(longest_word_length, max_sequence_length // 2)
+w_max = min(longest_word_length, max_sequence_length // 2)
 ```
 
 **Implementation:**
 - Analyze corpus for longest whitespace-separated word
-- Hard limit at `max_sequence_length // 2` (default: 256 for 512-length sequences)
-- Ensures linguistic coverage while maintaining computational efficiency
+- Use the smaller value for corpus-adaptive span generation while respecting sequence limits
+- Ensures span generation is tailored to actual content while maintaining computational efficiency
 
 ### 5. Span Candidate Generation (Section 3.2.4)
 
@@ -100,8 +101,8 @@ span_generation:
 
 # Processing configuration
 processing:
-  device: "cuda"                    # Computation device
-  device_id: 0                      # GPU device ID
+  device: "cuda"                    # Device selection ("cuda" or omit for CPU default)
+  device_id: 0                      # GPU device ID when using CUDA
   batch_size: 64                    # Batch processing size
   max_sequence_length: 512          # Maximum input length
 
@@ -258,7 +259,7 @@ def compute_dynamic_w_max(sequences, max_sequence_length):
     
     corpus_based = max_word_length
     sequence_based = max_sequence_length // 2
-    return max(corpus_based, sequence_based)
+    return min(corpus_based, sequence_based)  # Use smaller value for corpus adaptation
 ```
 
 ## Performance Characteristics
@@ -298,7 +299,7 @@ The pipeline provides detailed logging across 5 stages:
 ### Key Metrics Logged
 
 - **Vocabulary**: Size, single codepoint coverage, probability distribution
-- **Device**: CUDA availability, selected device, memory usage
+- **Device**: CUDA availability, selected device, memory usage (simplified device list format)
 - **Sequences**: Count, length statistics, processing rate
 - **Dynamic w_max**: Corpus-based vs sequence-based values
 - **File Sizes**: Individual array sizes and total storage
@@ -309,6 +310,7 @@ The pipeline provides detailed logging across 5 stages:
 - **Resume Capability**: Automatic detection of partial processing
 - **Validation**: Input format validation and error reporting
 - **Resource Management**: Memory cleanup and device management
+- **Device Fallback**: Intelligent CPU fallback when CUDA unavailable (CI/CD compatibility)
 
 ## Integration
 
@@ -335,9 +337,10 @@ The pipeline provides detailed logging across 5 stages:
 ### Common Issues
 
 1. **CUDA Out of Memory**: Reduce `batch_size` or `max_sequence_length`
-2. **Slow Processing**: Check GPU utilization, consider CPU fallback
-3. **Large Output Files**: Disable `save_intermediate` or `add_analysis`
-4. **Resume Failures**: Check file permissions and disk space
+2. **CUDA Unavailable**: Pipeline automatically falls back to CPU with warning message
+3. **Slow Processing**: Check GPU utilization, automatic CPU fallback for CI/CD environments
+4. **Large Output Files**: Disable `save_intermediate` or `add_analysis`
+5. **Resume Failures**: Check file permissions and disk space
 
 ### Configuration Tuning
 
@@ -345,12 +348,13 @@ The pipeline provides detailed logging across 5 stages:
 - **For Long Sequences**: Adjust `w_max` computation or sequence truncation
 - **For Speed**: Reduce conv_kernels/dilations or disable analysis
 - **For Quality**: Increase embedding dimensions or add regularization
+- **For CI/CD**: Omit `--device` parameter for CPU fallback when CUDA unavailable
 
 ### Performance Optimization
 
 - **Batch Processing**: Pipeline processes sequences individually but efficiently
 - **Memory Management**: Automatic cleanup between sequences
-- **Device Selection**: Automatic NVIDIA GPU selection when available
+- **Device Selection**: CUDA when specified, CPU default with intelligent fallback for compatibility
 - **Caching**: Vocabulary components cached across sequences
 
 ---

@@ -463,9 +463,13 @@ class Vocab2EmbeddingPipeline:
         self.epsilon = numerical_config.get('epsilon', 1e-12)
         self.max_piece_length = numerical_config.get('max_piece_length', 8)
         self.save_intermediate = output_config.get('save_intermediate', True)
-        self.save_numpy_arrays = output_config.get('save_numpy_arrays', True)
+        
+        # Optional embedding controls (contextual embeddings H are ALWAYS saved as essential)
+        self.save_seed_embeddings = output_config.get('save_seed_embeddings', False)  # Optional intermediate H⁰
+        
         self.save_json_metadata = output_config.get('save_json_metadata', True)
         self.add_analysis = output_config.get('add_analysis', False)
+        self.save_soft_probabilities = output_config.get('save_soft_probabilities', True)
         
         # Dynamic w_max calculation based on max_sequence_length and vocabulary
         # Set as half of max sequence length as computational bound
@@ -583,14 +587,15 @@ class Vocab2EmbeddingPipeline:
         """
         Compute dynamic w_max based on the actual input corpus sequences.
         
-        Following paper Section 3.2: w_max = max(longest_word_length, max_sequence_length // 2)
+        Following corpus-adaptive approach: w_max = min(longest_word_length, max_sequence_length // 2)
         where longest_word_length is found by analyzing the corpus for the longest complete word.
+        This ensures span generation is adapted to actual corpus content while respecting sequence limits.
         
         Args:
             sequences: List of input sequences from the corpus
             
         Returns:
-            Computed w_max value
+            Computed w_max value (smaller of corpus-based and sequence-based bounds)
         """
         import re
         
@@ -611,12 +616,12 @@ class Vocab2EmbeddingPipeline:
                     if word_length > max_word_length:
                         max_word_length = word_length
         
-        # Dynamic w_max: larger of longest word or sequence-based bound
+        # Dynamic w_max: smaller of longest word or sequence-based bound for corpus adaptation
         corpus_based_w_max = max_word_length
         sequence_based_w_max = self.w_max_bound  # max_sequence_length // 2
         
-        # Use the larger value to ensure both corpus and sequence coverage
-        computed_w_max = max(corpus_based_w_max, sequence_based_w_max)
+        # Use the smaller value for better corpus adaptation while respecting sequence limits
+        computed_w_max = min(corpus_based_w_max, sequence_based_w_max)
         
         get_embedding_logger('vocab2embedding').info(
             f"Dynamic w_max computed: {computed_w_max} "
@@ -629,14 +634,14 @@ class Vocab2EmbeddingPipeline:
     def process_sequence(self, sequence: str, metadata: Optional[Dict] = None) -> Dict:
         """
         Process a single sequence through the complete pipeline following
-        Algorithm 4 from Section 3.2.5 exactly, with dynamic modality detection.
+        Algorithm 4 from Section 3.2.5 exactly.
         
         Implementation of the Unified Seed Embedding and Candidate Generation
         algorithm with all four steps:
         1. Soft probability computation via forward-backward algorithm
         2. Seed embeddings: H^0 = P · W_emb
         3. Multi-scale contextualization: H = ConvEncoder(H^0)
-        4. Vocabulary-informed candidate generation with modality-specific span width
+        4. Vocabulary-informed candidate generation with dynamic span width
         
         Args:
             sequence: Input codepoint sequence
@@ -644,7 +649,7 @@ class Vocab2EmbeddingPipeline:
             
         Returns:
             Dictionary containing embeddings H, candidates C, probabilities P,
-            and modality information exactly as specified in Algorithm 4
+            and span width information exactly as specified in Algorithm 4
         """
         if (self.unigram_lm is None or self.seed_embedder is None or 
             self.conv_encoder is None or not hasattr(self, 'vocab_dict')):
@@ -735,12 +740,13 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_existing_records(output_dir: Path, force: bool = False) -> Tuple[Dict[int, Dict], int]:
+def load_existing_records(output_dir: Path, pipeline_config: Dict, force: bool = False) -> Tuple[Dict[int, Dict], int]:
     """
     Load existing embedding records following the standard pattern from other pipelines.
     
     Args:
         output_dir: Output directory containing existing results
+        pipeline_config: Pipeline configuration to determine which files to check
         force: If True, ignore existing records and start fresh
         
     Returns:
@@ -758,44 +764,58 @@ def load_existing_records(output_dir: Path, force: bool = False) -> Tuple[Dict[i
     context_dir = output_dir / "context"
     soft_prob_dir = output_dir / "soft_prob"
     
-    if not json_dir.exists():
+    # Context embeddings are always saved and required, so check context directory first
+    if not context_dir.exists():
         get_embedding_logger('vocab2embedding').info("No existing records found - starting fresh processing")
         return existing_records, last_processed
     
-    json_files = list(json_dir.glob("embedding_*.json"))
-    if not json_files:
+    context_files = list(context_dir.glob("context_emb_*.npy"))
+    if not context_files:
         get_embedding_logger('vocab2embedding').info("No existing embedding files found - starting fresh processing")
         return existing_records, last_processed
     
-    get_embedding_logger('vocab2embedding').info(f"Found {len(json_files)} existing embedding files - verifying integrity")
+    get_embedding_logger('vocab2embedding').info(f"Found {len(context_files)} existing context embedding files - verifying integrity")
     
-    # Load and verify existing records
-    for json_file in json_files:
+    # Load and verify existing records based on context files
+    for context_file in context_files:
         try:
-            # Extract sequence ID from filename pattern: embedding_XXXXXX.json
-            seq_id = int(json_file.stem.split('_')[1])
+            # Extract sequence ID from filename pattern: context_emb_XXXXXX.npy
+            seq_id = int(context_file.stem.split('_')[2])  # context_emb_XXXXXX -> XXXXXX
             
-            # Verify all required files exist
-            if not verify_processed_sequence(json_dir, seed_dir, context_dir, soft_prob_dir, seq_id):
+            # Verify all required files exist based on configuration
+            if not verify_processed_sequence(json_dir, seed_dir, context_dir, soft_prob_dir, seq_id, pipeline_config):
                 get_embedding_logger('vocab2embedding').warning(f"Sequence {seq_id} incomplete - will be reprocessed")
                 continue
             
-            # Load metadata
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            # Load metadata if JSON is enabled, otherwise create minimal record
+            output_config = pipeline_config.get('output', {})
+            if output_config.get('save_json_metadata', False):
+                json_file = json_dir / f"embedding_{seq_id:06d}.json"
+                if json_file.exists():
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        existing_records[seq_id] = {
+                            'sequence': data.get('sequence', ''),
+                            'sequence_length': data.get('sequence_length', 0),
+                            'num_candidates': data.get('num_candidates', 0),
+                            'span_candidates': data.get('span_candidates', [])
+                        }
+            else:
+                # JSON disabled - create minimal record based on context file existence
                 existing_records[seq_id] = {
-                    'sequence': data.get('sequence', ''),
-                    'sequence_length': data.get('sequence_length', 0),
-                    'num_candidates': data.get('num_candidates', 0),
-                    'span_candidates': data.get('span_candidates', [])
+                    'sequence': f'[context_only_seq_{seq_id}]',  # Placeholder
+                    'sequence_length': 0,  # Unknown without JSON
+                    'num_candidates': 0,   # Unknown without JSON
+                    'span_candidates': []  # Unknown without JSON
                 }
-                last_processed = max(last_processed, seq_id)
+            
+            last_processed = max(last_processed, seq_id)
                 
-        except (ValueError, IndexError, json.JSONDecodeError) as e:
-            get_embedding_logger('vocab2embedding').warning(f"Error reading {json_file}: {e}")
+        except (ValueError, IndexError) as e:
+            get_embedding_logger('vocab2embedding').warning(f"Error reading {context_file}: {e}")
             continue
         except Exception as e:
-            get_embedding_logger('vocab2embedding').error(f"Unexpected error with {json_file}: {e}")
+            get_embedding_logger('vocab2embedding').error(f"Unexpected error with {context_file}: {e}")
             continue
     
     if existing_records:
@@ -807,42 +827,59 @@ def load_existing_records(output_dir: Path, force: bool = False) -> Tuple[Dict[i
     return existing_records, last_processed
 
 def verify_processed_sequence(json_dir: Path, seed_dir: Path, context_dir: Path, 
-                             soft_prob_dir: Path, seq_id: int) -> bool:
+                             soft_prob_dir: Path, seq_id: int, pipeline_config: Dict) -> bool:
     """
-    Verify that a sequence was completely processed by checking all expected files.
+    Verify that a sequence was completely processed by checking expected files based on configuration.
     
+    Args:
+        json_dir: Directory for JSON metadata files
+        seed_dir: Directory for seed embedding files  
+        context_dir: Directory for context embedding files
+        soft_prob_dir: Directory for soft probability files
+        seq_id: Sequence ID to check
+        pipeline_config: Pipeline configuration to determine which files should exist
+        
     Returns:
-        bool: True if all files exist and are valid
+        bool: True if all expected files exist and are valid
     """
     try:
-        # Check JSON metadata file
-        json_file = json_dir / f"embedding_{seq_id:06d}.json"
-        if not json_file.exists():
-            return False
+        files_to_check = []
         
-        # Verify JSON content
-        with open(json_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            if not all(key in data for key in ['sequence_id', 'sequence', 'num_candidates']):
-                return False
+        # Context embeddings are ALWAYS required (essential for downstream tasks)
+        context_file = context_dir / f"context_emb_{seq_id:06d}.npy"
+        files_to_check.append(context_file)
         
-        # Check numpy array files (support both .npy and .npz formats)
-        files_to_check = [
-            seed_dir / f"seed_emb_{seq_id:06d}.npy",
-            context_dir / f"context_emb_{seq_id:06d}.npy"
-        ]
+        # Check optional files based on configuration
+        output_config = pipeline_config.get('output', {})
         
-        # Check for soft probabilities (either .npy or .npz format)
-        soft_prob_npy = soft_prob_dir / f"soft_probs_{seq_id:06d}.npy"
-        soft_prob_npz = soft_prob_dir / f"soft_probs_{seq_id:06d}.npz"
+        if output_config.get('save_json_metadata', False):
+            json_file = json_dir / f"embedding_{seq_id:06d}.json"
+            files_to_check.append(json_file)
+            
+            # If JSON exists, verify its content
+            if json_file.exists():
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if not all(key in data for key in ['sequence_id', 'sequence', 'num_candidates']):
+                        return False
         
-        if soft_prob_npy.exists():
-            files_to_check.append(soft_prob_npy)
-        elif soft_prob_npz.exists():
-            files_to_check.append(soft_prob_npz)
-        else:
-            return False
+        if output_config.get('save_seed_embeddings', False):
+            seed_file = seed_dir / f"seed_emb_{seq_id:06d}.npy"
+            files_to_check.append(seed_file)
         
+        if output_config.get('save_soft_probabilities', False):
+            # Check for soft probabilities (either .npy or .npz format)
+            soft_prob_npy = soft_prob_dir / f"soft_probs_{seq_id:06d}.npy"
+            soft_prob_npz = soft_prob_dir / f"soft_probs_{seq_id:06d}.npz"
+            
+            if soft_prob_npy.exists():
+                files_to_check.append(soft_prob_npy)
+            elif soft_prob_npz.exists():
+                files_to_check.append(soft_prob_npz)
+            else:
+                return False  # Soft probs enabled but file missing
+        
+        # Verify all required files exist and are non-empty
         for file_path in files_to_check:
             if not file_path.exists() or file_path.stat().st_size == 0:
                 return False
@@ -864,32 +901,13 @@ def main():
     # Create output directory
     output_path = Path(args.output)
     output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Create subdirectories for different file types
-    json_dir = output_path / "json"
-    seed_dir = output_path / "seed"
-    context_dir = output_path / "context"
-    soft_prob_dir = output_path / "soft_prob"
-    
-    json_dir.mkdir(exist_ok=True)
-    seed_dir.mkdir(exist_ok=True)
-    context_dir.mkdir(exist_ok=True)
-    soft_prob_dir.mkdir(exist_ok=True)
-    
-    # Setup logging in the output directory (root level)
+
+    # Setup logging in the output directory (root level) - before pipeline init
     setup_embedding_logging(output_path, 'vocab2embedding')
     global logger
     logger = get_embedding_logger('vocab2embedding')
-    
-    # Load existing records following the pattern from other pipelines
-    existing_records, last_processed = load_existing_records(output_path)
-    if existing_records:
-        logger.info(f"RESUMING PROCESSING - Found {len(existing_records)} previously processed sequences")
-        logger.info(f"Last processed sequence ID: {last_processed}")
-    else:
-        logger.info("STARTING FRESH PROCESSING - No existing sequences found")
-    
-    # Log command line arguments
+
+    # Log command line arguments first
     logger.info("COMMAND LINE ARGUMENTS:")
     logger.info(f"  Vocabulary file: {args.vocab}")
     logger.info(f"  Input file: {args.input}")
@@ -900,12 +918,20 @@ def main():
     logger.info("[bold cyan]X-Spanformer VOCAB2EMBEDDING Pipeline[/bold cyan]")
     logger.info("[green]Initializing embedding generation pipeline[/green]")
     
-    # Initialize pipeline and log full configuration
+    # Initialize pipeline and log full configuration FIRST
     logger.info("=" * 50)
     logger.info("STAGE 1: PIPELINE INITIALIZATION")
     logger.info("=" * 50)
     
     pipeline = Vocab2EmbeddingPipeline(args.config)
+    
+    # Now load existing records with pipeline config
+    existing_records, last_processed = load_existing_records(output_path, pipeline.config)
+    if existing_records:
+        logger.info(f"RESUMING PROCESSING - Found {len(existing_records)} previously processed sequences")
+        logger.info(f"Last processed sequence ID: {last_processed}")
+    else:
+        logger.info("STARTING FRESH PROCESSING - No existing sequences found")
     
     # Log complete configuration pretty-printed
     logger.info("PIPELINE CONFIGURATION:")
@@ -916,24 +942,39 @@ def main():
     logger.info(f"  Selected device: {pipeline.device}")
     logger.info("-" * 50)
     
-    # Log available GPU devices in streamlined table format
+    # Log available GPU devices in simple list format
     logger.info("DEVICE INFORMATION:")
     if torch.cuda.is_available():
         logger.info("  CUDA Devices:")
-        logger.info("  ┌─────┬─────────────────────────────────┬──────────┐")
-        logger.info("  │ ID  │ Device Name                     │ Memory   │")
-        logger.info("  ├─────┼─────────────────────────────────┼──────────┤")
         for i in range(torch.cuda.device_count()):
             device_name = torch.cuda.get_device_name(i)
             device_memory = torch.cuda.get_device_properties(i).total_memory / (1024**3)
-            logger.info(f"  │ {i:<3} │ {device_name:<31} │ {device_memory:>6.1f}GB │")
-        logger.info("  └─────┴─────────────────────────────────┴──────────┘")
-        logger.info(f"  Selected: Device {pipeline.config.get('device_id', 0)}")
+            logger.info(f"    - {i}: {device_name} ({device_memory:.1f}GB)")
+        logger.info(f"  Selected: Device {pipeline.config.get('processing', {}).get('device_id', 0)}")
     else:
         logger.info("  CUDA: Not available - using CPU")
     
     logger.info(f"Pipeline initialized on: {pipeline.device}")
     logger.info("-" * 50)
+
+    # Create subdirectories based on configuration
+    json_dir = output_path / "json"
+    seed_dir = output_path / "seed" 
+    context_dir = output_path / "context"
+    soft_prob_dir = output_path / "soft_prob"
+
+    # Always create contextual embeddings directory (essential for downstream tasks)
+    context_dir.mkdir(exist_ok=True)
+    
+    # Conditionally create directories based on config
+    if pipeline.config.get('output', {}).get('save_seed_embeddings', False):
+        seed_dir.mkdir(exist_ok=True)
+    
+    if pipeline.config.get('output', {}).get('save_json_metadata', False):
+        json_dir.mkdir(exist_ok=True)
+    
+    if pipeline.config.get('output', {}).get('save_soft_probabilities', False):
+        soft_prob_dir.mkdir(exist_ok=True)
     
     # Load vocabulary
     logger.info("=" * 50)
@@ -1017,40 +1058,80 @@ def main():
             logger.info(f"  Forward-backward: {result['soft_probabilities'].shape}")
             logger.info(f"  Seed embeddings: {result['seed_embeddings'].shape}")
             logger.info(f"  Contextual embeddings: {result['contextual_embeddings'].shape}")
-            logger.info(f"  Span candidates: {result['num_candidates']} (modality: {result['modality']}, span_width: {result['span_width']})")
+            logger.info(f"  Span candidates: {result['num_candidates']} (span_width: {result['span_width']})")
             
-            # Save results
-            output_file = json_dir / f"embedding_{seq_id:06d}.json"
-            with open(output_file, 'w', encoding='utf-8') as outfile:
-                # Convert numpy arrays to lists for JSON serialization
-                json_result = {
-                    'sequence_id': seq_id,
-                    'sequence': sequence,
-                    'sequence_length': result['sequence_length'],
-                    'num_candidates': result['num_candidates'],
-                    'span_candidates': result['span_candidates'],
-                    'soft_probabilities_shape': result['soft_probabilities'].shape,
-                    'seed_embeddings_shape': result['seed_embeddings'].shape, 
-                    'contextual_embeddings_shape': result['contextual_embeddings'].shape
-                }
-                json.dump(json_result, outfile, ensure_ascii=False, indent=2)
+            # Save results conditionally based on configuration
+            json_size = 0
+            if pipeline.config.get('output', {}).get('save_json_metadata', False):
+                output_file = json_dir / f"embedding_{seq_id:06d}.json"
+                with open(output_file, 'w', encoding='utf-8') as outfile:
+                    # Convert numpy arrays to lists for JSON serialization
+                    json_result = {
+                        'sequence_id': seq_id,
+                        'sequence': sequence,
+                        'sequence_length': result['sequence_length'],
+                        'num_candidates': result['num_candidates'],
+                        'span_candidates': result['span_candidates'],
+                        'soft_probabilities_shape': result['soft_probabilities'].shape,
+                        'seed_embeddings_shape': result['seed_embeddings'].shape, 
+                        'contextual_embeddings_shape': result['contextual_embeddings'].shape
+                    }
+                    json.dump(json_result, outfile, ensure_ascii=False, indent=2)
+                json_size = output_file.stat().st_size / 1024  # KB
             
-            # Save embeddings as numpy files
-            np.save(soft_prob_dir / f"soft_probs_{seq_id:06d}.npy", result['soft_probabilities'])
-            np.save(seed_dir / f"seed_emb_{seq_id:06d}.npy", result['seed_embeddings'])
+            # Save embeddings as numpy files conditionally
+            if pipeline.save_soft_probabilities:
+                np.save(soft_prob_dir / f"soft_probs_{seq_id:06d}.npy", result['soft_probabilities'])
+            
+            if pipeline.save_seed_embeddings:
+                np.save(seed_dir / f"seed_emb_{seq_id:06d}.npy", result['seed_embeddings'])
+            
+            # Always save contextual embeddings (essential for downstream tasks)
             np.save(context_dir / f"context_emb_{seq_id:06d}.npy", result['contextual_embeddings'])
             
-            processed_count += 1
-            
-            # Log file sizes for monitoring
-            json_size = (json_dir / f"embedding_{seq_id:06d}.json").stat().st_size / 1024  # KB
-            seed_size = (seed_dir / f"seed_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
+            # Log file sizes for monitoring (handle optional files)
+            seed_size = 0
+            if pipeline.save_seed_embeddings:
+                seed_size = (seed_dir / f"seed_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
             context_size = (context_dir / f"context_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
-            soft_prob_size = (soft_prob_dir / f"soft_probs_{seq_id:06d}.npy").stat().st_size / 1024  # KB
             
-            total_size = json_size + seed_size + context_size + soft_prob_size
-            logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
-                       f"Context({context_size:.1f}KB) + SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total")
+            if pipeline.save_soft_probabilities:
+                soft_prob_size = (soft_prob_dir / f"soft_probs_{seq_id:06d}.npy").stat().st_size / 1024  # KB
+                if json_size > 0 and seed_size > 0:
+                    total_size = json_size + seed_size + context_size + soft_prob_size
+                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
+                              f"Context({context_size:.1f}KB) + SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total")
+                elif json_size > 0:
+                    total_size = json_size + context_size + soft_prob_size
+                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Context({context_size:.1f}KB) + "
+                              f"SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total (Seed: SKIPPED)")
+                elif seed_size > 0:
+                    total_size = seed_size + context_size + soft_prob_size
+                    logger.info(f"  Saved: Seed({seed_size:.1f}KB) + Context({context_size:.1f}KB) + "
+                              f"SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total (JSON: SKIPPED)")
+                else:
+                    total_size = context_size + soft_prob_size
+                    logger.info(f"  Saved: Context({context_size:.1f}KB) + SoftProb({soft_prob_size:.1f}KB) = "
+                              f"{total_size:.1f}KB total (JSON: SKIPPED, Seed: SKIPPED)")
+            else:
+                if json_size > 0 and seed_size > 0:
+                    total_size = json_size + seed_size + context_size
+                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
+                              f"Context({context_size:.1f}KB) = {total_size:.1f}KB total (SoftProb: SKIPPED)")
+                elif json_size > 0:
+                    total_size = json_size + context_size
+                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Context({context_size:.1f}KB) = "
+                              f"{total_size:.1f}KB total (Seed: SKIPPED, SoftProb: SKIPPED)")
+                elif seed_size > 0:
+                    total_size = seed_size + context_size
+                    logger.info(f"  Saved: Seed({seed_size:.1f}KB) + Context({context_size:.1f}KB) = "
+                              f"{total_size:.1f}KB total (JSON: SKIPPED, SoftProb: SKIPPED)")
+                else:
+                    total_size = context_size
+                    logger.info(f"  Saved: Context({context_size:.1f}KB) = {total_size:.1f}KB total "
+                              f"(JSON: SKIPPED, Seed: SKIPPED, SoftProb: SKIPPED)")
+            
+            processed_count += 1
             logger.info("-" * 50)
                 
         except Exception as e:
@@ -1084,10 +1165,25 @@ def main():
     
     logger.info(f"Output saved to: {output_path}")
     logger.info("Output structure:")
-    logger.info(f"  JSON metadata: {json_dir} ({len(list(json_dir.glob('*.json')))} files)")
-    logger.info(f"  Seed embeddings: {seed_dir} ({len(list(seed_dir.glob('*.npy')))} files)")
+    
+    # Only log directories that exist
+    if json_dir.exists():
+        logger.info(f"  JSON metadata: {json_dir} ({len(list(json_dir.glob('*.json')))} files)")
+    else:
+        logger.info(f"  JSON metadata: Not saved (disabled in config)")
+        
+    if seed_dir.exists():
+        logger.info(f"  Seed embeddings: {seed_dir} ({len(list(seed_dir.glob('*.npy')))} files)")
+    else:
+        logger.info(f"  Seed embeddings: Not saved (disabled for performance)")
+        
     logger.info(f"  Context embeddings: {context_dir} ({len(list(context_dir.glob('*.npy')))} files)")
-    logger.info(f"  Soft probabilities: {soft_prob_dir} ({len(list(soft_prob_dir.glob('*.npy')))} files)")
+    
+    if soft_prob_dir.exists():
+        logger.info(f"  Soft probabilities: {soft_prob_dir} ({len(list(soft_prob_dir.glob('*.npy')))} files)")
+    else:
+        logger.info(f"  Soft probabilities: Not saved (disabled for performance)")
+        
     logger.info(f"  Log file: {output_path / 'embedding.log'}")
     
     # Exit code for automation

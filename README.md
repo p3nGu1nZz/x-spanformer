@@ -90,7 +90,7 @@ uv run -m x_spanformer.pipelines.vocab2embedding \
   --vocab data/vocab/out/vocab.jsonl \
   --input data/vocab/out/corpus.jsonl \
   --output data/embeddings/ \
-  --device cuda
+  --device cuda  # or omit for CPU default
 ```
 
 This implements the unified algorithm from Section 3.2, featuring:
@@ -98,6 +98,7 @@ This implements the unified algorithm from Section 3.2, featuring:
 - **Forward-backward soft probability computation** adapted from HMMs for variable-length pieces
 - **Vocabulary-aware Xavier initialization** with probability-adjusted embedding variance
 - **Multi-scale dilated convolutions** for contextual encoding (kernels [3,5,7], dilations [1,2,4])
+- **Intelligent device fallback** from CUDA to CPU when GPU unavailable (CI/CD compatible)
 - **Vocabulary-informed span filtering** using alignment, compositional potential, and whitespace coherence
 
 The pipeline outputs both `vocab.jsonl` (final vocabulary with probabilities) and `vocab_stats.json` (comprehensive training statistics), enabling detailed analysis of the vocabulary induction process.
