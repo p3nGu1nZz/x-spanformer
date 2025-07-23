@@ -376,7 +376,8 @@ class TestVocab2EmbeddingPipeline(unittest.TestCase):
             'processing': {
                 'device': self.device,
                 'batch_size': 64,
-                'max_sequence_length': 512
+                'max_sequence_length': 512,
+                'workers': 1
             },
             'numerical': {
                 'epsilon': 1e-12,
@@ -519,7 +520,7 @@ class TestMathematicalCorrectness(unittest.TestCase):
         
         # Each position should have probabilities that reflect valid segmentations
         # This is a basic sanity check - exact values depend on the algorithm
-        self.assertGreaterEqual(torch.sum(P).item(), 0)
+        self.assertGreaterEqual(torch.sum(P, dim=None).item(), 0)
     
     def test_compositional_probability_computation(self):
         """Test compositional probability computation in candidate generation."""
@@ -618,7 +619,8 @@ class TestVocab2EmbeddingIntegration(unittest.TestCase):
             "processing": {
                 "device": "cpu",
                 "batch_size": 64,
-                "max_sequence_length": 512
+                "max_sequence_length": 512,
+                "workers": 1
             },
             "numerical": {
                 "epsilon": 1e-12,
@@ -979,7 +981,8 @@ class TestRealisticVocab2EmbeddingPipeline(unittest.TestCase):
             'processing': {
                 'device': 'cpu',  # Use CPU for deterministic testing
                 'batch_size': 64,
-                'max_sequence_length': 512
+                'max_sequence_length': 512,
+                'workers': 1
             },
             'numerical': {
                 'epsilon': 1e-12,
@@ -1304,7 +1307,8 @@ class TestPipelineUtilities(unittest.TestCase):
                     'processing': {
                         'device': 'auto',
                         'batch_size': 64,
-                        'max_sequence_length': 512
+                        'max_sequence_length': 512,
+                        'workers': 1
                     },
                     'numerical': {
                         'epsilon': 1e-12,

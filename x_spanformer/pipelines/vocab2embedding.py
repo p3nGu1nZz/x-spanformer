@@ -30,6 +30,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional, Union
+from multiprocessing import Process, Queue, Manager, current_process
+from queue import Empty
+import threading
 
 import torch
 import torch.nn as nn
@@ -52,6 +55,118 @@ logger = None
 
 # Global flag for graceful shutdown
 SHUTDOWN_REQUESTED = False
+
+class WorkerTask:
+    """Data structure for worker task distribution."""
+    def __init__(self, seq_id: int, sequence: str, config_path: str, vocab_path: str, dynamic_w_max: int):
+        self.seq_id = seq_id
+        self.sequence = sequence
+        self.config_path = config_path
+        self.vocab_path = vocab_path
+        self.dynamic_w_max = dynamic_w_max
+
+class ProcessingResult:
+    """Data structure for processing results."""
+    def __init__(self, seq_id: int, success: bool, result: Optional[Dict] = None, error: Optional[str] = None):
+        self.seq_id = seq_id
+        self.success = success
+        self.result = result
+        self.error = error
+
+def sequence_processor_worker(task_queue: Queue, result_queue: Queue, worker_id: int):
+    """
+    Worker process function for parallel sequence processing.
+    
+    Each worker initializes its own pipeline and processes sequences from the task queue.
+    Results are sent back through the result queue with proper ordering information.
+    
+    Args:
+        task_queue: Queue containing WorkerTask objects
+        result_queue: Queue for returning ProcessingResult objects
+        worker_id: Unique identifier for this worker process
+    """
+    pipeline = None
+    processed_count = 0
+    
+    try:
+        # Worker initialization
+        process_name = current_process().name
+        print(f"Worker {worker_id} ({process_name}): Starting up...")
+        
+        while True:
+            try:
+                # Get task from queue with timeout
+                task = task_queue.get(timeout=1.0)
+                
+                if task is None:  # Poison pill - shutdown signal
+                    break
+                
+                # Initialize pipeline on first task (lazy initialization)
+                if pipeline is None:
+                    print(f"Worker {worker_id}: Initializing pipeline...")
+                    pipeline = Vocab2EmbeddingPipeline(task.config_path)
+                    pipeline.load_vocabulary(task.vocab_path)
+                    pipeline.w_max = task.dynamic_w_max
+                    
+                    # Recreate candidate generator with updated w_max
+                    span_config = pipeline.config.get('span_generation', {})
+                    pipeline.candidate_generator = SpanCandidateGenerator(
+                        pipeline.vocab_dict,
+                        tau_vocab=float(span_config.get('tau_vocab', 1e-4)),
+                        tau_comp=float(span_config.get('tau_comp', 1e-6)),
+                        w_max=task.dynamic_w_max
+                    )
+                    print(f"Worker {worker_id}: Pipeline initialized on {pipeline.device}")
+                
+                # Process the sequence
+                start_time = time.time()
+                try:
+                    result = pipeline.process_sequence(task.sequence)
+                    processing_time = time.time() - start_time
+                    
+                    # Add processing metadata
+                    result['processing_time'] = processing_time
+                    result['worker_id'] = worker_id
+                    result['sequence'] = task.sequence  # Include original sequence for saving
+                    
+                    # CRITICAL: Detach tensors for multiprocessing serialization
+                    # PyTorch tensors with requires_grad=True cannot be serialized across processes
+                    # We detach but keep them on their original device for optimal performance
+                    result_for_queue = {}
+                    for key, value in result.items():
+                        if isinstance(value, torch.Tensor):
+                            # Detach from computation graph but preserve device placement
+                            result_for_queue[key] = value.detach()
+                        else:
+                            result_for_queue[key] = value
+                    
+                    # Send successful result
+                    result_queue.put(ProcessingResult(task.seq_id, True, result_for_queue))
+                    processed_count += 1
+                    
+                    print(f"Worker {worker_id}: Completed sequence {task.seq_id} "
+                          f"({len(task.sequence)} chars, {processing_time:.2f}s, "
+                          f"{result['num_candidates']} candidates)")
+                    
+                except Exception as e:
+                    # Send error result
+                    error_msg = f"Worker {worker_id} error processing sequence {task.seq_id}: {str(e)}"
+                    result_queue.put(ProcessingResult(task.seq_id, False, error=error_msg))
+                    print(error_msg)
+                
+            except Empty:
+                # Timeout waiting for task - check if we should continue
+                continue
+            except Exception as e:
+                print(f"Worker {worker_id}: Unexpected error: {e}")
+                break
+                
+    except KeyboardInterrupt:
+        print(f"Worker {worker_id}: Received interrupt signal")
+    except Exception as e:
+        print(f"Worker {worker_id}: Fatal error: {e}")
+    finally:
+        print(f"Worker {worker_id}: Shutting down (processed {processed_count} sequences)")
 
 def signal_handler(signum, frame):
     """Handle termination signals gracefully."""
@@ -466,6 +581,7 @@ class Vocab2EmbeddingPipeline:
         # Common parameter extraction
         self.max_sequence_length = processing_config.get('max_sequence_length', 512)
         self.batch_size = processing_config.get('batch_size', 64)
+        self.workers = processing_config.get('workers', 1)
         self.epsilon = numerical_config.get('epsilon', 1e-12)
         self.max_piece_length = numerical_config.get('max_piece_length', 8)
         self.save_intermediate = output_config.get('save_intermediate', True)
@@ -769,6 +885,209 @@ def save_sequence_results(pipeline, result, seq_id, sequence, json_dir, seed_dir
     return file_sizes
 
 
+def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int], 
+                             pipeline: 'Vocab2EmbeddingPipeline', num_workers: int,
+                             output_dirs: Dict[str, Path]) -> Tuple[int, int]:
+    """
+    Process sequences in parallel while maintaining sequential output ordering.
+    
+    Args:
+        sequences: List of all sequences from input corpus
+        missing_seq_ids: List of sequence IDs that need processing
+        pipeline: Configured pipeline instance (for config/vocab paths)
+        num_workers: Number of worker processes
+        output_dirs: Dictionary containing output directory paths
+        
+    Returns:
+        Tuple of (processed_count, error_count)
+    """
+    if num_workers <= 1:
+        # Fall back to sequential processing
+        return process_sequences_sequential(sequences, missing_seq_ids, pipeline, output_dirs)
+    
+    logger = get_embedding_logger('vocab2embedding')
+    logger.info(f"Starting parallel processing with {num_workers} workers")
+    logger.info(f"Processing {len(missing_seq_ids)} sequences...")
+    
+    # Create queues for task distribution and result collection
+    task_queue = Queue()
+    result_queue = Queue()
+    
+    # Populate task queue with missing sequences
+    for seq_id in missing_seq_ids:
+        if SHUTDOWN_REQUESTED:
+            break
+            
+        sequence = sequences[seq_id - 1]  # Convert to 0-based index
+        task = WorkerTask(
+            seq_id=seq_id,
+            sequence=sequence,
+            config_path=pipeline.config.get('_config_path', 'config/pipelines/vocab2embedding.yaml'),
+            vocab_path=pipeline.config.get('_vocab_path', ''),
+            dynamic_w_max=pipeline.w_max
+        )
+        task_queue.put(task)
+    
+    # Add poison pills for workers
+    for _ in range(num_workers):
+        task_queue.put(None)
+    
+    # Start worker processes
+    workers = []
+    for worker_id in range(num_workers):
+        worker = Process(
+            target=sequence_processor_worker,
+            args=(task_queue, result_queue, worker_id),
+            name=f"SeqWorker-{worker_id}"
+        )
+        worker.start()
+        workers.append(worker)
+    
+    # Result collection with sequential ordering
+    results_buffer = {}  # seq_id -> ProcessingResult
+    processed_results = set()  # Track which sequence IDs have been saved
+    processed_count = 0
+    error_count = 0
+    expected_results = len(missing_seq_ids)
+    
+    logger.info("Collecting results and maintaining sequential order...")
+    
+    while processed_count + error_count < expected_results and not SHUTDOWN_REQUESTED:
+        try:
+            # Get result from queue with timeout
+            result = result_queue.get(timeout=2.0)
+            results_buffer[result.seq_id] = result
+            
+            # Process results in sequential order based on missing_seq_ids
+            while True:
+                # Find the next expected sequence ID to process
+                next_seq_id = None
+                for seq_id in missing_seq_ids:
+                    if seq_id in results_buffer and seq_id not in processed_results:
+                        next_seq_id = seq_id
+                        break
+                
+                if next_seq_id is None:
+                    break  # Wait for more results
+                
+                # Process the next sequential result
+                seq_result = results_buffer[next_seq_id]
+                processed_results.add(next_seq_id)
+                
+                if seq_result.success:
+                    try:
+                        # Save results using helper function
+                        file_sizes = save_sequence_results(
+                            pipeline, seq_result.result, seq_result.seq_id, 
+                            seq_result.result['sequence'],
+                            output_dirs['json'], output_dirs['seed'], 
+                            output_dirs['context'], output_dirs['soft_prob'], logger
+                        )
+                        
+                        # Log progress
+                        progress = ((processed_count + error_count + 1) / expected_results) * 100
+                        logger.info(f"Sequence {next_seq_id}/{len(sequences)} completed "
+                                  f"(Worker {seq_result.result.get('worker_id', '?')}, "
+                                  f"{seq_result.result.get('processing_time', 0):.2f}s, "
+                                  f"{progress:.1f}% complete)")
+                        
+                        log_saved_files(file_sizes, logger)
+                        processed_count += 1
+                        
+                    except Exception as e:
+                        logger.error(f"Error saving results for sequence {next_seq_id}: {e}")
+                        error_count += 1
+                else:
+                    logger.error(seq_result.error)
+                    error_count += 1
+                
+        except Empty:
+            # Check if workers are still alive
+            alive_workers = [w for w in workers if w.is_alive()]
+            if not alive_workers and result_queue.empty():
+                logger.warning("All workers finished but some results may be missing")
+                break
+            continue
+        except Exception as e:
+            logger.error(f"Error collecting results: {e}")
+            break
+    
+    # Cleanup: wait for workers to finish
+    logger.info("Waiting for workers to finish...")
+    for worker in workers:
+        worker.join(timeout=10.0)
+        if worker.is_alive():
+            logger.warning(f"Worker {worker.name} did not finish cleanly")
+            worker.terminate()
+    
+    logger.info(f"Parallel processing completed: {processed_count} processed, {error_count} errors")
+    return processed_count, error_count
+
+def process_sequences_sequential(sequences: List[str], missing_seq_ids: List[int],
+                               pipeline: 'Vocab2EmbeddingPipeline', output_dirs: Dict[str, Path]) -> Tuple[int, int]:
+    """
+    Process sequences sequentially (fallback for single worker or debugging).
+    
+    Args:
+        sequences: List of all sequences from input corpus
+        missing_seq_ids: List of sequence IDs that need processing  
+        pipeline: Configured pipeline instance
+        output_dirs: Dictionary containing output directory paths
+        
+    Returns:
+        Tuple of (processed_count, error_count)
+    """
+    logger = get_embedding_logger('vocab2embedding')
+    logger.info("Processing sequences sequentially...")
+    
+    processed_count = 0
+    error_count = 0
+    
+    for seq_id in missing_seq_ids:
+        if SHUTDOWN_REQUESTED:
+            logger.warning("SHUTDOWN SIGNAL RECEIVED - Stopping processing")
+            break
+            
+        sequence = sequences[seq_id - 1]  # Convert to 0-based index
+        
+        try:
+            logger.info(f"Sequence {seq_id}/{len(sequences)} - Length: {len(sequence)} chars")
+            
+            # GPU memory status for monitoring
+            if torch.cuda.is_available():
+                allocated = torch.cuda.memory_allocated() / 1024**3
+                reserved = torch.cuda.memory_reserved() / 1024**3
+                logger.info(f"  GPU: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
+            
+            # Process sequence using the pipeline
+            result = pipeline.process_sequence(sequence)
+            
+            logger.info(f"  Forward-backward: {result['soft_probabilities'].shape}")
+            logger.info(f"  Seed embeddings: {result['seed_embeddings'].shape}")
+            logger.info(f"  Contextual embeddings: {result['contextual_embeddings'].shape}")
+            logger.info(f"  Span candidates: {result['num_candidates']} (span_width: {result['span_width']})")
+            
+            # Save results using helper function
+            file_sizes = save_sequence_results(
+                pipeline, result, seq_id, sequence,
+                output_dirs['json'], output_dirs['seed'], 
+                output_dirs['context'], output_dirs['soft_prob'], logger
+            )
+            
+            # Log saved files in clean format
+            log_saved_files(file_sizes, logger)
+            
+            processed_count += 1
+            logger.info("-" * 50)
+            
+        except Exception as e:
+            logger.error(f"Sequence {seq_id}: Error processing sequence: {e}")
+            error_count += 1
+            continue
+    
+    return processed_count, error_count
+
+
 def log_saved_files(file_sizes, logger):
     """Log saved file information in a clean, readable format."""
     # Build components list
@@ -827,8 +1146,64 @@ def parse_args():
         help="Path to configuration YAML file"
     )
     
+    parser.add_argument(
+        "--workers", "-w",
+        type=int,
+        default=1,
+        help="Number of worker processes for parallel sequence processing (default: 1)"
+    )
+    
     return parser.parse_args()
 
+
+def find_missing_sequences(total_sequences: int, existing_records: Dict[int, Dict]) -> List[int]:
+    """
+    Find missing sequence IDs that need to be processed.
+    
+    This handles discontinuous completions where sequences might be completed
+    out of order (e.g., 1-10 done, 12 done, but 11 and 13+ need processing).
+    
+    Args:
+        total_sequences: Total number of sequences in the input corpus
+        existing_records: Dictionary of already processed sequence records
+        
+    Returns:
+        List of sequence IDs that need to be processed (sorted)
+    """
+    all_sequence_ids = set(range(1, total_sequences + 1))
+    completed_sequence_ids = set(existing_records.keys())
+    missing_sequence_ids = sorted(all_sequence_ids - completed_sequence_ids)
+    
+    logger = get_embedding_logger('vocab2embedding')
+    if missing_sequence_ids:
+        logger.info(f"Missing sequences detected: {len(missing_sequence_ids)} sequences need processing")
+        
+        # Show ranges for cleaner logging
+        ranges = []
+        start = missing_sequence_ids[0]
+        end = start
+        
+        for seq_id in missing_sequence_ids[1:]:
+            if seq_id == end + 1:
+                end = seq_id
+            else:
+                if start == end:
+                    ranges.append(str(start))
+                else:
+                    ranges.append(f"{start}-{end}")
+                start = end = seq_id
+        
+        # Add final range
+        if start == end:
+            ranges.append(str(start))
+        else:
+            ranges.append(f"{start}-{end}")
+        
+        logger.info(f"Missing sequence ranges: {', '.join(ranges)}")
+    else:
+        logger.info("All sequences already processed - no missing sequences detected")
+    
+    return missing_sequence_ids
 
 def load_existing_records(output_dir: Path, pipeline_config: Dict, force: bool = False) -> Tuple[Dict[int, Dict], int]:
     """
@@ -1003,6 +1378,7 @@ def main():
     logger.info(f"  Input file: {args.input}")
     logger.info(f"  Output directory: {args.output}")
     logger.info(f"  Config file: {args.config}")
+    logger.info(f"  Workers: {args.workers}")
     logger.info("-" * 80)
     
     logger.info("[bold cyan]X-Spanformer VOCAB2EMBEDDING Pipeline[/bold cyan]")
@@ -1014,6 +1390,15 @@ def main():
     logger.info("=" * 50)
     
     pipeline = Vocab2EmbeddingPipeline(args.config)
+    
+    # Store config and vocab paths for worker processes
+    pipeline.config['_config_path'] = args.config
+    pipeline.config['_vocab_path'] = args.vocab
+    
+    # Override config with CLI arguments if provided
+    if args.workers != 1:  # Only override if different from default
+        pipeline.workers = args.workers
+        logger.info(f"Workers setting overridden by CLI: {args.workers}")
     
     # Now load existing records with pipeline config
     existing_records, last_processed = load_existing_records(output_path, pipeline.config)
@@ -1044,6 +1429,7 @@ def main():
     else:
         logger.info("  CUDA: Not available - using CPU")
     
+    logger.info(f"Workers: {pipeline.workers}")
     logger.info(f"Pipeline initialized on: {pipeline.device}")
     logger.info("-" * 50)
 
@@ -1108,64 +1494,36 @@ def main():
         w_max=dynamic_w_max
     )
     
-    # Determine processing plan
-    if existing_records:
-        logger.info(f"RESUMING from sequence {last_processed + 1} (skipping {len(existing_records)} already processed)")
+    # Determine missing sequences for processing (handles discontinuous completions)
+    missing_seq_ids = find_missing_sequences(len(sequences), existing_records)
+    
+    if not missing_seq_ids:
+        logger.info("All sequences already processed - nothing to do!")
+        logger.info(f"Output saved to: {output_path}")
+        return
     
     # Process sequences from loaded data
     logger.info("=" * 50)
     logger.info("STAGE 5: SEQUENCE PROCESSING")
     logger.info("=" * 50)
     
-    processed_count = 0
-    error_count = 0
     skipped_count = len(existing_records)  # Count previously processed as skipped
     
-    logger.info(f"Processing {len(sequences)} total sequences...")
+    # Create output directory structure for workers
+    output_dirs = {
+        'json': json_dir,
+        'seed': seed_dir,
+        'context': context_dir,
+        'soft_prob': soft_prob_dir
+    }
     
-    for seq_id, sequence in enumerate(sequences, 1):
-        # Check for shutdown signal
-        if SHUTDOWN_REQUESTED:
-            logger.warning("SHUTDOWN SIGNAL RECEIVED - Stopping processing after current sequence")
-            break
-        
-        # Skip already processed sequences (following other pipelines pattern)
-        if seq_id in existing_records:
-            continue
-        
-        try:
-            logger.info(f"Sequence {seq_id}/{len(sequences)} - Length: {len(sequence)} chars")
-            
-            # GPU memory status for monitoring
-            if torch.cuda.is_available():
-                allocated = torch.cuda.memory_allocated() / 1024**3
-                reserved = torch.cuda.memory_reserved() / 1024**3
-                logger.info(f"  GPU: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
-            
-            # Process sequence using the pipeline (handles modality detection and span width automatically)
-            result = pipeline.process_sequence(sequence)
-            
-            logger.info(f"  Forward-backward: {result['soft_probabilities'].shape}")
-            logger.info(f"  Seed embeddings: {result['seed_embeddings'].shape}")
-            logger.info(f"  Contextual embeddings: {result['contextual_embeddings'].shape}")
-            logger.info(f"  Span candidates: {result['num_candidates']} (span_width: {result['span_width']})")
-            
-            # Save results using helper function
-            file_sizes = save_sequence_results(
-                pipeline, result, seq_id, sequence, 
-                json_dir, seed_dir, context_dir, soft_prob_dir, logger
-            )
-            
-            # Log saved files in clean format
-            log_saved_files(file_sizes, logger)
-            
-            processed_count += 1
-            logger.info("-" * 50)
-                
-        except Exception as e:
-            logger.error(f"Sequence {seq_id}: Error processing sequence: {e}")
-            error_count += 1
-            continue
+    logger.info(f"Processing {len(missing_seq_ids)} remaining sequences out of {len(sequences)} total...")
+    logger.info(f"Using {pipeline.workers} worker{'s' if pipeline.workers > 1 else ''}...")
+    
+    # Process sequences (parallel or sequential based on worker count)
+    processed_count, error_count = process_sequences_parallel(
+        sequences, missing_seq_ids, pipeline, pipeline.workers, output_dirs
+    )
     
     # Final statistics
     total_processed = skipped_count + processed_count

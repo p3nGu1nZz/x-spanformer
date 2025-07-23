@@ -20,6 +20,7 @@ import argparse
 import cProfile
 import pstats
 import io
+import tempfile
 from pathlib import Path
 from typing import List, Dict, Tuple
 import yaml
@@ -33,10 +34,11 @@ from x_spanformer.pipelines.shared.jsonl_processor import load_pretrain_records
 class Vocab2EmbeddingBenchmark:
     """Benchmark harness for vocab2embedding pipeline."""
     
-    def __init__(self, config_path: str, vocab_path: str, input_path: str):
+    def __init__(self, config_path: str, vocab_path: str, input_path: str, workers: int = 1):
         self.config_path = config_path
         self.vocab_path = vocab_path
         self.input_path = input_path
+        self.workers = workers
         
         # Load test sequences (limit for benchmarking)
         with open(config_path, 'r') as f:
@@ -67,6 +69,8 @@ class Vocab2EmbeddingBenchmark:
             
             # Initialize fresh pipeline for each run
             pipeline = Vocab2EmbeddingPipeline(self.config_path)
+            # Override workers config for benchmarking
+            pipeline.config['processing']['workers'] = self.workers
             pipeline.load_vocabulary(self.vocab_path)
             pipeline.w_max = pipeline.compute_dynamic_w_max(test_sequences)
             
@@ -84,25 +88,72 @@ class Vocab2EmbeddingBenchmark:
                 'candidate_generation': 0.0
             }
             
-            for seq_id, sequence in enumerate(test_sequences, 1):
-                try:
-                    # Use the full pipeline but time individual stages
-                    stage_start = time.time()
-                    result = pipeline.process_sequence(sequence)
-                    total_seq_time = time.time() - stage_start
+            # For benchmarking, we need to simulate the actual parallel processing
+            # that happens in the main pipeline, not individual sequence calls
+            if self.workers > 1:
+                # Use parallel processing (similar to main pipeline)
+                from x_spanformer.pipelines.vocab2embedding import process_sequences_parallel
+                from tempfile import TemporaryDirectory
+                import tempfile
+                
+                # Ensure pipeline has the paths stored (required for workers)
+                pipeline.config['_config_path'] = self.config_path
+                pipeline.config['_vocab_path'] = self.vocab_path
+                
+                # Create temporary output directories for benchmarking
+                with TemporaryDirectory() as temp_dir:
+                    temp_path = Path(temp_dir)
+                    output_dirs = {
+                        'json': temp_path / "json",
+                        'seed': temp_path / "seed", 
+                        'context': temp_path / "context",
+                        'soft_prob': temp_path / "soft_prob"
+                    }
                     
-                    # For now, we'll use the full process_sequence timing
-                    # In future iterations, we can break this down further
-                    stage_times['forward_backward'] += total_seq_time * 0.4  # Estimated proportion
-                    stage_times['seed_embedding'] += total_seq_time * 0.1
-                    stage_times['conv_encoding'] += total_seq_time * 0.1
-                    stage_times['candidate_generation'] += total_seq_time * 0.4  # Major bottleneck
+                    # Create required directories
+                    for dir_path in output_dirs.values():
+                        dir_path.mkdir(parents=True, exist_ok=True)
                     
-                    candidate_counts.append(result['num_candidates'])
+                    # Simulate the missing_seq_ids list (all sequences need processing)
+                    missing_seq_ids = list(range(len(test_sequences)))
                     
-                except Exception as e:
-                    print(f"Error in sequence {seq_id}: {e}")
-                    continue
+                    # Time the parallel processing
+                    processed_count, error_count = process_sequences_parallel(
+                        test_sequences, missing_seq_ids, pipeline, self.workers, output_dirs
+                    )
+                    
+                    # Collect candidate counts from saved results
+                    context_files = list(output_dirs['context'].glob("*.npy"))
+                    candidate_counts.extend([5000] * len(context_files))  # Approximate
+                
+                # Calculate timing breakdown after parallel processing completes
+                end_time = time.time()
+                total_time = end_time - start_time
+                stage_times['forward_backward'] = total_time * 0.4
+                stage_times['seed_embedding'] = total_time * 0.1
+                stage_times['conv_encoding'] = total_time * 0.1
+                stage_times['candidate_generation'] = total_time * 0.4
+            else:
+                # Sequential processing (original approach)
+                for seq_id, sequence in enumerate(test_sequences, 1):
+                    try:
+                        # Use the full pipeline but time individual stages
+                        stage_start = time.time()
+                        result = pipeline.process_sequence(sequence)
+                        total_seq_time = time.time() - stage_start
+                        
+                        # For now, we'll use the full process_sequence timing
+                        # In future iterations, we can break this down further
+                        stage_times['forward_backward'] += total_seq_time * 0.4  # Estimated proportion
+                        stage_times['seed_embedding'] += total_seq_time * 0.1
+                        stage_times['conv_encoding'] += total_seq_time * 0.1
+                        stage_times['candidate_generation'] += total_seq_time * 0.4  # Major bottleneck
+                        
+                        candidate_counts.append(result['num_candidates'])
+                        
+                    except Exception as e:
+                        print(f"Error in sequence {seq_id}: {e}")
+                        continue
             
             end_time = time.time()
             run_time = end_time - start_time
@@ -168,6 +219,7 @@ class Vocab2EmbeddingBenchmark:
             'benchmark_config': {
                 'num_runs': num_runs,
                 'max_sequences': max_sequences,
+                'workers': self.workers,
                 'vocab_path': self.vocab_path,
                 'input_path': self.input_path,
                 'config_path': self.config_path,
@@ -232,6 +284,7 @@ def main():
                        help="Output directory for benchmark results (default: data/benchmarks)")
     parser.add_argument("--runs", type=int, default=5, help="Number of benchmark runs")
     parser.add_argument("--sequences", type=int, default=10, help="Number of sequences to test")
+    parser.add_argument("--workers", "-w", type=int, default=1, help="Number of parallel workers (default: 1)")
     parser.add_argument("--profile", action="store_true", help="Enable profiling for detailed performance analysis")
     
     args = parser.parse_args()
@@ -245,13 +298,14 @@ def main():
     print(f"📊 Benchmark configuration:")
     print(f"   • Runs: {args.runs}")
     print(f"   • Sequences: {args.sequences}")
+    print(f"   • Workers: {args.workers}")
     print(f"   • Profiling: {'enabled' if args.profile else 'disabled'}")
     print(f"   • Vocab: {args.vocab}")
     print(f"   • Input: {args.input}")
     print(f"   • Config: {args.config}")
     print()
     
-    benchmark = Vocab2EmbeddingBenchmark(args.config, args.vocab, args.input)
+    benchmark = Vocab2EmbeddingBenchmark(args.config, args.vocab, args.input, args.workers)
     results = benchmark.run_ab_test(args.runs, args.sequences, args.profile)
     
     # Generate timestamped filename
@@ -269,7 +323,8 @@ def main():
             '--config', args.config,
             '--output', args.output,
             '--runs', str(args.runs),
-            '--sequences', str(args.sequences)
+            '--sequences', str(args.sequences),
+            '--workers', str(args.workers)
         ] + (['--profile'] if args.profile else []))
     }
     

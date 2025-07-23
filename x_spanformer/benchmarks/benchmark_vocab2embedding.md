@@ -53,6 +53,7 @@ python -m x_spanformer.benchmarks.benchmark_vocab2embedding \
     --output data/benchmarks \
     --runs 10 \
     --sequences 50 \
+    --workers 4 \
     --profile
 ```
 
@@ -67,6 +68,18 @@ python -m x_spanformer.benchmarks.benchmark_vocab2embedding \
     --sequences 5
 ```
 
+### Parallel Processing Benchmark
+
+```bash
+python -m x_spanformer.benchmarks.benchmark_vocab2embedding \
+    --vocab data/vocab/vocab.jsonl \
+    --input data/pretraining/in/corpus.jsonl \
+    --config config/pipelines/vocab2embedding.yaml \
+    --runs 5 \
+    --sequences 20 \
+    --workers 8
+```
+
 ## Command Line Arguments
 
 | Argument | Required | Default | Description |
@@ -77,6 +90,7 @@ python -m x_spanformer.benchmarks.benchmark_vocab2embedding \
 | `--output` `-o` | ❌ | `data/benchmarks` | Output directory for benchmark results |
 | `--runs` | ❌ | `5` | Number of benchmark runs for statistical analysis |
 | `--sequences` | ❌ | `10` | Number of sequences to process per run |
+| `--workers` `-w` | ❌ | `1` | Number of parallel workers for multiprocessing |
 | `--profile` | ❌ | `false` | Enable cProfile for detailed performance analysis |
 
 ## Output Format
@@ -116,6 +130,7 @@ Example: `vocab2embedding_benchmark_20250123_143052.json`
   "benchmark_config": {
     "num_runs": 5,
     "max_sequences": 10,
+    "workers": 1,
     "vocab_path": "data/vocab/vocab.jsonl",
     "input_path": "data/pretraining/in/corpus.jsonl",
     "config_path": "config/pipelines/vocab2embedding.yaml",
@@ -131,6 +146,42 @@ Example: `vocab2embedding_benchmark_20250123_143052.json`
 ```
 
 ## Performance Analysis
+
+### Parallel Processing Performance
+
+The `--workers` parameter enables comparison of sequential vs parallel processing:
+
+**Sequential Processing (--workers 1):**
+- Single process handles all sequences
+- Lower memory overhead
+- Baseline performance measurement
+
+**Parallel Processing (--workers N):**
+- Multiple worker processes distribute sequence processing
+- Higher throughput for large sequence batches
+- Optimal worker count depends on CPU cores and memory
+
+**Scaling Analysis:**
+```bash
+# Compare different worker counts
+python -m x_spanformer.benchmarks.benchmark_vocab2embedding \
+    --vocab data/vocab/vocab.jsonl \
+    --input data/vocab/out/corpus.jsonl \
+    --config config/pipelines/vocab2embedding.yaml \
+    --workers 1 --sequences 20  # Sequential baseline
+
+python -m x_spanformer.benchmarks.benchmark_vocab2embedding \
+    --vocab data/vocab/vocab.jsonl \
+    --input data/vocab/out/corpus.jsonl \
+    --config config/pipelines/vocab2embedding.yaml \
+    --workers 4 --sequences 20  # 4x parallel
+
+python -m x_spanformer.benchmarks.benchmark_vocab2embedding \
+    --vocab data/vocab/vocab.jsonl \
+    --input data/vocab/out/corpus.jsonl \
+    --config config/pipelines/vocab2embedding.yaml \
+    --workers 8 --sequences 20  # 8x parallel
+```
 
 ### Interpreting Results
 
