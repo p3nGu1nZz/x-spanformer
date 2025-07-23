@@ -629,14 +629,14 @@ class Vocab2EmbeddingPipeline:
     def process_sequence(self, sequence: str, metadata: Optional[Dict] = None) -> Dict:
         """
         Process a single sequence through the complete pipeline following
-        Algorithm 4 from Section 3.2.5 exactly, with dynamic modality detection.
+        Algorithm 4 from Section 3.2.5 exactly.
         
         Implementation of the Unified Seed Embedding and Candidate Generation
         algorithm with all four steps:
         1. Soft probability computation via forward-backward algorithm
         2. Seed embeddings: H^0 = P · W_emb
         3. Multi-scale contextualization: H = ConvEncoder(H^0)
-        4. Vocabulary-informed candidate generation with modality-specific span width
+        4. Vocabulary-informed candidate generation with dynamic span width
         
         Args:
             sequence: Input codepoint sequence
@@ -644,7 +644,7 @@ class Vocab2EmbeddingPipeline:
             
         Returns:
             Dictionary containing embeddings H, candidates C, probabilities P,
-            and modality information exactly as specified in Algorithm 4
+            and span width information exactly as specified in Algorithm 4
         """
         if (self.unigram_lm is None or self.seed_embedder is None or 
             self.conv_encoder is None or not hasattr(self, 'vocab_dict')):
@@ -1017,7 +1017,7 @@ def main():
             logger.info(f"  Forward-backward: {result['soft_probabilities'].shape}")
             logger.info(f"  Seed embeddings: {result['seed_embeddings'].shape}")
             logger.info(f"  Contextual embeddings: {result['contextual_embeddings'].shape}")
-            logger.info(f"  Span candidates: {result['num_candidates']} (modality: {result['modality']}, span_width: {result['span_width']})")
+            logger.info(f"  Span candidates: {result['num_candidates']} (span_width: {result['span_width']})")
             
             # Save results
             output_file = json_dir / f"embedding_{seq_id:06d}.json"
