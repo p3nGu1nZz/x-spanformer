@@ -47,11 +47,14 @@ output:
   # Save intermediate representations for analysis (disable by default for performance)
   save_intermediate: false
 
-  # Export numpy arrays for downstream processing - ESSENTIAL (always keep these)
-  save_numpy_arrays: true
+  # OPTIONAL: Seed embeddings (H0) - intermediate representation for analysis
+  # Only needed for debugging vocabulary distribution before contextualization
+  # Disable by default since only contextual embeddings (H) are needed downstream (saves ~1MB per sequence)
+  # Note: Contextual embeddings (H) are ALWAYS saved as they're essential for ALL downstream tasks
+  save_seed_embeddings: false
 
-  # Include JSON metadata with embeddings (lightweight, useful for introspection)
-  save_json_metadata: true
+  # Include JSON metadata with embeddings (disable by default - not needed for core tasks)
+  save_json_metadata: false
 
   # Add detailed analysis to outputs (disable by default)
   add_analysis: false

@@ -43,15 +43,30 @@ class SequenceIntrospector:
         self.context_dir = self.output_dir / "context"
         self.soft_prob_dir = self.output_dir / "soft_prob"
         
-        # Validate directories exist
-        for dir_path in [self.json_dir, self.seed_dir, self.context_dir, self.soft_prob_dir]:
+        # Validate essential directories exist
+        essential_dirs = [self.context_dir]  # Only contextual embeddings are essential
+        for dir_path in essential_dirs:
             if not dir_path.exists():
-                raise FileNotFoundError(f"Required directory not found: {dir_path}")
+                raise FileNotFoundError(f"Essential directory not found: {dir_path}")
+        
+        # Optional directories (may not exist based on config)
+        self.json_available = self.json_dir.exists()
+        self.seed_available = self.seed_dir.exists()
+        self.soft_prob_available = self.soft_prob_dir.exists()
     
     def get_sequence_count(self) -> int:
         """Get total number of processed sequences."""
-        json_files = list(self.json_dir.glob("embedding_*.json"))
-        return len(json_files)
+        if self.json_available:
+            json_files = list(self.json_dir.glob("embedding_*.json"))
+            return len(json_files)
+        elif self.seed_available:
+            # Fall back to counting seed embedding files
+            seed_files = list(self.seed_dir.glob("seed_emb_*.npy"))
+            return len(seed_files)
+        else:
+            # Final fallback to contextual embedding files
+            context_files = list(self.context_dir.glob("context_emb_*.npy"))
+            return len(context_files)
     
     def load_sequence(self, seq_id: int) -> Dict[str, Any]:
         """
@@ -79,13 +94,13 @@ class SequenceIntrospector:
         if seq_id > total_sequences:
             raise ValueError(f"Sequence ID {seq_id} exceeds total sequences {total_sequences}")
         
-        # Load metadata
-        json_file = self.json_dir / f"embedding_{seq_id:06d}.json"
-        if not json_file.exists():
-            raise FileNotFoundError(f"Metadata file not found: {json_file}")
-        
-        with open(json_file, 'r', encoding='utf-8') as f:
-            metadata = json.load(f)
+        # Load metadata if available
+        metadata = None
+        if self.json_available:
+            json_file = self.json_dir / f"embedding_{seq_id:06d}.json"
+            if json_file.exists():
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
         
         # Load numpy arrays
         seed_file = self.seed_dir / f"seed_emb_{seq_id:06d}.npy"
@@ -94,7 +109,6 @@ class SequenceIntrospector:
         
         # Essential files that must exist
         essential_files = [
-            ("seed embeddings", seed_file),
             ("contextual embeddings", context_file)
         ]
         
@@ -105,18 +119,53 @@ class SequenceIntrospector:
         # Load arrays
         data = {
             'metadata': metadata,
-            'seed_embeddings': np.load(seed_file),
             'contextual_embeddings': np.load(context_file),
         }
         
-        # Soft probabilities are optional (may be disabled for performance)
-        if soft_prob_file.exists():
+        # Seed embeddings are optional (may be disabled for performance)
+        if self.seed_available and seed_file.exists():
+            data['seed_embeddings'] = np.load(seed_file)
+        else:
+            data['seed_embeddings'] = None
+        
+        # Soft probabilities are optional (may be disabled for performance)  
+        if self.soft_prob_available and soft_prob_file.exists():
             data['soft_probabilities'] = np.load(soft_prob_file)
         else:
             data['soft_probabilities'] = None
         
         return data
     
+    def get_file_sizes(self, seq_id: int) -> Dict[str, float]:
+        """Get file sizes in KB for all files related to a sequence."""
+        sizes = {}
+        
+        # Essential files
+        context_file = self.context_dir / f"context_emb_{seq_id:06d}.npy"
+        if context_file.exists():
+            sizes['contextual_embeddings'] = context_file.stat().st_size / 1024
+        
+        # Optional files
+        if self.seed_available:
+            seed_file = self.seed_dir / f"seed_emb_{seq_id:06d}.npy"
+            if seed_file.exists():
+                sizes['seed_embeddings'] = seed_file.stat().st_size / 1024
+        
+        if self.json_available:
+            json_file = self.json_dir / f"embedding_{seq_id:06d}.json"
+            if json_file.exists():
+                sizes['json_metadata'] = json_file.stat().st_size / 1024
+        
+        if self.soft_prob_available:
+            soft_prob_file = self.soft_prob_dir / f"soft_probs_{seq_id:06d}.npy"
+            if soft_prob_file.exists():
+                sizes['soft_probabilities'] = soft_prob_file.stat().st_size / 1024
+        
+        # Calculate total
+        sizes['total'] = sum(sizes.values())
+        
+        return sizes
+
     def analyze_sequence(self, seq_id: int, detailed: bool = False) -> Dict[str, Any]:
         """
         Perform analysis on a sequence.
@@ -131,24 +180,40 @@ class SequenceIntrospector:
         data = self.load_sequence(seq_id)
         metadata = data['metadata']
         
-        analysis = {
-            'sequence_id': seq_id,
-            'sequence_length': metadata['sequence_length'],
-            'num_span_candidates': metadata['num_candidates'],
-            'sequence_preview': metadata['sequence'][:100] + "..." if len(metadata['sequence']) > 100 else metadata['sequence']
-        }
+        # Get file sizes
+        file_sizes = self.get_file_sizes(seq_id)
+        
+        # Handle missing metadata gracefully
+        if metadata:
+            analysis = {
+                'sequence_id': seq_id,
+                'sequence_length': metadata['sequence_length'],
+                'num_span_candidates': metadata['num_candidates'],
+                'sequence_preview': metadata['sequence'][:100] + "..." if len(metadata['sequence']) > 100 else metadata['sequence']
+            }
+        else:
+            # Fallback when no JSON metadata available
+            context_shape = data['contextual_embeddings'].shape
+            analysis = {
+                'sequence_id': seq_id,
+                'sequence_length': context_shape[0],  # Infer from embedding shape
+                'num_span_candidates': 'Unknown (no metadata)',
+                'sequence_preview': 'Not available (no metadata)'
+            }
         
         # Array shape analysis
-        seed_shape = data['seed_embeddings'].shape
+        seed_shape = data['seed_embeddings'].shape if data['seed_embeddings'] is not None else None
         context_shape = data['contextual_embeddings'].shape
         soft_prob_shape = data['soft_probabilities'].shape if data['soft_probabilities'] is not None else None
         
         analysis.update({
-            'seed_embeddings_shape': seed_shape,  # Should be (T, 512)
+            'seed_embeddings_shape': seed_shape,  # Should be (T, 512) or None
             'contextual_embeddings_shape': context_shape,  # Should be (T, 512)
             'soft_probabilities_shape': soft_prob_shape,  # Should be (T, |V|) or None
             'vocabulary_size': soft_prob_shape[1] if soft_prob_shape is not None and len(soft_prob_shape) > 1 else None,
-            'soft_probabilities_available': data['soft_probabilities'] is not None
+            'seed_embeddings_available': data['seed_embeddings'] is not None,
+            'soft_probabilities_available': data['soft_probabilities'] is not None,
+            'file_sizes': file_sizes
         })
         
         if detailed:
@@ -158,13 +223,6 @@ class SequenceIntrospector:
             soft_probs = data['soft_probabilities']
             
             analysis['detailed_stats'] = {
-                'seed_embeddings': {
-                    'mean': float(seed_emb.mean()),
-                    'std': float(seed_emb.std()),
-                    'min': float(seed_emb.min()),
-                    'max': float(seed_emb.max()),
-                    'sparsity': float((seed_emb == 0).mean())
-                },
                 'contextual_embeddings': {
                     'mean': float(context_emb.mean()),
                     'std': float(context_emb.std()),
@@ -173,6 +231,16 @@ class SequenceIntrospector:
                     'sparsity': float((context_emb == 0).mean())
                 }
             }
+            
+            # Add seed embeddings stats only if available
+            if seed_emb is not None:
+                analysis['detailed_stats']['seed_embeddings'] = {
+                    'mean': float(seed_emb.mean()),
+                    'std': float(seed_emb.std()),
+                    'min': float(seed_emb.min()),
+                    'max': float(seed_emb.max()),
+                    'sparsity': float((seed_emb == 0).mean())
+                }
             
             # Add soft probabilities stats only if available
             if soft_probs is not None:
@@ -186,27 +254,28 @@ class SequenceIntrospector:
                     'row_sums_std': float(soft_probs.sum(axis=1).std())
                 }
             
-            # Span analysis
-            span_candidates = metadata.get('span_candidates', [])
-            if span_candidates:
-                span_lengths = []
-                for candidate in span_candidates:
-                    if len(candidate) == 2:  # [start, end] format
-                        span_lengths.append(candidate[1] - candidate[0])
-                
-                if span_lengths:
-                    span_stats = {
-                        'total_candidates': len(span_candidates),
-                        'avg_span_length': float(np.mean(span_lengths)),
-                        'min_span_length': int(min(span_lengths)),
-                        'max_span_length': int(max(span_lengths)),
-                        'length_distribution': {
-                            'q25': float(np.percentile(span_lengths, 25)),
-                            'q50': float(np.percentile(span_lengths, 50)),
-                            'q75': float(np.percentile(span_lengths, 75))
+            # Span analysis (only if metadata available)
+            if metadata:
+                span_candidates = metadata.get('span_candidates', [])
+                if span_candidates:
+                    span_lengths = []
+                    for candidate in span_candidates:
+                        if len(candidate) == 2:  # [start, end] format
+                            span_lengths.append(candidate[1] - candidate[0])
+                    
+                    if span_lengths:
+                        span_stats = {
+                            'total_candidates': len(span_candidates),
+                            'avg_span_length': float(np.mean(span_lengths)),
+                            'min_span_length': int(min(span_lengths)),
+                            'max_span_length': int(max(span_lengths)),
+                            'length_distribution': {
+                                'q25': float(np.percentile(span_lengths, 25)),
+                                'q50': float(np.percentile(span_lengths, 50)),
+                                'q75': float(np.percentile(span_lengths, 75))
+                            }
                         }
-                    }
-                    analysis['detailed_stats']['span_candidates'] = span_stats
+                        analysis['detailed_stats']['span_candidates'] = span_stats
         
         return analysis
     
@@ -225,27 +294,109 @@ class SequenceIntrospector:
             print(f"   Vocabulary Size: {analysis['vocabulary_size']}")
             
             print(f"\n== NEURAL REPRESENTATIONS:")
-            print(f"   Seed Embeddings (H0):     {analysis['seed_embeddings_shape']}")
+            if analysis['seed_embeddings_available']:
+                print(f"   Seed Embeddings (H0):     {analysis['seed_embeddings_shape']}")
+            else:
+                print(f"   Seed Embeddings (H0):     Not saved (performance optimization)")
             print(f"   Contextual Embeddings (H): {analysis['contextual_embeddings_shape']}")  
             if analysis['soft_probabilities_available']:
                 print(f"   Soft Probabilities (P):    {analysis['soft_probabilities_shape']}")
             else:
                 print(f"   Soft Probabilities (P):    Not saved (performance optimization)")
             
+            print(f"\n== FILE SIZES:")
+            file_sizes = analysis['file_sizes']
+            if 'json_metadata' in file_sizes:
+                print(f"   JSON Metadata: {file_sizes['json_metadata']:.1f} KB")
+            else:
+                print(f"   JSON Metadata: Not saved (disabled in config)")
+            if 'seed_embeddings' in file_sizes:
+                print(f"   Seed Embeddings: {file_sizes['seed_embeddings']:.1f} KB")
+            else:
+                print(f"   Seed Embeddings: Not saved (performance optimization)")
+            print(f"   Contextual Embeddings: {file_sizes['contextual_embeddings']:.1f} KB")
+            if 'soft_probabilities' in file_sizes:
+                print(f"   Soft Probabilities: {file_sizes['soft_probabilities']:.1f} KB")
+            else:
+                print(f"   Soft Probabilities: Not saved (performance optimization)")
+            print(f"   Total Size: {file_sizes['total']:.1f} KB")
+            
             print(f"\n== SEQUENCE PREVIEW:")
             print(f"   {repr(analysis['sequence_preview'])}")
             
-            if verbose:
-                # Show actual seed embedding values
-                data = self.load_sequence(seq_id)
+            # Always show partial arrays (removed verbose requirement)
+            data = self.load_sequence(seq_id)
+            
+            # Show seed embeddings sample (if available)
+            if data['seed_embeddings'] is not None:
                 seed_embeddings = data['seed_embeddings']
-                print(f"\n== SEED EMBEDDINGS (H0) - FLOAT ARRAY:")
+                print(f"\n== SEED EMBEDDINGS (H0) - SAMPLE VALUES:")
                 print(f"   Shape: {seed_embeddings.shape}")
-                print(f"   Array values (truncated for readability):")
+                if seed_embeddings.size > 0:
+                    # Show first 3 positions with first 10 dimensions each
+                    sample_positions = min(3, seed_embeddings.shape[0])
+                    sample_dims = min(10, seed_embeddings.shape[1])
+                    print(f"   Sample values (first {sample_positions} positions, first {sample_dims} dimensions):")
+                    for i in range(sample_positions):
+                        values = seed_embeddings[i, :sample_dims]
+                        values_str = ' '.join([f"{v:8.6f}" for v in values])
+                        print(f"     Position {i:3d}: [{values_str}...]")
+            else:
+                print(f"\n== SEED EMBEDDINGS (H0):")
+                print(f"   Not available (disabled for performance optimization)")
+            
+            # Show contextual embeddings sample
+            contextual_embeddings = data['contextual_embeddings']
+            print(f"\n== CONTEXTUAL EMBEDDINGS (H) - SAMPLE VALUES:")
+            print(f"   Shape: {contextual_embeddings.shape}")
+            if contextual_embeddings.size > 0:
+                # Show first 3 positions with first 10 dimensions each
+                sample_positions = min(3, contextual_embeddings.shape[0])
+                sample_dims = min(10, contextual_embeddings.shape[1])
+                print(f"   Sample values (first {sample_positions} positions, first {sample_dims} dimensions):")
+                for i in range(sample_positions):
+                    values = contextual_embeddings[i, :sample_dims]
+                    values_str = ' '.join([f"{v:8.6f}" for v in values])
+                    print(f"     Position {i:3d}: [{values_str}...]")
+            
+            # Show soft probabilities sample if available
+            if data['soft_probabilities'] is not None:
+                soft_probs = data['soft_probabilities']
+                print(f"\n== SOFT PROBABILITIES (P) - SAMPLE VALUES:")
+                print(f"   Shape: {soft_probs.shape}")
+                if soft_probs.size > 0:
+                    # Show first 2 positions with top 5 probabilities each
+                    sample_positions = min(2, soft_probs.shape[0])
+                    print(f"   Top probabilities (first {sample_positions} positions, highest 5 values):")
+                    for i in range(sample_positions):
+                        row_probs = soft_probs[i, :]
+                        top_indices = np.argsort(row_probs)[-5:][::-1]  # Top 5 indices
+                        print(f"     Position {i:3d}: Top vocab indices and probs:")
+                        for j, vocab_idx in enumerate(top_indices):
+                            prob = row_probs[vocab_idx]
+                            print(f"       {vocab_idx:5d}: {prob:10.8f}")
+            else:
+                print(f"\n== SOFT PROBABILITIES (P):")
+                print(f"   Not available (disabled for performance optimization)")
+            
+            if verbose:
+                # Show complete arrays in verbose mode
+                print(f"\n== COMPLETE ARRAYS (VERBOSE MODE):")
                 
-                # Set options for readable display with truncation
-                np.set_printoptions(precision=6, suppress=True, linewidth=200)
-                print(seed_embeddings)
+                if data['seed_embeddings'] is not None:
+                    print(f"\n--- SEED EMBEDDINGS (COMPLETE) ---")
+                    np.set_printoptions(precision=6, suppress=True, linewidth=200)
+                    print(data['seed_embeddings'])
+                else:
+                    print(f"\n--- SEED EMBEDDINGS (COMPLETE) ---")
+                    print("Not available (disabled for performance optimization)")
+                
+                print(f"\n--- CONTEXTUAL EMBEDDINGS (COMPLETE) ---")
+                print(contextual_embeddings)
+                
+                if data['soft_probabilities'] is not None:
+                    print(f"\n--- SOFT PROBABILITIES (COMPLETE) ---")
+                    print(data['soft_probabilities'])
                 
                 # Reset to defaults
                 np.set_printoptions()
@@ -254,10 +405,15 @@ class SequenceIntrospector:
                 stats = analysis['detailed_stats']
                 
                 print(f"\n== STATISTICAL ANALYSIS:")
-                print(f"   Seed Embeddings:")
-                print(f"     Mean: {stats['seed_embeddings']['mean']:.6f}, Std: {stats['seed_embeddings']['std']:.6f}")
-                print(f"     Range: [{stats['seed_embeddings']['min']:.6f}, {stats['seed_embeddings']['max']:.6f}]")
-                print(f"     Sparsity: {stats['seed_embeddings']['sparsity']:.2%}")
+                
+                # Show seed embeddings stats only if available
+                if 'seed_embeddings' in stats:
+                    print(f"   Seed Embeddings:")
+                    print(f"     Mean: {stats['seed_embeddings']['mean']:.6f}, Std: {stats['seed_embeddings']['std']:.6f}")
+                    print(f"     Range: [{stats['seed_embeddings']['min']:.6f}, {stats['seed_embeddings']['max']:.6f}]")
+                    print(f"     Sparsity: {stats['seed_embeddings']['sparsity']:.2%}")
+                else:
+                    print(f"   Seed Embeddings: Not available (disabled for performance)")
                 
                 print(f"   Contextual Embeddings:")
                 print(f"     Mean: {stats['contextual_embeddings']['mean']:.6f}, Std: {stats['contextual_embeddings']['std']:.6f}")
@@ -309,7 +465,7 @@ Examples:
     
     parser.add_argument(
         "--output", type=str, required=True,
-        help="Path to embedding output directory containing json/, seed/, context/, soft_prob/ subdirectories"
+        help="Path to embedding output directory containing seed/, context/, and optional json/, soft_prob/ subdirectories"
     )
     
     parser.add_argument(
@@ -319,7 +475,7 @@ Examples:
     
     parser.add_argument(
         "-v", "--verbose", action="store_true",
-        help="Show verbose output including actual seed embedding float values"
+        help="Show complete arrays (very long output - use with caution)"
     )
     
     parser.add_argument(

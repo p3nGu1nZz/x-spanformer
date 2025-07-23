@@ -463,7 +463,10 @@ class Vocab2EmbeddingPipeline:
         self.epsilon = numerical_config.get('epsilon', 1e-12)
         self.max_piece_length = numerical_config.get('max_piece_length', 8)
         self.save_intermediate = output_config.get('save_intermediate', True)
-        self.save_numpy_arrays = output_config.get('save_numpy_arrays', True)
+        
+        # Optional embedding controls (contextual embeddings H are ALWAYS saved as essential)
+        self.save_seed_embeddings = output_config.get('save_seed_embeddings', False)  # Optional intermediate H⁰
+        
         self.save_json_metadata = output_config.get('save_json_metadata', True)
         self.add_analysis = output_config.get('add_analysis', False)
         self.save_soft_probabilities = output_config.get('save_soft_probabilities', True)
@@ -866,23 +869,12 @@ def main():
     # Create output directory
     output_path = Path(args.output)
     output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Create subdirectories for different file types
-    json_dir = output_path / "json"
-    seed_dir = output_path / "seed"
-    context_dir = output_path / "context"
-    soft_prob_dir = output_path / "soft_prob"
-    
-    json_dir.mkdir(exist_ok=True)
-    seed_dir.mkdir(exist_ok=True)
-    context_dir.mkdir(exist_ok=True)
-    soft_prob_dir.mkdir(exist_ok=True)
-    
-    # Setup logging in the output directory (root level)
+
+    # Setup logging in the output directory (root level) - before pipeline init
     setup_embedding_logging(output_path, 'vocab2embedding')
     global logger
     logger = get_embedding_logger('vocab2embedding')
-    
+
     # Load existing records following the pattern from other pipelines
     existing_records, last_processed = load_existing_records(output_path)
     if existing_records:
@@ -890,7 +882,7 @@ def main():
         logger.info(f"Last processed sequence ID: {last_processed}")
     else:
         logger.info("STARTING FRESH PROCESSING - No existing sequences found")
-    
+
     # Log command line arguments
     logger.info("COMMAND LINE ARGUMENTS:")
     logger.info(f"  Vocabulary file: {args.vocab}")
@@ -932,6 +924,25 @@ def main():
     
     logger.info(f"Pipeline initialized on: {pipeline.device}")
     logger.info("-" * 50)
+
+    # Create subdirectories based on configuration
+    json_dir = output_path / "json"
+    seed_dir = output_path / "seed" 
+    context_dir = output_path / "context"
+    soft_prob_dir = output_path / "soft_prob"
+
+    # Always create contextual embeddings directory (essential for downstream tasks)
+    context_dir.mkdir(exist_ok=True)
+    
+    # Conditionally create directories based on config
+    if pipeline.config.get('output', {}).get('save_seed_embeddings', False):
+        seed_dir.mkdir(exist_ok=True)
+    
+    if pipeline.config.get('output', {}).get('save_json_metadata', False):
+        json_dir.mkdir(exist_ok=True)
+    
+    if pipeline.config.get('output', {}).get('save_soft_probabilities', False):
+        soft_prob_dir.mkdir(exist_ok=True)
     
     # Load vocabulary
     logger.info("=" * 50)
@@ -1017,42 +1028,76 @@ def main():
             logger.info(f"  Contextual embeddings: {result['contextual_embeddings'].shape}")
             logger.info(f"  Span candidates: {result['num_candidates']} (span_width: {result['span_width']})")
             
-            # Save results
-            output_file = json_dir / f"embedding_{seq_id:06d}.json"
-            with open(output_file, 'w', encoding='utf-8') as outfile:
-                # Convert numpy arrays to lists for JSON serialization
-                json_result = {
-                    'sequence_id': seq_id,
-                    'sequence': sequence,
-                    'sequence_length': result['sequence_length'],
-                    'num_candidates': result['num_candidates'],
-                    'span_candidates': result['span_candidates'],
-                    'soft_probabilities_shape': result['soft_probabilities'].shape,
-                    'seed_embeddings_shape': result['seed_embeddings'].shape, 
-                    'contextual_embeddings_shape': result['contextual_embeddings'].shape
-                }
-                json.dump(json_result, outfile, ensure_ascii=False, indent=2)
+            # Save results conditionally based on configuration
+            json_size = 0
+            if pipeline.config.get('output', {}).get('save_json_metadata', False):
+                output_file = json_dir / f"embedding_{seq_id:06d}.json"
+                with open(output_file, 'w', encoding='utf-8') as outfile:
+                    # Convert numpy arrays to lists for JSON serialization
+                    json_result = {
+                        'sequence_id': seq_id,
+                        'sequence': sequence,
+                        'sequence_length': result['sequence_length'],
+                        'num_candidates': result['num_candidates'],
+                        'span_candidates': result['span_candidates'],
+                        'soft_probabilities_shape': result['soft_probabilities'].shape,
+                        'seed_embeddings_shape': result['seed_embeddings'].shape, 
+                        'contextual_embeddings_shape': result['contextual_embeddings'].shape
+                    }
+                    json.dump(json_result, outfile, ensure_ascii=False, indent=2)
+                json_size = output_file.stat().st_size / 1024  # KB
             
-            # Save embeddings as numpy files
+            # Save embeddings as numpy files conditionally
             if pipeline.save_soft_probabilities:
                 np.save(soft_prob_dir / f"soft_probs_{seq_id:06d}.npy", result['soft_probabilities'])
-            np.save(seed_dir / f"seed_emb_{seq_id:06d}.npy", result['seed_embeddings'])
+            
+            if pipeline.save_seed_embeddings:
+                np.save(seed_dir / f"seed_emb_{seq_id:06d}.npy", result['seed_embeddings'])
+            
+            # Always save contextual embeddings (essential for downstream tasks)
             np.save(context_dir / f"context_emb_{seq_id:06d}.npy", result['contextual_embeddings'])
             
-            # Log file sizes for monitoring
-            json_size = (json_dir / f"embedding_{seq_id:06d}.json").stat().st_size / 1024  # KB
-            seed_size = (seed_dir / f"seed_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
+            # Log file sizes for monitoring (handle optional files)
+            seed_size = 0
+            if pipeline.save_seed_embeddings:
+                seed_size = (seed_dir / f"seed_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
             context_size = (context_dir / f"context_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
             
             if pipeline.save_soft_probabilities:
                 soft_prob_size = (soft_prob_dir / f"soft_probs_{seq_id:06d}.npy").stat().st_size / 1024  # KB
-                total_size = json_size + seed_size + context_size + soft_prob_size
-                logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
-                          f"Context({context_size:.1f}KB) + SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total")
+                if json_size > 0 and seed_size > 0:
+                    total_size = json_size + seed_size + context_size + soft_prob_size
+                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
+                              f"Context({context_size:.1f}KB) + SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total")
+                elif json_size > 0:
+                    total_size = json_size + context_size + soft_prob_size
+                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Context({context_size:.1f}KB) + "
+                              f"SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total (Seed: SKIPPED)")
+                elif seed_size > 0:
+                    total_size = seed_size + context_size + soft_prob_size
+                    logger.info(f"  Saved: Seed({seed_size:.1f}KB) + Context({context_size:.1f}KB) + "
+                              f"SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total (JSON: SKIPPED)")
+                else:
+                    total_size = context_size + soft_prob_size
+                    logger.info(f"  Saved: Context({context_size:.1f}KB) + SoftProb({soft_prob_size:.1f}KB) = "
+                              f"{total_size:.1f}KB total (JSON: SKIPPED, Seed: SKIPPED)")
             else:
-                total_size = json_size + seed_size + context_size
-                logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
-                          f"Context({context_size:.1f}KB) = {total_size:.1f}KB total (SoftProb: SKIPPED)")
+                if json_size > 0 and seed_size > 0:
+                    total_size = json_size + seed_size + context_size
+                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
+                              f"Context({context_size:.1f}KB) = {total_size:.1f}KB total (SoftProb: SKIPPED)")
+                elif json_size > 0:
+                    total_size = json_size + context_size
+                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Context({context_size:.1f}KB) = "
+                              f"{total_size:.1f}KB total (Seed: SKIPPED, SoftProb: SKIPPED)")
+                elif seed_size > 0:
+                    total_size = seed_size + context_size
+                    logger.info(f"  Saved: Seed({seed_size:.1f}KB) + Context({context_size:.1f}KB) = "
+                              f"{total_size:.1f}KB total (JSON: SKIPPED, SoftProb: SKIPPED)")
+                else:
+                    total_size = context_size
+                    logger.info(f"  Saved: Context({context_size:.1f}KB) = {total_size:.1f}KB total "
+                              f"(JSON: SKIPPED, Seed: SKIPPED, SoftProb: SKIPPED)")
             
             processed_count += 1
             logger.info("-" * 50)
@@ -1088,10 +1133,25 @@ def main():
     
     logger.info(f"Output saved to: {output_path}")
     logger.info("Output structure:")
-    logger.info(f"  JSON metadata: {json_dir} ({len(list(json_dir.glob('*.json')))} files)")
-    logger.info(f"  Seed embeddings: {seed_dir} ({len(list(seed_dir.glob('*.npy')))} files)")
+    
+    # Only log directories that exist
+    if json_dir.exists():
+        logger.info(f"  JSON metadata: {json_dir} ({len(list(json_dir.glob('*.json')))} files)")
+    else:
+        logger.info(f"  JSON metadata: Not saved (disabled in config)")
+        
+    if seed_dir.exists():
+        logger.info(f"  Seed embeddings: {seed_dir} ({len(list(seed_dir.glob('*.npy')))} files)")
+    else:
+        logger.info(f"  Seed embeddings: Not saved (disabled for performance)")
+        
     logger.info(f"  Context embeddings: {context_dir} ({len(list(context_dir.glob('*.npy')))} files)")
-    logger.info(f"  Soft probabilities: {soft_prob_dir} ({len(list(soft_prob_dir.glob('*.npy')))} files)")
+    
+    if soft_prob_dir.exists():
+        logger.info(f"  Soft probabilities: {soft_prob_dir} ({len(list(soft_prob_dir.glob('*.npy')))} files)")
+    else:
+        logger.info(f"  Soft probabilities: Not saved (disabled for performance)")
+        
     logger.info(f"  Log file: {output_path / 'embedding.log'}")
     
     # Exit code for automation
