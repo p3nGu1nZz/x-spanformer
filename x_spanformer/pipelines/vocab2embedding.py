@@ -740,12 +740,13 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_existing_records(output_dir: Path, force: bool = False) -> Tuple[Dict[int, Dict], int]:
+def load_existing_records(output_dir: Path, pipeline_config: Dict, force: bool = False) -> Tuple[Dict[int, Dict], int]:
     """
     Load existing embedding records following the standard pattern from other pipelines.
     
     Args:
         output_dir: Output directory containing existing results
+        pipeline_config: Pipeline configuration to determine which files to check
         force: If True, ignore existing records and start fresh
         
     Returns:
@@ -763,44 +764,58 @@ def load_existing_records(output_dir: Path, force: bool = False) -> Tuple[Dict[i
     context_dir = output_dir / "context"
     soft_prob_dir = output_dir / "soft_prob"
     
-    if not json_dir.exists():
+    # Context embeddings are always saved and required, so check context directory first
+    if not context_dir.exists():
         get_embedding_logger('vocab2embedding').info("No existing records found - starting fresh processing")
         return existing_records, last_processed
     
-    json_files = list(json_dir.glob("embedding_*.json"))
-    if not json_files:
+    context_files = list(context_dir.glob("context_emb_*.npy"))
+    if not context_files:
         get_embedding_logger('vocab2embedding').info("No existing embedding files found - starting fresh processing")
         return existing_records, last_processed
     
-    get_embedding_logger('vocab2embedding').info(f"Found {len(json_files)} existing embedding files - verifying integrity")
+    get_embedding_logger('vocab2embedding').info(f"Found {len(context_files)} existing context embedding files - verifying integrity")
     
-    # Load and verify existing records
-    for json_file in json_files:
+    # Load and verify existing records based on context files
+    for context_file in context_files:
         try:
-            # Extract sequence ID from filename pattern: embedding_XXXXXX.json
-            seq_id = int(json_file.stem.split('_')[1])
+            # Extract sequence ID from filename pattern: context_emb_XXXXXX.npy
+            seq_id = int(context_file.stem.split('_')[2])  # context_emb_XXXXXX -> XXXXXX
             
-            # Verify all required files exist
-            if not verify_processed_sequence(json_dir, seed_dir, context_dir, soft_prob_dir, seq_id):
+            # Verify all required files exist based on configuration
+            if not verify_processed_sequence(json_dir, seed_dir, context_dir, soft_prob_dir, seq_id, pipeline_config):
                 get_embedding_logger('vocab2embedding').warning(f"Sequence {seq_id} incomplete - will be reprocessed")
                 continue
             
-            # Load metadata
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            # Load metadata if JSON is enabled, otherwise create minimal record
+            output_config = pipeline_config.get('output', {})
+            if output_config.get('save_json_metadata', False):
+                json_file = json_dir / f"embedding_{seq_id:06d}.json"
+                if json_file.exists():
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        existing_records[seq_id] = {
+                            'sequence': data.get('sequence', ''),
+                            'sequence_length': data.get('sequence_length', 0),
+                            'num_candidates': data.get('num_candidates', 0),
+                            'span_candidates': data.get('span_candidates', [])
+                        }
+            else:
+                # JSON disabled - create minimal record based on context file existence
                 existing_records[seq_id] = {
-                    'sequence': data.get('sequence', ''),
-                    'sequence_length': data.get('sequence_length', 0),
-                    'num_candidates': data.get('num_candidates', 0),
-                    'span_candidates': data.get('span_candidates', [])
+                    'sequence': f'[context_only_seq_{seq_id}]',  # Placeholder
+                    'sequence_length': 0,  # Unknown without JSON
+                    'num_candidates': 0,   # Unknown without JSON
+                    'span_candidates': []  # Unknown without JSON
                 }
-                last_processed = max(last_processed, seq_id)
+            
+            last_processed = max(last_processed, seq_id)
                 
-        except (ValueError, IndexError, json.JSONDecodeError) as e:
-            get_embedding_logger('vocab2embedding').warning(f"Error reading {json_file}: {e}")
+        except (ValueError, IndexError) as e:
+            get_embedding_logger('vocab2embedding').warning(f"Error reading {context_file}: {e}")
             continue
         except Exception as e:
-            get_embedding_logger('vocab2embedding').error(f"Unexpected error with {json_file}: {e}")
+            get_embedding_logger('vocab2embedding').error(f"Unexpected error with {context_file}: {e}")
             continue
     
     if existing_records:
@@ -812,42 +827,59 @@ def load_existing_records(output_dir: Path, force: bool = False) -> Tuple[Dict[i
     return existing_records, last_processed
 
 def verify_processed_sequence(json_dir: Path, seed_dir: Path, context_dir: Path, 
-                             soft_prob_dir: Path, seq_id: int) -> bool:
+                             soft_prob_dir: Path, seq_id: int, pipeline_config: Dict) -> bool:
     """
-    Verify that a sequence was completely processed by checking all expected files.
+    Verify that a sequence was completely processed by checking expected files based on configuration.
     
+    Args:
+        json_dir: Directory for JSON metadata files
+        seed_dir: Directory for seed embedding files  
+        context_dir: Directory for context embedding files
+        soft_prob_dir: Directory for soft probability files
+        seq_id: Sequence ID to check
+        pipeline_config: Pipeline configuration to determine which files should exist
+        
     Returns:
-        bool: True if all files exist and are valid
+        bool: True if all expected files exist and are valid
     """
     try:
-        # Check JSON metadata file
-        json_file = json_dir / f"embedding_{seq_id:06d}.json"
-        if not json_file.exists():
-            return False
+        files_to_check = []
         
-        # Verify JSON content
-        with open(json_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            if not all(key in data for key in ['sequence_id', 'sequence', 'num_candidates']):
-                return False
+        # Context embeddings are ALWAYS required (essential for downstream tasks)
+        context_file = context_dir / f"context_emb_{seq_id:06d}.npy"
+        files_to_check.append(context_file)
         
-        # Check numpy array files (support both .npy and .npz formats)
-        files_to_check = [
-            seed_dir / f"seed_emb_{seq_id:06d}.npy",
-            context_dir / f"context_emb_{seq_id:06d}.npy"
-        ]
+        # Check optional files based on configuration
+        output_config = pipeline_config.get('output', {})
         
-        # Check for soft probabilities (either .npy or .npz format)
-        soft_prob_npy = soft_prob_dir / f"soft_probs_{seq_id:06d}.npy"
-        soft_prob_npz = soft_prob_dir / f"soft_probs_{seq_id:06d}.npz"
+        if output_config.get('save_json_metadata', False):
+            json_file = json_dir / f"embedding_{seq_id:06d}.json"
+            files_to_check.append(json_file)
+            
+            # If JSON exists, verify its content
+            if json_file.exists():
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if not all(key in data for key in ['sequence_id', 'sequence', 'num_candidates']):
+                        return False
         
-        if soft_prob_npy.exists():
-            files_to_check.append(soft_prob_npy)
-        elif soft_prob_npz.exists():
-            files_to_check.append(soft_prob_npz)
-        else:
-            return False
+        if output_config.get('save_seed_embeddings', False):
+            seed_file = seed_dir / f"seed_emb_{seq_id:06d}.npy"
+            files_to_check.append(seed_file)
         
+        if output_config.get('save_soft_probabilities', False):
+            # Check for soft probabilities (either .npy or .npz format)
+            soft_prob_npy = soft_prob_dir / f"soft_probs_{seq_id:06d}.npy"
+            soft_prob_npz = soft_prob_dir / f"soft_probs_{seq_id:06d}.npz"
+            
+            if soft_prob_npy.exists():
+                files_to_check.append(soft_prob_npy)
+            elif soft_prob_npz.exists():
+                files_to_check.append(soft_prob_npz)
+            else:
+                return False  # Soft probs enabled but file missing
+        
+        # Verify all required files exist and are non-empty
         for file_path in files_to_check:
             if not file_path.exists() or file_path.stat().st_size == 0:
                 return False
@@ -875,15 +907,7 @@ def main():
     global logger
     logger = get_embedding_logger('vocab2embedding')
 
-    # Load existing records following the pattern from other pipelines
-    existing_records, last_processed = load_existing_records(output_path)
-    if existing_records:
-        logger.info(f"RESUMING PROCESSING - Found {len(existing_records)} previously processed sequences")
-        logger.info(f"Last processed sequence ID: {last_processed}")
-    else:
-        logger.info("STARTING FRESH PROCESSING - No existing sequences found")
-
-    # Log command line arguments
+    # Log command line arguments first
     logger.info("COMMAND LINE ARGUMENTS:")
     logger.info(f"  Vocabulary file: {args.vocab}")
     logger.info(f"  Input file: {args.input}")
@@ -894,12 +918,20 @@ def main():
     logger.info("[bold cyan]X-Spanformer VOCAB2EMBEDDING Pipeline[/bold cyan]")
     logger.info("[green]Initializing embedding generation pipeline[/green]")
     
-    # Initialize pipeline and log full configuration
+    # Initialize pipeline and log full configuration FIRST
     logger.info("=" * 50)
     logger.info("STAGE 1: PIPELINE INITIALIZATION")
     logger.info("=" * 50)
     
     pipeline = Vocab2EmbeddingPipeline(args.config)
+    
+    # Now load existing records with pipeline config
+    existing_records, last_processed = load_existing_records(output_path, pipeline.config)
+    if existing_records:
+        logger.info(f"RESUMING PROCESSING - Found {len(existing_records)} previously processed sequences")
+        logger.info(f"Last processed sequence ID: {last_processed}")
+    else:
+        logger.info("STARTING FRESH PROCESSING - No existing sequences found")
     
     # Log complete configuration pretty-printed
     logger.info("PIPELINE CONFIGURATION:")
