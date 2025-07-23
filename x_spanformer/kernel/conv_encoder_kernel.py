@@ -6,7 +6,7 @@ Multi-scale dilated convolutional encoder kernel implementing Section 3.2.3
 of the X-Spanformer paper. Provides contextual embedding computation through
 hierarchical pattern capture with configurable receptive fields.
 """
-from typing import List
+from typing import List, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,7 +29,7 @@ class ConvEncoderKernel(nn.Module):
     """
     
     def __init__(self, embed_dim: int, kernels: List[int], dilations: List[int],
-                 dropout_rate: float = 0.1, device: str = 'cuda'):
+                 dropout_rate: float = 0.1, device: Optional[str] = None):
         """
         Initialize multi-scale convolutional encoder kernel.
         
@@ -38,9 +38,13 @@ class ConvEncoderKernel(nn.Module):
             kernels: REQUIRED - Kernel sizes K for multi-scale convolution (e.g., [3, 5, 7])
             dilations: REQUIRED - Dilation rates D for receptive field patterns (e.g., [1, 2, 4])
             dropout_rate: Dropout rate for contextualization
-            device: PyTorch device for computation
+            device: PyTorch device for computation. If None, uses 'cuda' if available, else 'cpu'
         """
         super().__init__()
+        
+        # Smart device selection
+        if device is None:
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
         self.embed_dim = embed_dim
         

@@ -27,7 +27,7 @@ span_generation:
 # Processing configuration
 processing:
   # Device for computation
-  device: "cuda" # cpu | cuda
+  device: "cuda" # cuda | cpu (falls back to cpu if cuda unavailable)
   device_id: 0 # GPU device ID for multi-GPU systems
 
   # Batch processing parameters

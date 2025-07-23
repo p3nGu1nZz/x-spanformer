@@ -424,16 +424,22 @@ class Vocab2EmbeddingPipeline:
         """
         self.config = self._load_config(config_path)
         
-        # Configure device from config 
+        # Configure device from config with CUDA fallback to CPU
         processing_config = self.config.get('processing', {})
         base_device = processing_config.get('device', 'cuda')
         device_id = processing_config.get('device_id', 0)
         
-        if base_device == 'cuda' and torch.cuda.is_available():
-            self.device = f"cuda:{device_id}" if torch.cuda.device_count() > 1 else "cuda"
+        if base_device == 'cuda':
+            if torch.cuda.is_available():
+                self.device = f"cuda:{device_id}" if torch.cuda.device_count() > 1 else "cuda"
+            else:
+                get_embedding_logger('vocab2embedding').warning("CUDA requested but not available, falling back to CPU")
+                self.device = "cpu"
         else:
             self.device = "cpu"
             
+        get_embedding_logger('vocab2embedding').info(f"Initialized vocab2embedding pipeline on {self.device}")
+    
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file."""
         with open(config_path, 'r') as f:
@@ -479,15 +485,13 @@ class Vocab2EmbeddingPipeline:
             
         get_embedding_logger('vocab2embedding').info(f"Validated convolution config: kernels={conv_kernels}, dilations={conv_dilations}")
         
-        return config
-        
         # Initialize components (will be set when vocabulary is loaded)
         self.unigram_lm: Optional[UnigramLM] = None
         self.seed_embedder: Optional[SeedEmbedder] = None  
         self.conv_encoder: Optional[ConvEncoderKernel] = None
         self.candidate_generator: Optional[SpanCandidateGenerator] = None
         
-        get_embedding_logger('vocab2embedding').info(f"Initialized vocab2embedding pipeline on {self.device}")
+        return config
     
     def load_vocabulary(self, vocab_path: str):
         """
@@ -508,9 +512,10 @@ class Vocab2EmbeddingPipeline:
             for line_num, line in enumerate(f, 1):
                 try:
                     entry = json.loads(line)
-                    if 'piece' in entry and 'probability' in entry:
-                        prob = entry['probability']
-                        
+                    # Support both 'probability' and 'prob' for backward compatibility
+                    prob = entry.get('probability') or entry.get('prob')
+                    
+                    if 'piece' in entry and prob is not None:
                         if prob <= 0 or prob > 1:
                             get_embedding_logger('vocab2embedding').warning(f"Line {line_num}: Invalid probability {prob} for piece '{entry['piece']}'")
                             continue
@@ -518,7 +523,12 @@ class Vocab2EmbeddingPipeline:
                         vocab_dict[entry['piece']] = prob
                         total_prob += prob
                     else:
-                        get_embedding_logger('vocab2embedding').warning(f"Line {line_num}: Missing required fields")
+                        missing_fields = []
+                        if 'piece' not in entry:
+                            missing_fields.append('piece')
+                        if prob is None:
+                            missing_fields.append('probability or prob')
+                        get_embedding_logger('vocab2embedding').warning(f"Line {line_num}: Missing required fields: {', '.join(missing_fields)}")
                 except Exception as e:
                     get_embedding_logger('vocab2embedding').error(f"Line {line_num}: Error parsing vocabulary entry: {e}")
         
