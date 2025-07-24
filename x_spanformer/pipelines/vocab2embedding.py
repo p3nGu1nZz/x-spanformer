@@ -27,17 +27,16 @@ import re
 import signal
 import sys
 import time
+import yaml
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional, Union
 from multiprocessing import Process, Queue, Manager, current_process
 from queue import Empty
-import threading
 
+import numpy as np
 import torch
 import torch.nn as nn
-import yaml
-import numpy as np
 
 # Add the parent directory to the path to import schema modules
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -47,10 +46,14 @@ from x_spanformer.embedding.embedding_logging import setup_embedding_logging, ge
 from x_spanformer.embedding.embedding_utils import (
     analyze_embedding_quality
 )
+from x_spanformer.embedding.embedding_chunk import (
+    ChunkManager, ChunkMetadata, save_sequence_results_chunked
+)
 from x_spanformer.pipelines.shared.jsonl_processor import load_pretrain_records
 from x_spanformer.kernel import ConvEncoderKernel, validate_convolution_parameters
 
 # Module-level logger that gets configured in main()
+logger = None
 logger = None
 
 # Global flag for graceful shutdown
@@ -887,82 +890,30 @@ class Vocab2EmbeddingPipeline:
         return result
 
 
-def save_sequence_results(pipeline, result, seq_id, sequence, json_dir, seed_dir, context_dir, soft_prob_dir, logger):
-    """
-    Save sequence processing results with optimized GPU→CPU transfers.
-    
-    Returns:
-        Dict containing file sizes for logging
-    """
-    file_sizes = {}
-    
-    # Save JSON metadata if enabled
-    if pipeline.config.get('output', {}).get('save_json_metadata', False):
-        output_file = json_dir / f"embedding_{seq_id:06d}.json"
-        json_result = {
-            'sequence_id': seq_id,
-            'sequence': sequence,
-            'sequence_length': result['sequence_length'],
-            'num_candidates': result['num_candidates'],
-            'span_candidates': result['span_candidates'],
-            'soft_probabilities_shape': result['soft_probabilities'].shape,
-            'seed_embeddings_shape': result['seed_embeddings'].shape, 
-            'contextual_embeddings_shape': result['contextual_embeddings'].shape
-        }
-        with open(output_file, 'w', encoding='utf-8') as outfile:
-            json.dump(json_result, outfile, ensure_ascii=False, indent=2)
-        file_sizes['json'] = output_file.stat().st_size / 1024  # KB
-    
-    # Helper function for optimized GPU→CPU transfer
-    def to_cpu_numpy(tensor):
-        if torch.cuda.is_available():
-            return tensor.detach().cpu().pin_memory().numpy()
-        else:
-            return tensor.detach().cpu().numpy()
-    
-    # Save optional embeddings
-    if pipeline.save_soft_probabilities:
-        soft_prob_cpu = to_cpu_numpy(result['soft_probabilities'])
-        np.save(soft_prob_dir / f"soft_probs_{seq_id:06d}.npy", soft_prob_cpu)
-        file_sizes['soft_prob'] = (soft_prob_dir / f"soft_probs_{seq_id:06d}.npy").stat().st_size / 1024
-    
-    if pipeline.save_seed_embeddings:
-        seed_cpu = to_cpu_numpy(result['seed_embeddings'])
-        np.save(seed_dir / f"seed_emb_{seq_id:06d}.npy", seed_cpu)
-        file_sizes['seed'] = (seed_dir / f"seed_emb_{seq_id:06d}.npy").stat().st_size / 1024
-    
-    # Always save contextual embeddings (essential for downstream tasks)
-    context_cpu = to_cpu_numpy(result['contextual_embeddings'])
-    np.save(context_dir / f"context_emb_{seq_id:06d}.npy", context_cpu)
-    file_sizes['context'] = (context_dir / f"context_emb_{seq_id:06d}.npy").stat().st_size / 1024
-    
-    return file_sizes
-
-
 def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int], 
                              pipeline: 'Vocab2EmbeddingPipeline', num_workers: int,
-                             output_dirs: Dict[str, Path]) -> Tuple[int, int]:
+                             chunk_manager: ChunkManager) -> Tuple[int, int]:
     """
-    Process sequences in parallel while maintaining sequential output ordering.
+    Process sequences in parallel while maintaining sequential output ordering and chunked storage.
     
     Args:
         sequences: List of all sequences from input corpus
         missing_seq_ids: List of sequence IDs that need processing
         pipeline: Configured pipeline instance (for config/vocab paths)
         num_workers: Number of worker processes
-        output_dirs: Dictionary containing output directory paths
+        chunk_manager: ChunkManager instance for chunked storage
         
     Returns:
         Tuple of (processed_count, error_count)
     """
     if num_workers <= 1:
-        # Fall back to sequential processing
-        return process_sequences_sequential(sequences, missing_seq_ids, pipeline, output_dirs)
+        return process_sequences_sequential(sequences, missing_seq_ids, pipeline, chunk_manager)
     
     logger = get_embedding_logger('vocab2embedding')
     
     logger.info(f"Starting parallel processing with {num_workers} workers")
     logger.info(f"Processing {len(missing_seq_ids)} sequences...")
+    logger.info(f"Chunk size: {chunk_manager.chunk_size} sequences per chunk")
     
     # Create queues for task distribution and result collection
     task_queue = Queue()
@@ -998,9 +949,10 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
         worker.start()
         workers.append(worker)
     
-    # Result collection with sequential ordering
+    # Result collection with sequential ordering and chunked storage
     results_buffer = {}  # seq_id -> ProcessingResult
     processed_results = set()  # Track which sequence IDs have been saved
+    chunk_buffer = {}  # Buffer for accumulating results before chunking
     processed_count = 0
     error_count = 0
     expected_results = len(missing_seq_ids)
@@ -1031,13 +983,8 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
                 
                 if seq_result.success:
                     try:
-                        # Save results using helper function
-                        file_sizes = save_sequence_results(
-                            pipeline, seq_result.result, seq_result.seq_id, 
-                            seq_result.result['sequence'],
-                            output_dirs['json'], output_dirs['seed'], 
-                            output_dirs['context'], output_dirs['soft_prob'], logger
-                        )
+                        # Add result to chunk buffer
+                        chunk_buffer[next_seq_id] = seq_result.result
                         
                         # Log progress - calculate based on total sequences processed vs total sequences
                         total_processed = next_seq_id  # Current sequence ID represents total processed so far
@@ -1047,11 +994,26 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
                                   f"{seq_result.result.get('processing_time', 0):.2f}s, "
                                   f"{progress:.1f}% complete)")
                         
-                        log_saved_files(file_sizes, logger)
                         processed_count += 1
                         
+                        # Check if we should save a chunk
+                        if len(chunk_buffer) >= chunk_manager.chunk_size:
+                            # Save chunk with earliest sequences
+                            chunk_seq_ids = sorted(chunk_buffer.keys())
+                            chunk_to_save = {}
+                            
+                            for i in range(chunk_manager.chunk_size):
+                                if i < len(chunk_seq_ids):
+                                    seq_id_to_save = chunk_seq_ids[i]
+                                    chunk_to_save[seq_id_to_save] = chunk_buffer.pop(seq_id_to_save)
+                            
+                            # Save the chunk
+                            chunk_meta = save_sequence_results_chunked(
+                                chunk_manager, chunk_to_save, pipeline.config, logger
+                            )
+                        
                     except Exception as e:
-                        logger.error(f"Error saving results for sequence {next_seq_id}: {e}")
+                        logger.error(f"Error processing results for sequence {next_seq_id}: {e}")
                         error_count += 1
                 else:
                     logger.error(seq_result.error)
@@ -1067,6 +1029,12 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
         except Exception as e:
             logger.error(f"Error collecting results: {e}")
             break
+    
+    # Save any remaining results in chunk buffer
+    if chunk_buffer:
+        chunk_meta = save_sequence_results_chunked(
+            chunk_manager, chunk_buffer, pipeline.config, logger
+        )
     
     # Cleanup: wait for workers to finish with shorter timeout and force termination
     logger.info("Waiting for workers to finish...")
@@ -1088,24 +1056,26 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
     return processed_count, error_count
 
 def process_sequences_sequential(sequences: List[str], missing_seq_ids: List[int],
-                               pipeline: 'Vocab2EmbeddingPipeline', output_dirs: Dict[str, Path]) -> Tuple[int, int]:
+                               pipeline: 'Vocab2EmbeddingPipeline', chunk_manager: ChunkManager) -> Tuple[int, int]:
     """
-    Process sequences sequentially (fallback for single worker or debugging).
+    Process sequences sequentially using chunked storage (fallback for single worker or debugging).
     
     Args:
         sequences: List of all sequences from input corpus
         missing_seq_ids: List of sequence IDs that need processing  
         pipeline: Configured pipeline instance
-        output_dirs: Dictionary containing output directory paths
+        chunk_manager: ChunkManager instance for chunked storage
         
     Returns:
         Tuple of (processed_count, error_count)
     """
     logger = get_embedding_logger('vocab2embedding')
     logger.info("Processing sequences sequentially...")
+    logger.info(f"Chunk size: {chunk_manager.chunk_size} sequences per chunk")
     
     processed_count = 0
     error_count = 0
+    chunk_buffer = {}
     
     for seq_id in missing_seq_ids:
         if SHUTDOWN_REQUESTED:
@@ -1131,23 +1101,31 @@ def process_sequences_sequential(sequences: List[str], missing_seq_ids: List[int
             logger.info(f"  Contextual embeddings: {result['contextual_embeddings'].shape}")
             logger.info(f"  Span candidates: {result['num_candidates']} (span_width: {result['span_width']})")
             
-            # Save results using helper function
-            file_sizes = save_sequence_results(
-                pipeline, result, seq_id, sequence,
-                output_dirs['json'], output_dirs['seed'], 
-                output_dirs['context'], output_dirs['soft_prob'], logger
-            )
-            
-            # Log saved files in clean format
-            log_saved_files(file_sizes, logger)
+            # Add result to chunk buffer
+            result['sequence'] = sequence  # Add sequence text for storage
+            chunk_buffer[seq_id] = result
             
             processed_count += 1
+            
+            # Check if we should save a chunk
+            if len(chunk_buffer) >= chunk_manager.chunk_size:
+                chunk_meta = save_sequence_results_chunked(
+                    chunk_manager, chunk_buffer, pipeline.config, logger
+                )
+                chunk_buffer.clear()  # Clear buffer after saving
+            
             logger.info("-" * 50)
             
         except Exception as e:
             logger.error(f"Sequence {seq_id}: Error processing sequence: {e}")
             error_count += 1
             continue
+    
+    # Save any remaining results in chunk buffer
+    if chunk_buffer:
+        chunk_meta = save_sequence_results_chunked(
+            chunk_manager, chunk_buffer, pipeline.config, logger
+        )
     
     return processed_count, error_count
 
@@ -1215,6 +1193,13 @@ def parse_args():
         type=int,
         default=1,
         help="Number of worker processes for parallel sequence processing (default: 1)"
+    )
+    
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=None,
+        help="Number of sequences per chunk file (overrides config, default: 100)"
     )
     
     return parser.parse_args()
@@ -1464,11 +1449,23 @@ def main():
         pipeline.workers = args.workers
         logger.info(f"Workers setting overridden by CLI: {args.workers}")
     
-    # Now load existing records with pipeline config
-    existing_records, last_processed = load_existing_records(output_path, pipeline.config)
+    # Handle chunk size override
+    chunk_size = args.chunk_size if args.chunk_size is not None else pipeline.config.get('output', {}).get('chunk_size', 100)
+    if args.chunk_size is not None:
+        logger.info(f"Chunk size overridden by CLI: {chunk_size}")
+        pipeline.config['output']['chunk_size'] = chunk_size
+    
+    # Initialize chunk manager
+    chunk_manager = ChunkManager(output_path, chunk_size)
+    
+    # Now load existing records using chunk manager
+    existing_sequences = chunk_manager.get_existing_sequences()
+    existing_records = {seq_id: {'sequence_id': seq_id} for seq_id in existing_sequences}
+    last_processed = max(existing_sequences) if existing_sequences else 0
     if existing_records:
         logger.info(f"RESUMING PROCESSING - Found {len(existing_records)} previously processed sequences")
         logger.info(f"Last processed sequence ID: {last_processed}")
+        logger.info(f"Existing chunks: {len(chunk_manager.chunks_metadata)}")
     else:
         logger.info("STARTING FRESH PROCESSING - No existing sequences found")
     
@@ -1497,25 +1494,6 @@ def main():
     logger.info(f"Pipeline initialized on: {pipeline.device}")
     logger.info("-" * 50)
 
-    # Create subdirectories based on configuration
-    json_dir = output_path / "json"
-    seed_dir = output_path / "seed" 
-    context_dir = output_path / "context"
-    soft_prob_dir = output_path / "soft_prob"
-
-    # Always create contextual embeddings directory (essential for downstream tasks)
-    context_dir.mkdir(exist_ok=True)
-    
-    # Conditionally create directories based on config
-    if pipeline.config.get('output', {}).get('save_seed_embeddings', False):
-        seed_dir.mkdir(exist_ok=True)
-    
-    if pipeline.config.get('output', {}).get('save_json_metadata', False):
-        json_dir.mkdir(exist_ok=True)
-    
-    if pipeline.config.get('output', {}).get('save_soft_probabilities', False):
-        soft_prob_dir.mkdir(exist_ok=True)
-    
     # Load vocabulary
     logger.info("=" * 50)
     logger.info("STAGE 2: VOCABULARY LOADING")
@@ -1573,20 +1551,12 @@ def main():
     
     skipped_count = len(existing_records)  # Count previously processed as skipped
     
-    # Create output directory structure for workers
-    output_dirs = {
-        'json': json_dir,
-        'seed': seed_dir,
-        'context': context_dir,
-        'soft_prob': soft_prob_dir
-    }
-    
     logger.info(f"Processing {len(missing_seq_ids)} remaining sequences out of {len(sequences)} total...")
     logger.info(f"Using {pipeline.workers} worker{'s' if pipeline.workers > 1 else ''}...")
     
     # Process sequences (parallel or sequential based on worker count)
     processed_count, error_count = process_sequences_parallel(
-        sequences, missing_seq_ids, pipeline, pipeline.workers, output_dirs
+        sequences, missing_seq_ids, pipeline, pipeline.workers, chunk_manager
     )
     
     # Final statistics
@@ -1616,24 +1586,18 @@ def main():
     logger.info(f"Output saved to: {output_path}")
     logger.info("Output structure:")
     
-    # Only log directories that exist
-    if json_dir.exists():
-        logger.info(f"  JSON metadata: {json_dir} ({len(list(json_dir.glob('*.json')))} files)")
-    else:
-        logger.info(f"  JSON metadata: Not saved (disabled in config)")
-        
-    if seed_dir.exists():
-        logger.info(f"  Seed embeddings: {seed_dir} ({len(list(seed_dir.glob('*.npy')))} files)")
-    else:
-        logger.info(f"  Seed embeddings: Not saved (disabled for performance)")
-        
-    logger.info(f"  Context embeddings: {context_dir} ({len(list(context_dir.glob('*.npy')))} files)")
+    # Get chunk statistics
+    chunks_dir = chunk_manager.chunks_dir
+    chunk_files = list(chunks_dir.glob("embeddings_*.npz"))
+    total_sequences_in_chunks = len(chunk_manager.get_existing_sequences())
     
-    if soft_prob_dir.exists():
-        logger.info(f"  Soft probabilities: {soft_prob_dir} ({len(list(soft_prob_dir.glob('*.npy')))} files)")
-    else:
-        logger.info(f"  Soft probabilities: Not saved (disabled for performance)")
-        
+    logger.info(f"  Chunks directory: {chunks_dir}")
+    logger.info(f"  Chunk files: {len(chunk_files)} files")
+    logger.info(f"  Total sequences in chunks: {total_sequences_in_chunks}")
+    logger.info(f"  Chunk size: {chunk_manager.chunk_size} sequences per chunk")
+    if chunk_files:
+        logger.info(f"  Chunk file pattern: {chunk_files[0].name} ... {chunk_files[-1].name}")
+    logger.info(f"  Metadata file: {chunk_manager.metadata_file}")
     logger.info(f"  Log file: {output_path / 'embedding.log'}")
     
     # Exit code for automation with forced termination to prevent hanging
