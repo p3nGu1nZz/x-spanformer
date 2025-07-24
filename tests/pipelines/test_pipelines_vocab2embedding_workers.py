@@ -5,6 +5,16 @@ test_pipelines_vocab2embedding_workers.py
 Focused tests for parallel processing (workers) functionality in vocab2embedding pipeline.
 Designed to run fast in CI/CD environments without GPU access.
 Tests the multi-worker coordination, sequential ordering, and resume capabilities.
+
+Usage:
+    # Run all tests including parallel worker tests:
+    pytest tests/pipelines/test_pipelines_vocab2embedding_workers.py --workers
+    
+    # Run only basic component tests (default, skips worker tests):
+    pytest tests/pipelines/test_pipelines_vocab2embedding_workers.py
+    
+    # For CI/CD environments (skips worker tests by default):
+    pytest tests/pipelines/test_pipelines_vocab2embedding_workers.py
 """
 
 import json
@@ -42,6 +52,7 @@ from x_spanformer.pipelines.vocab2embedding import (
 from x_spanformer.embedding.embedding_chunk import ChunkManager
 
 
+@pytest.mark.workers
 class TestWorkerComponents(unittest.TestCase):
     """Test individual worker components and data structures."""
     
@@ -286,6 +297,7 @@ class TestSequentialProcessing(unittest.TestCase):
                 self.assertEqual(actual_sequences, {1, 3})
 
 
+@pytest.mark.workers
 class TestParallelProcessing(unittest.TestCase):
     """Test parallel processing with multiple workers."""
     
@@ -666,6 +678,12 @@ class TestResumeCapabilities(unittest.TestCase):
 if __name__ == '__main__':
     # Suppress logging during tests to reduce noise
     logging.getLogger().setLevel(logging.WARNING)
+    
+    # Check if this is being run directly (not via pytest)
+    if len(sys.argv) == 1 or '--workers' not in sys.argv:
+        print("\nNOTE: Worker tests are skipped by default.")
+        print("To run parallel worker tests, use: pytest --workers")
+        print("Running only basic component tests...\n")
     
     # Run tests with higher verbosity for CI/CD
     unittest.main(verbosity=2)
