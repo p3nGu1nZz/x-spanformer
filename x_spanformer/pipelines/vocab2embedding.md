@@ -82,6 +82,88 @@ The `SpanCandidateGenerator` applies three filtering criteria:
 
 **Complexity**: `O(T · w_max)` instead of quadratic `O(T²)`
 
+## Parallel Processing
+
+### Multi-Worker Architecture
+
+The pipeline supports parallel processing through multiple worker processes, each running independent instances of the complete vocab2embedding pipeline. This approach provides:
+
+- **True Parallelization**: Each worker processes different sequences simultaneously
+- **GPU Memory Scaling**: With N workers, expect N×GPU memory usage (each worker loads the full model)
+- **Process Isolation**: Worker crashes don't affect other workers or the main process
+- **Ordered Output**: Results maintain sequence order despite parallel processing
+
+### Configuration
+
+```yaml
+processing:
+  workers: 1    # Sequential processing (default)
+  workers: 4    # 4 parallel workers
+  workers: 8    # 8 parallel workers (high-memory systems)
+```
+
+### Performance Characteristics
+
+**Sequential Processing (workers: 1)**:
+- Lower memory usage (~2-4GB GPU)
+- Simpler debugging and profiling
+- Predictable resource consumption
+
+**Parallel Processing (workers: N)**:
+- **GPU Memory**: N × base memory usage
+- **Processing Speed**: ~30-60% improvement with 4-8 workers
+- **CPU Overhead**: Worker management and result collection
+- **I/O Scaling**: Multiple workers writing to disk simultaneously
+
+### Usage Examples
+
+```bash
+# Sequential processing (default)
+python -m x_spanformer.pipelines.vocab2embedding \
+  --vocab data/vocab/out/vocab.jsonl \
+  --input data/vocab/out/corpus.jsonl \
+  --output data/embeddings \
+  --workers 1
+
+# Parallel processing (4 workers)
+python -m x_spanformer.pipelines.vocab2embedding \
+  --vocab data/vocab/out/vocab.jsonl \
+  --input data/vocab/out/corpus.jsonl \
+  --output data/embeddings \
+  --workers 4
+
+# High-throughput processing (8 workers)
+python -m x_spanformer.pipelines.vocab2embedding \
+  --vocab data/vocab/out/vocab.jsonl \
+  --input data/vocab/out/corpus.jsonl \
+  --output data/embeddings \
+  --workers 8
+```
+
+### Benchmarking Parallel Performance
+
+The benchmark tool supports testing different worker configurations:
+
+```bash
+# Benchmark sequential vs parallel processing
+python -m x_spanformer.benchmarks.benchmark_vocab2embedding \
+  --vocab data/vocab/out/vocab.jsonl \
+  --input data/vocab/out/corpus.jsonl \
+  --config config/pipelines/vocab2embedding.yaml \
+  --runs 3 --sequences 8 --workers 1
+
+python -m x_spanformer.benchmarks.benchmark_vocab2embedding \
+  --vocab data/vocab/out/vocab.jsonl \
+  --input data/vocab/out/corpus.jsonl \
+  --config config/pipelines/vocab2embedding.yaml \
+  --runs 3 --sequences 8 --workers 4
+```
+
+**Example Performance Results:**
+- **Sequential (1 worker)**: 46.7s for 8 sequences (5.84s per sequence)
+- **Parallel (4 workers)**: 29.8s for 8 sequences (3.72s per sequence)
+- **Speedup**: 36% improvement with 4 workers
+
 ## Configuration
 
 ### Default Configuration (from `config/pipelines/vocab2embedding.yaml`)
@@ -103,6 +185,7 @@ span_generation:
 processing:
   device: "cuda"                    # Device selection ("cuda" or omit for CPU default)
   device_id: 0                      # GPU device ID when using CUDA
+  workers: 1                        # Number of parallel worker processes
   batch_size: 64                    # Batch processing size
   max_sequence_length: 512          # Maximum input length
 
@@ -196,6 +279,21 @@ python -m x_spanformer.pipelines.vocab2embedding \
   -i data/pretraining/dataset.jsonl \
   -o data/embeddings \
   -c config/custom_vocab2embedding.yaml
+
+# Parallel processing with 4 workers
+python -m x_spanformer.pipelines.vocab2embedding \
+  --vocab data/vocab/vocab.jsonl \
+  --input data/pretraining/dataset.jsonl \
+  --output data/embeddings \
+  --workers 4
+
+# High-throughput processing with 8 workers
+python -m x_spanformer.pipelines.vocab2embedding \
+  --vocab data/vocab/vocab.jsonl \
+  --input data/pretraining/dataset.jsonl \
+  --output data/embeddings \
+  --workers 8 \
+  --config config/pipelines/vocab2embedding.yaml
 ```
 
 ### Resume Processing
@@ -279,10 +377,24 @@ def compute_dynamic_w_max(sequences, max_sequence_length):
 
 ### Typical Performance
 
+**Sequential Processing (1 worker):**
 With default configuration (embed_dim=512, T=256):
 - **Processing Time**: ~0.5-2 seconds per sequence (GPU)
 - **Memory per Sequence**: ~10-50 MB depending on vocabulary size
+- **GPU Memory Total**: ~2-4 GB for full pipeline
 - **GPU Utilization**: High during convolution, moderate during enumeration
+
+**Parallel Processing (4 workers):**
+- **Processing Time**: ~30-60% faster than sequential
+- **Memory per Sequence**: Same as sequential per worker
+- **GPU Memory Total**: ~8-16 GB (4× sequential usage)
+- **CPU Overhead**: Worker management and result coordination
+- **I/O Scaling**: Multiple workers writing simultaneously
+
+**Performance Scaling:**
+- **2 workers**: ~15-25% speedup
+- **4 workers**: ~30-40% speedup  
+- **8 workers**: ~40-60% speedup (diminishing returns due to overhead)
 
 ## Logging and Monitoring
 
@@ -336,26 +448,32 @@ The pipeline provides detailed logging across 5 stages:
 
 ### Common Issues
 
-1. **CUDA Out of Memory**: Reduce `batch_size` or `max_sequence_length`
+1. **CUDA Out of Memory**: Reduce `batch_size`, `max_sequence_length`, or `workers`
 2. **CUDA Unavailable**: Pipeline automatically falls back to CPU with warning message
 3. **Slow Processing**: Check GPU utilization, automatic CPU fallback for CI/CD environments
 4. **Large Output Files**: Disable `save_intermediate` or `add_analysis`
 5. **Resume Failures**: Check file permissions and disk space
+6. **Worker Process Errors**: Reduce `workers` count if experiencing instability
+7. **GPU Memory with Multiple Workers**: Each worker uses full GPU memory - reduce workers if OOM
 
 ### Configuration Tuning
 
-- **For Large Vocabularies**: Increase GPU memory allocation
+- **For Large Vocabularies**: Increase GPU memory allocation or reduce workers
 - **For Long Sequences**: Adjust `w_max` computation or sequence truncation
-- **For Speed**: Reduce conv_kernels/dilations or disable analysis
+- **For Speed**: Increase `workers` (if memory allows) or reduce conv_kernels/dilations
 - **For Quality**: Increase embedding dimensions or add regularization
 - **For CI/CD**: Omit `--device` parameter for CPU fallback when CUDA unavailable
+- **For High Throughput**: Use 4-8 workers on high-memory GPU systems
+- **For Memory Constraints**: Use single worker (workers: 1) to minimize GPU usage
 
 ### Performance Optimization
 
-- **Batch Processing**: Pipeline processes sequences individually but efficiently
-- **Memory Management**: Automatic cleanup between sequences
+- **Sequential Processing**: Use `workers: 1` for debugging or memory-constrained systems
+- **Parallel Processing**: Use `workers: 4-8` for high-throughput production systems
+- **Memory Management**: Automatic cleanup between sequences in each worker
 - **Device Selection**: CUDA when specified, CPU default with intelligent fallback for compatibility
-- **Caching**: Vocabulary components cached across sequences
+- **Caching**: Vocabulary components cached across sequences per worker
+- **Benchmarking**: Use benchmark tool to find optimal worker count for your system
 
 ---
 

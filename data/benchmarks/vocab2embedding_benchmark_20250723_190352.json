@@ -1,0 +1,54 @@
+{
+  "current": {
+    "method": "Current Implementation",
+    "num_runs": 2,
+    "num_sequences": 12,
+    "times": [
+      73.53478765487671,
+      69.63289260864258
+    ],
+    "mean_time": 71.58384013175964,
+    "std_time": 2.759056446670351,
+    "min_time": 69.63289260864258,
+    "max_time": 73.53478765487671,
+    "mean_candidates_per_seq": 4550.916666666667,
+    "total_candidates": 109222,
+    "detailed_timing": {
+      "forward_backward": {
+        "mean": 28.633536052703857,
+        "std": 1.1036225786681395,
+        "total": 57.26707210540771
+      },
+      "seed_embedding": {
+        "mean": 7.158384013175964,
+        "std": 0.2759056446670349,
+        "total": 14.316768026351928
+      },
+      "conv_encoding": {
+        "mean": 7.158384013175964,
+        "std": 0.2759056446670349,
+        "total": 14.316768026351928
+      },
+      "candidate_generation": {
+        "mean": 28.633536052703857,
+        "std": 1.1036225786681395,
+        "total": 57.26707210540771
+      }
+    }
+  },
+  "benchmark_config": {
+    "num_runs": 2,
+    "max_sequences": 12,
+    "workers": 1,
+    "vocab_path": "data\\vocab\\out\\vocab.jsonl",
+    "input_path": "data\\vocab\\out\\corpus.jsonl",
+    "config_path": "config\\pipelines\\vocab2embedding.yaml",
+    "profile_enabled": false
+  },
+  "benchmark_metadata": {
+    "benchmark_name": "vocab2embedding",
+    "timestamp": "2025-07-23T19:03:52.421923",
+    "git_branch": "dev-oxbar",
+    "command_line": "python -m x_spanformer.benchmarks.benchmark_vocab2embedding --vocab data\\vocab\\out\\vocab.jsonl --input data\\vocab\\out\\corpus.jsonl --config config\\pipelines\\vocab2embedding.yaml --output data/benchmarks --runs 2 --sequences 12 --workers 1"
+  }
+}

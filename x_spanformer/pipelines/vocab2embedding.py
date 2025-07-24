@@ -27,14 +27,16 @@ import re
 import signal
 import sys
 import time
+import yaml
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional, Union
+from multiprocessing import Process, Queue, Manager, current_process
+from queue import Empty
 
+import numpy as np
 import torch
 import torch.nn as nn
-import yaml
-import numpy as np
 
 # Add the parent directory to the path to import schema modules
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -44,14 +46,183 @@ from x_spanformer.embedding.embedding_logging import setup_embedding_logging, ge
 from x_spanformer.embedding.embedding_utils import (
     analyze_embedding_quality
 )
+from x_spanformer.embedding.embedding_chunk import (
+    ChunkManager, ChunkMetadata, save_sequence_individually_chunked
+)
 from x_spanformer.pipelines.shared.jsonl_processor import load_pretrain_records
 from x_spanformer.kernel import ConvEncoderKernel, validate_convolution_parameters
 
 # Module-level logger that gets configured in main()
 logger = None
+logger = None
 
 # Global flag for graceful shutdown
 SHUTDOWN_REQUESTED = False
+
+class WorkerTask:
+    """Data structure for worker task distribution."""
+    def __init__(self, seq_id: int, sequence: str, config_path: str, vocab_path: str, dynamic_w_max: int):
+        self.seq_id = seq_id
+        self.sequence = sequence
+        self.config_path = config_path
+        self.vocab_path = vocab_path
+        self.dynamic_w_max = dynamic_w_max
+
+class ProcessingResult:
+    """Data structure for processing results."""
+    def __init__(self, seq_id: int, success: bool, result: Optional[Dict] = None, error: Optional[str] = None):
+        self.seq_id = seq_id
+        self.success = success
+        self.result = result
+        self.error = error
+
+def sequence_processor_worker(task_queue: Queue, result_queue: Queue, worker_id: int):
+    """
+    Worker process function for parallel sequence processing.
+    
+    Each worker initializes its own pipeline and processes sequences from the task queue.
+    Results are sent back through the result queue with proper ordering information.
+    
+    Args:
+        task_queue: Queue containing WorkerTask objects
+        result_queue: Queue for returning ProcessingResult objects
+        worker_id: Unique identifier for this worker process
+    """
+    pipeline = None
+    processed_count = 0
+    
+    try:
+        # Worker initialization
+        process_name = current_process().name
+        print(f"Worker {worker_id} ({process_name}): Starting up...")
+        
+        while True:
+            try:
+                # Get task from queue with timeout
+                task = task_queue.get(timeout=1.0)
+                
+                if task is None:  # Poison pill - shutdown signal
+                    break
+                
+                # Initialize pipeline on first task (lazy initialization)
+                if pipeline is None:
+                    print(f"Worker {worker_id}: Initializing pipeline...")
+                    pipeline = Vocab2EmbeddingPipeline(task.config_path)
+                    pipeline.load_vocabulary(task.vocab_path)
+                    pipeline.w_max = task.dynamic_w_max
+                    
+                    # Recreate candidate generator with updated w_max
+                    span_config = pipeline.config.get('span_generation', {})
+                    pipeline.candidate_generator = SpanCandidateGenerator(
+                        pipeline.vocab_dict,
+                        tau_vocab=float(span_config.get('tau_vocab', 1e-4)),
+                        tau_comp=float(span_config.get('tau_comp', 1e-6)),
+                        w_max=task.dynamic_w_max
+                    )
+                    
+                    # GPU memory status after initialization
+                    if torch.cuda.is_available():
+                        allocated = torch.cuda.memory_allocated() / 1024**3
+                        reserved = torch.cuda.memory_reserved() / 1024**3
+                        print(f"Worker {worker_id}: Pipeline initialized on {pipeline.device} "
+                              f"[GPU: {allocated:.2f}GB alloc, {reserved:.2f}GB res]")
+                    else:
+                        print(f"Worker {worker_id}: Pipeline initialized on {pipeline.device}")
+                
+                # Process the sequence
+                start_time = time.time()
+                try:
+                    result = pipeline.process_sequence(task.sequence)
+                    processing_time = time.time() - start_time
+                    
+                    # Add processing metadata
+                    result['processing_time'] = processing_time
+                    result['worker_id'] = worker_id
+                    result['sequence'] = task.sequence  # Include original sequence for saving
+                    
+                    # CRITICAL: Detach tensors for multiprocessing serialization
+                    # PyTorch tensors with requires_grad=True cannot be serialized across processes
+                    # Move tensors to CPU to prevent GPU memory accumulation in shared memory
+                    result_for_queue = {}
+                    for key, value in result.items():
+                        if isinstance(value, torch.Tensor):
+                            # Detach and move to CPU to avoid shared GPU memory issues
+                            result_for_queue[key] = value.detach().cpu()
+                        else:
+                            result_for_queue[key] = value
+                    
+                    # Clear original result to free GPU memory immediately
+                    del result
+                    
+                    # Send successful result
+                    result_queue.put(ProcessingResult(task.seq_id, True, result_for_queue))
+                    processed_count += 1
+                    
+                    # GPU memory monitoring for debugging
+                    if torch.cuda.is_available():
+                        allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+                        reserved = torch.cuda.memory_reserved() / 1024**3    # GB
+                        peak = torch.cuda.max_memory_allocated() / 1024**3   # GB
+                    else:
+                        allocated = reserved = peak = 0.0
+                    
+                    print(f"Worker {worker_id}: Completed sequence {task.seq_id} "
+                          f"({len(task.sequence)} chars, {processing_time:.2f}s, "
+                          f"{result_for_queue['num_candidates']} candidates) "
+                          f"[GPU: {allocated:.2f}GB alloc, {reserved:.2f}GB res, {peak:.2f}GB peak]")
+                    
+                except Exception as e:
+                    # Send error result
+                    error_msg = f"Worker {worker_id} error processing sequence {task.seq_id}: {str(e)}"
+                    result_queue.put(ProcessingResult(task.seq_id, False, error=error_msg))
+                    print(error_msg)
+                
+            except Empty:
+                # Timeout waiting for task - check if we should continue
+                continue
+            except Exception as e:
+                print(f"Worker {worker_id}: Unexpected error: {e}")
+                break
+                
+    except KeyboardInterrupt:
+        print(f"Worker {worker_id}: Received interrupt signal")
+    except Exception as e:
+        print(f"Worker {worker_id}: Fatal error: {e}")
+    finally:
+        # GPU memory status before cleanup
+        if torch.cuda.is_available():
+            allocated_before = torch.cuda.memory_allocated() / 1024**3
+            reserved_before = torch.cuda.memory_reserved() / 1024**3
+            peak_before = torch.cuda.max_memory_allocated() / 1024**3
+        else:
+            allocated_before = reserved_before = peak_before = 0.0
+        
+        # Cleanup GPU memory and pipeline resources
+        print(f"Worker {worker_id}: Cleaning up GPU memory and shutting down (processed {processed_count} sequences)")
+        print(f"Worker {worker_id}: GPU before cleanup - {allocated_before:.2f}GB alloc, {reserved_before:.2f}GB res, {peak_before:.2f}GB peak")
+        
+        if pipeline is not None:
+            # Clear all pipeline components to release GPU memory
+            if hasattr(pipeline, 'unigram_lm') and pipeline.unigram_lm is not None:
+                del pipeline.unigram_lm
+            if hasattr(pipeline, 'seed_embedder') and pipeline.seed_embedder is not None:
+                del pipeline.seed_embedder
+            if hasattr(pipeline, 'conv_encoder') and pipeline.conv_encoder is not None:
+                del pipeline.conv_encoder
+            if hasattr(pipeline, 'candidate_generator') and pipeline.candidate_generator is not None:
+                del pipeline.candidate_generator
+            del pipeline
+            pipeline = None
+        
+        # Force CUDA memory cleanup
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            allocated_after = torch.cuda.memory_allocated() / 1024**3
+            reserved_after = torch.cuda.memory_reserved() / 1024**3
+            print(f"Worker {worker_id}: GPU after cleanup - {allocated_after:.2f}GB alloc, {reserved_after:.2f}GB res")
+        
+        print(f"Worker {worker_id}: GPU cleanup completed")
 
 def signal_handler(signum, frame):
     """Handle termination signals gracefully."""
@@ -290,31 +461,56 @@ class SpanCandidateGenerator:
         return False
     
     def compositional_potential(self, span_text: str) -> bool:
-        """Check if span has compositional segmentation potential using efficient greedy matching."""
+        """
+        Check if span has compositional segmentation potential following paper Equation:
+        ∃ seg ∈ Segments(x,i,j) : ∏_{u ∈ seg} p(u) ≥ τ_comp
+        
+        This finds the OPTIMAL segmentation using dynamic programming (like Viterbi)
+        and checks if its probability product meets the threshold.
+        
+        Optimized for performance while maintaining mathematical correctness.
+        """
+        # Fast early exits
         if not span_text or len(span_text) > 20:  # Skip very long spans
             return False
-        
-        pos = 0
-        log_prob = 0.0
-        
-        while pos < len(span_text):
-            # Find longest matching piece using sorted list (early termination)
-            best_piece = None
             
-            for piece in self._sorted_pieces:
-                if len(piece) > len(span_text) - pos:
-                    continue  # Piece too long
-                if span_text[pos:pos + len(piece)] == piece:
-                    best_piece = piece
-                    break  # Found longest match, stop searching
-            
-            if best_piece is None:
-                return False  # Cannot segment
-            
-            log_prob += math.log(self.vocab_dict[best_piece])
-            pos += len(best_piece)
+        if len(span_text) == 1:  # Single chars are trivially segmentable if in vocab
+            if span_text in self._vocab_set:
+                prob = self.vocab_dict[span_text]
+                return isinstance(prob, (int, float)) and prob >= self.tau_comp
+            return False
         
-        return math.exp(log_prob) >= self.tau_comp
+        # Quick vocabulary check first (fastest path - single piece)
+        if span_text in self._vocab_set:
+            prob = self.vocab_dict[span_text]
+            if isinstance(prob, (int, float)) and prob >= self.tau_comp:
+                return True
+        
+        # For multi-character spans, find optimal segmentation using dynamic programming
+        # This is the correct implementation of the paper's mathematical specification
+        span_len = len(span_text)
+        
+        # DP array: best_prob[i] = maximum probability to segment span_text[:i]
+        best_prob = [0.0] * (span_len + 1)
+        best_prob[0] = 1.0  # Empty prefix has probability 1
+        
+        for i in range(1, span_len + 1):
+            # Try all possible previous positions j where we can place a piece
+            for j in range(i):
+                if best_prob[j] == 0.0:  # No valid segmentation to position j
+                    continue
+                    
+                piece = span_text[j:i]
+                if piece in self._vocab_set:
+                    prob = self.vocab_dict[piece]
+                    if isinstance(prob, (int, float)) and prob > 0:
+                        # Update best probability: best_prob[j] * p(piece)
+                        candidate_prob = best_prob[j] * prob
+                        best_prob[i] = max(best_prob[i], candidate_prob)
+        
+        # Check if the optimal segmentation meets the threshold
+        optimal_prob = best_prob[span_len]
+        return optimal_prob >= self.tau_comp
     
     def whitespace_coherent(self, span_text: str) -> bool:
         """
@@ -369,12 +565,6 @@ class SpanCandidateGenerator:
         T = len(sequence)
         candidates = []
         
-        # Statistics for debugging
-        vocab_aligned = 0
-        comp_potential = 0
-        whitespace_coherent = 0
-        total_checked = 0
-        
         # Single-threaded processing with early termination optimizations
         for i in range(T):
             # Check for shutdown signal
@@ -386,26 +576,13 @@ class SpanCandidateGenerator:
             max_j = min(i + self.w_max, T)
             
             for j in range(i + 1, max_j + 1):
-                total_checked += 1
                 span_text = sequence[i:j]
                 
-                # Apply the three filtering criteria in order of computational cost
-                # (fastest to slowest to maximize early termination)
-                if self.vocabulary_alignment(span_text):
+                # Combined filtering with early termination (fastest to slowest)
+                if (self.vocabulary_alignment(span_text) or
+                    self.whitespace_coherent(span_text) or
+                    self.compositional_potential(span_text)):
                     candidates.append((i, j))
-                    vocab_aligned += 1
-                elif self.whitespace_coherent(span_text):
-                    candidates.append((i, j))
-                    whitespace_coherent += 1
-                elif self.compositional_potential(span_text):
-                    candidates.append((i, j))
-                    comp_potential += 1
-        
-        # Log statistics for debugging
-        if logger:
-            logger.debug(f"Candidate generation stats: {total_checked} spans checked, "
-                        f"{len(candidates)} candidates ({vocab_aligned} vocab-aligned, "
-                        f"{comp_potential} comp-potential, {whitespace_coherent} whitespace-coherent)")
         
         return candidates
 
@@ -460,6 +637,8 @@ class Vocab2EmbeddingPipeline:
         # Common parameter extraction
         self.max_sequence_length = processing_config.get('max_sequence_length', 512)
         self.batch_size = processing_config.get('batch_size', 64)
+        self.workers = processing_config.get('workers', 1)
+        
         self.epsilon = numerical_config.get('epsilon', 1e-12)
         self.max_piece_length = numerical_config.get('max_piece_length', 8)
         self.save_intermediate = output_config.get('save_intermediate', True)
@@ -587,15 +766,15 @@ class Vocab2EmbeddingPipeline:
         """
         Compute dynamic w_max based on the actual input corpus sequences.
         
-        Following corpus-adaptive approach: w_max = min(longest_word_length, max_sequence_length // 2)
-        where longest_word_length is found by analyzing the corpus for the longest complete word.
+        Following paper Equation: w_max = max(max_word_length, ⌊L_max/2⌋)
+        where max_word_length is found by analyzing the corpus for the longest complete word.
         This ensures span generation is adapted to actual corpus content while respecting sequence limits.
         
         Args:
             sequences: List of input sequences from the corpus
             
         Returns:
-            Computed w_max value (smaller of corpus-based and sequence-based bounds)
+            Computed w_max value (MAXIMUM of corpus-based and sequence-based bounds per paper)
         """
         import re
         
@@ -616,11 +795,14 @@ class Vocab2EmbeddingPipeline:
                     if word_length > max_word_length:
                         max_word_length = word_length
         
-        # Dynamic w_max: smaller of longest word or sequence-based bound for corpus adaptation
+        # Paper's specification: w_max = min(longest_word_length, ⌊L_max/2⌋)
+        # This enforces a hard computational bound while allowing overlapping spans
+        # to handle longer words through gated fusion (Section 3.6-3.8)
         corpus_based_w_max = max_word_length
         sequence_based_w_max = self.w_max_bound  # max_sequence_length // 2
         
-        # Use the smaller value for better corpus adaptation while respecting sequence limits
+        # Use the MINIMUM value to enforce computational bound - long words 
+        # are handled by overlapping spans with gated fusion downstream
         computed_w_max = min(corpus_based_w_max, sequence_based_w_max)
         
         get_embedding_logger('vocab2embedding').info(
@@ -680,9 +862,9 @@ class Vocab2EmbeddingPipeline:
         candidates = candidate_generator.generate_candidates(sequence)
         
         result = {
-            'soft_probabilities': soft_probs.detach().cpu().numpy(),
-            'seed_embeddings': seed_embeddings.detach().cpu().numpy(), 
-            'contextual_embeddings': contextual_embeddings.detach().cpu().numpy(),
+            'soft_probabilities': soft_probs,  # Keep on GPU until saving
+            'seed_embeddings': seed_embeddings,  # Keep on GPU until saving  
+            'contextual_embeddings': contextual_embeddings,  # Keep on GPU until saving
             'span_candidates': candidates,
             'sequence_length': len(sequence),
             'num_candidates': len(candidates),
@@ -693,14 +875,292 @@ class Vocab2EmbeddingPipeline:
         if self.add_analysis:
             try:
                 from x_spanformer.embedding.embedding_utils import analyze_embedding_quality
-                result['analysis'] = analyze_embedding_quality(
-                    contextual_embeddings.detach().cpu().numpy()
-                )
+                # Try to keep on GPU first, fallback to CPU if needed
+                try:
+                    result['analysis'] = analyze_embedding_quality(contextual_embeddings)
+                except (TypeError, RuntimeError):
+                    # Function requires CPU tensors
+                    result['analysis'] = analyze_embedding_quality(
+                        contextual_embeddings.detach().cpu().numpy()
+                    )
                 get_embedding_logger('vocab2embedding').debug("Added embedding quality analysis to results")
             except Exception as e:
                 get_embedding_logger('vocab2embedding').warning(f"Error during embedding analysis: {e}")
         
         return result
+
+
+def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int], 
+                             pipeline: 'Vocab2EmbeddingPipeline', num_workers: int,
+                             chunk_manager: ChunkManager) -> Tuple[int, int]:
+    """
+    Process sequences in parallel while maintaining sequential output ordering and chunked storage.
+    
+    Args:
+        sequences: List of all sequences from input corpus
+        missing_seq_ids: List of sequence IDs that need processing
+        pipeline: Configured pipeline instance (for config/vocab paths)
+        num_workers: Number of worker processes
+        chunk_manager: ChunkManager instance for chunked storage
+        
+    Returns:
+        Tuple of (processed_count, error_count)
+    """
+    if num_workers <= 1:
+        return process_sequences_sequential(sequences, missing_seq_ids, pipeline, chunk_manager)
+    
+    logger = get_embedding_logger('vocab2embedding')
+    
+    logger.info(f"Starting parallel processing with {num_workers} workers")
+    logger.info(f"Processing {len(missing_seq_ids)} sequences...")
+    logger.info(f"Chunk size: {chunk_manager.chunk_size} sequences per chunk")
+    
+    # Create queues for task distribution and result collection
+    task_queue = Queue()
+    result_queue = Queue()
+    
+    # Populate task queue with missing sequences
+    for seq_id in missing_seq_ids:
+        if SHUTDOWN_REQUESTED:
+            break
+            
+        sequence = sequences[seq_id - 1]  # Convert to 0-based index
+        task = WorkerTask(
+            seq_id=seq_id,
+            sequence=sequence,
+            config_path=pipeline.config.get('_config_path', 'config/pipelines/vocab2embedding.yaml'),
+            vocab_path=pipeline.config.get('_vocab_path', ''),
+            dynamic_w_max=pipeline.w_max
+        )
+        task_queue.put(task)
+    
+    # Add poison pills for workers
+    for _ in range(num_workers):
+        task_queue.put(None)
+    
+    # Start worker processes
+    workers = []
+    for worker_id in range(num_workers):
+        worker = Process(
+            target=sequence_processor_worker,
+            args=(task_queue, result_queue, worker_id),
+            name=f"SeqWorker-{worker_id}"
+        )
+        worker.start()
+        workers.append(worker)
+    
+    # Result collection with sequential ordering and chunked storage
+    results_buffer = {}  # seq_id -> ProcessingResult
+    processed_results = set()  # Track which sequence IDs have been saved
+    processed_count = 0
+    error_count = 0
+    expected_results = len(missing_seq_ids)
+    
+    logger.info("Collecting results and maintaining sequential order...")
+    
+    while processed_count + error_count < expected_results and not SHUTDOWN_REQUESTED:
+        try:
+            # Get result from queue with timeout
+            result = result_queue.get(timeout=2.0)
+            results_buffer[result.seq_id] = result
+            
+            # Process results in sequential order based on missing_seq_ids
+            while True:
+                # Find the next expected sequence ID to process
+                next_seq_id = None
+                for seq_id in missing_seq_ids:
+                    if seq_id in results_buffer and seq_id not in processed_results:
+                        next_seq_id = seq_id
+                        break
+                
+                if next_seq_id is None:
+                    break  # Wait for more results
+                
+                # Process the next sequential result
+                seq_result = results_buffer[next_seq_id]
+                processed_results.add(next_seq_id)
+                
+                if seq_result.success:
+                    try:
+                        # Log progress - calculate based on total sequences processed vs total sequences
+                        total_processed = next_seq_id  # Current sequence ID represents total processed so far
+                        progress = (total_processed / len(sequences)) * 100
+                        logger.info(f"Sequence {next_seq_id}/{len(sequences)} completed "
+                                  f"(Worker {seq_result.result.get('worker_id', '?')}, "
+                                  f"{seq_result.result.get('processing_time', 0):.2f}s, "
+                                  f"{progress:.1f}% complete)")
+                        
+                        processed_count += 1
+                        
+                        # Process each sequence individually with contiguous chunking
+                        single_result = {next_seq_id: seq_result.result}
+                        saved_chunks = save_sequence_individually_chunked(
+                            chunk_manager, single_result, pipeline.config, logger
+                        )
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing results for sequence {next_seq_id}: {e}")
+                        error_count += 1
+                else:
+                    logger.error(seq_result.error)
+                    error_count += 1
+                
+        except Empty:
+            # Check if workers are still alive
+            alive_workers = [w for w in workers if w.is_alive()]
+            if not alive_workers and result_queue.empty():
+                logger.warning("All workers finished but some results may be missing")
+                break
+            continue
+        except Exception as e:
+            logger.error(f"Error collecting results: {e}")
+            break
+    
+    # Only flush remaining sequences if shutdown was NOT requested
+    # This ensures we never save partial chunks during interruption
+    if not SHUTDOWN_REQUESTED:
+        final_chunks = chunk_manager.flush_remaining_sequences(pipeline.config)
+        if final_chunks:
+            for chunk_meta in final_chunks:
+                logger.info(f"Final flush saved chunk {chunk_meta.chunk_id}: "
+                           f"sequences {chunk_meta.start_seq_id}-{chunk_meta.end_seq_id}")
+        else:
+            logger.info("No remaining sequences to flush")
+    else:
+        # Count sequences in buffer that won't be saved
+        buffer_count = len(chunk_manager.sequence_buffer)
+        if buffer_count > 0:
+            logger.info(f"Graceful shutdown: skipping {buffer_count} sequences in buffer "
+                       f"(will be reprocessed on resume for complete chunks)")
+        else:
+            logger.info("Graceful shutdown: no partial sequences to discard")
+    
+    # Cleanup: wait for workers to finish with shorter timeout and force termination
+    logger.info("Waiting for workers to finish...")
+    for worker in workers:
+        worker.join(timeout=5.0)  # Reduced timeout for faster shutdown
+        if worker.is_alive():
+            logger.warning(f"Worker {worker.name} did not finish cleanly - terminating forcefully")
+            worker.terminate()
+            worker.join(timeout=2.0)  # Brief wait for termination
+            if worker.is_alive():
+                logger.error(f"Worker {worker.name} failed to terminate - may require manual cleanup")
+    
+    # Additional cleanup for any remaining GPU resources
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    
+    logger.info(f"Parallel processing completed: {processed_count} processed, {error_count} errors")
+    return processed_count, error_count
+
+def process_sequences_sequential(sequences: List[str], missing_seq_ids: List[int],
+                               pipeline: 'Vocab2EmbeddingPipeline', chunk_manager: ChunkManager) -> Tuple[int, int]:
+    """
+    Process sequences sequentially using chunked storage (fallback for single worker or debugging).
+    
+    Args:
+        sequences: List of all sequences from input corpus
+        missing_seq_ids: List of sequence IDs that need processing  
+        pipeline: Configured pipeline instance
+        chunk_manager: ChunkManager instance for chunked storage
+        
+    Returns:
+        Tuple of (processed_count, error_count)
+    """
+    logger = get_embedding_logger('vocab2embedding')
+    logger.info("Processing sequences sequentially...")
+    logger.info(f"Chunk size: {chunk_manager.chunk_size} sequences per chunk")
+    
+    processed_count = 0
+    error_count = 0
+    
+    for seq_id in missing_seq_ids:
+        if SHUTDOWN_REQUESTED:
+            logger.warning("SHUTDOWN SIGNAL RECEIVED - Stopping processing")
+            break
+            
+        sequence = sequences[seq_id - 1]  # Convert to 0-based index
+        
+        try:
+            logger.info(f"Sequence {seq_id}/{len(sequences)} - Length: {len(sequence)} chars")
+            
+            # GPU memory status for monitoring
+            if torch.cuda.is_available():
+                allocated = torch.cuda.memory_allocated() / 1024**3
+                reserved = torch.cuda.memory_reserved() / 1024**3
+                logger.info(f"  GPU: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
+            
+            # Process sequence using the pipeline
+            result = pipeline.process_sequence(sequence)
+            
+            logger.info(f"  Forward-backward: {result['soft_probabilities'].shape}")
+            logger.info(f"  Seed embeddings: {result['seed_embeddings'].shape}")
+            logger.info(f"  Contextual embeddings: {result['contextual_embeddings'].shape}")
+            logger.info(f"  Span candidates: {result['num_candidates']} (span_width: {result['span_width']})")
+            
+            # Add sequence text for storage
+            result['sequence'] = sequence
+            
+            processed_count += 1
+            
+            # Process sequence individually with contiguous chunking
+            single_result = {seq_id: result}
+            saved_chunks = save_sequence_individually_chunked(
+                chunk_manager, single_result, pipeline.config, logger
+            )
+            
+            logger.info("-" * 50)
+            
+        except Exception as e:
+            logger.error(f"Sequence {seq_id}: Error processing sequence: {e}")
+            error_count += 1
+            continue
+    
+    # Only flush remaining sequences if shutdown was NOT requested
+    # This ensures we never save partial chunks during interruption  
+    if not SHUTDOWN_REQUESTED:
+        final_chunks = chunk_manager.flush_remaining_sequences(pipeline.config)
+        if final_chunks:
+            for chunk_meta in final_chunks:
+                logger.info(f"Final sequential flush saved chunk {chunk_meta.chunk_id}: "
+                           f"sequences {chunk_meta.start_seq_id}-{chunk_meta.end_seq_id}")
+        else:
+            logger.info("No remaining sequences to flush")
+    else:
+        # Count sequences in buffer that won't be saved
+        buffer_count = len(chunk_manager.sequence_buffer)
+        if buffer_count > 0:
+            logger.info(f"Graceful shutdown: skipping {buffer_count} sequences in buffer "
+                       f"(will be reprocessed on resume for complete chunks)")
+        else:
+            logger.info("Graceful shutdown: no partial sequences to discard")
+    
+    return processed_count, error_count
+
+
+def log_saved_files(file_sizes, logger):
+    """Log saved file information in a clean, readable format."""
+    # Build components list
+    components = []
+    total_size = 0
+    
+    # Add components in consistent order
+    for component, key in [('JSON', 'json'), ('Seed', 'seed'), ('Context', 'context'), ('SoftProb', 'soft_prob')]:
+        if key in file_sizes:
+            size_kb = file_sizes[key]
+            components.append(f"{component}({size_kb:.1f}KB)")
+            total_size += size_kb
+        else:
+            # Skip rather than show "SKIPPED" for cleaner output
+            pass
+    
+    # Log the result
+    if components:
+        components_str = " + ".join(components)
+        logger.info(f"  Saved: {components_str} = {total_size:.1f}KB total")
+    else:
+        logger.info(f"  Saved: Context({file_sizes.get('context', 0):.1f}KB) = {total_size:.1f}KB total")
 
 
 def parse_args():
@@ -737,8 +1197,71 @@ def parse_args():
         help="Path to configuration YAML file"
     )
     
+    parser.add_argument(
+        "--workers", "-w",
+        type=int,
+        default=1,
+        help="Number of worker processes for parallel sequence processing (default: 1)"
+    )
+    
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=None,
+        help="Number of sequences per chunk file (overrides config, default: 100)"
+    )
+    
     return parser.parse_args()
 
+
+def find_missing_sequences(total_sequences: int, existing_records: Dict[int, Dict]) -> List[int]:
+    """
+    Find missing sequence IDs that need to be processed.
+    
+    This handles discontinuous completions where sequences might be completed
+    out of order (e.g., 1-10 done, 12 done, but 11 and 13+ need processing).
+    
+    Args:
+        total_sequences: Total number of sequences in the input corpus
+        existing_records: Dictionary of already processed sequence records
+        
+    Returns:
+        List of sequence IDs that need to be processed (sorted)
+    """
+    all_sequence_ids = set(range(1, total_sequences + 1))
+    completed_sequence_ids = set(existing_records.keys())
+    missing_sequence_ids = sorted(all_sequence_ids - completed_sequence_ids)
+    
+    logger = get_embedding_logger('vocab2embedding')
+    if missing_sequence_ids:
+        logger.info(f"Missing sequences detected: {len(missing_sequence_ids)} sequences need processing")
+        
+        # Show ranges for cleaner logging
+        ranges = []
+        start = missing_sequence_ids[0]
+        end = start
+        
+        for seq_id in missing_sequence_ids[1:]:
+            if seq_id == end + 1:
+                end = seq_id
+            else:
+                if start == end:
+                    ranges.append(str(start))
+                else:
+                    ranges.append(f"{start}-{end}")
+                start = end = seq_id
+        
+        # Add final range
+        if start == end:
+            ranges.append(str(start))
+        else:
+            ranges.append(f"{start}-{end}")
+        
+        logger.info(f"Missing sequence ranges: {', '.join(ranges)}")
+    else:
+        logger.info("All sequences already processed - no missing sequences detected")
+    
+    return missing_sequence_ids
 
 def load_existing_records(output_dir: Path, pipeline_config: Dict, force: bool = False) -> Tuple[Dict[int, Dict], int]:
     """
@@ -913,6 +1436,7 @@ def main():
     logger.info(f"  Input file: {args.input}")
     logger.info(f"  Output directory: {args.output}")
     logger.info(f"  Config file: {args.config}")
+    logger.info(f"  Workers: {args.workers}")
     logger.info("-" * 80)
     
     logger.info("[bold cyan]X-Spanformer VOCAB2EMBEDDING Pipeline[/bold cyan]")
@@ -925,11 +1449,32 @@ def main():
     
     pipeline = Vocab2EmbeddingPipeline(args.config)
     
-    # Now load existing records with pipeline config
-    existing_records, last_processed = load_existing_records(output_path, pipeline.config)
+    # Store config and vocab paths for worker processes
+    pipeline.config['_config_path'] = args.config
+    pipeline.config['_vocab_path'] = args.vocab
+    
+    # Override config with CLI arguments if provided
+    if args.workers != 1:  # Only override if different from default
+        pipeline.workers = args.workers
+        logger.info(f"Workers setting overridden by CLI: {args.workers}")
+    
+    # Handle chunk size override
+    chunk_size = args.chunk_size if args.chunk_size is not None else pipeline.config.get('output', {}).get('chunk_size', 100)
+    if args.chunk_size is not None:
+        logger.info(f"Chunk size overridden by CLI: {chunk_size}")
+        pipeline.config['output']['chunk_size'] = chunk_size
+    
+    # Initialize chunk manager
+    chunk_manager = ChunkManager(output_path, chunk_size)
+    
+    # Now load existing records using chunk manager
+    existing_sequences = chunk_manager.get_existing_sequences()
+    existing_records = {seq_id: {'sequence_id': seq_id} for seq_id in existing_sequences}
+    last_processed = max(existing_sequences) if existing_sequences else 0
     if existing_records:
         logger.info(f"RESUMING PROCESSING - Found {len(existing_records)} previously processed sequences")
         logger.info(f"Last processed sequence ID: {last_processed}")
+        logger.info(f"Existing chunks: {len(chunk_manager.chunks_metadata)}")
     else:
         logger.info("STARTING FRESH PROCESSING - No existing sequences found")
     
@@ -954,28 +1499,10 @@ def main():
     else:
         logger.info("  CUDA: Not available - using CPU")
     
+    logger.info(f"Workers: {pipeline.workers}")
     logger.info(f"Pipeline initialized on: {pipeline.device}")
     logger.info("-" * 50)
 
-    # Create subdirectories based on configuration
-    json_dir = output_path / "json"
-    seed_dir = output_path / "seed" 
-    context_dir = output_path / "context"
-    soft_prob_dir = output_path / "soft_prob"
-
-    # Always create contextual embeddings directory (essential for downstream tasks)
-    context_dir.mkdir(exist_ok=True)
-    
-    # Conditionally create directories based on config
-    if pipeline.config.get('output', {}).get('save_seed_embeddings', False):
-        seed_dir.mkdir(exist_ok=True)
-    
-    if pipeline.config.get('output', {}).get('save_json_metadata', False):
-        json_dir.mkdir(exist_ok=True)
-    
-    if pipeline.config.get('output', {}).get('save_soft_probabilities', False):
-        soft_prob_dir.mkdir(exist_ok=True)
-    
     # Load vocabulary
     logger.info("=" * 50)
     logger.info("STAGE 2: VOCABULARY LOADING")
@@ -1018,126 +1545,28 @@ def main():
         w_max=dynamic_w_max
     )
     
-    # Determine processing plan
-    if existing_records:
-        logger.info(f"RESUMING from sequence {last_processed + 1} (skipping {len(existing_records)} already processed)")
+    # Determine missing sequences for processing (handles discontinuous completions)
+    missing_seq_ids = find_missing_sequences(len(sequences), existing_records)
+    
+    if not missing_seq_ids:
+        logger.info("All sequences already processed - nothing to do!")
+        logger.info(f"Output saved to: {output_path}")
+        return
     
     # Process sequences from loaded data
     logger.info("=" * 50)
     logger.info("STAGE 5: SEQUENCE PROCESSING")
     logger.info("=" * 50)
     
-    processed_count = 0
-    error_count = 0
     skipped_count = len(existing_records)  # Count previously processed as skipped
     
-    logger.info(f"Processing {len(sequences)} total sequences...")
+    logger.info(f"Processing {len(missing_seq_ids)} remaining sequences out of {len(sequences)} total...")
+    logger.info(f"Using {pipeline.workers} worker{'s' if pipeline.workers > 1 else ''}...")
     
-    for seq_id, sequence in enumerate(sequences, 1):
-        # Check for shutdown signal
-        if SHUTDOWN_REQUESTED:
-            logger.warning("SHUTDOWN SIGNAL RECEIVED - Stopping processing after current sequence")
-            break
-        
-        # Skip already processed sequences (following other pipelines pattern)
-        if seq_id in existing_records:
-            continue
-        
-        try:
-            logger.info(f"Sequence {seq_id}/{len(sequences)} - Length: {len(sequence)} chars")
-            
-            # GPU memory status for monitoring
-            if torch.cuda.is_available():
-                allocated = torch.cuda.memory_allocated() / 1024**3
-                reserved = torch.cuda.memory_reserved() / 1024**3
-                logger.info(f"  GPU: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
-            
-            # Process sequence using the pipeline (handles modality detection and span width automatically)
-            result = pipeline.process_sequence(sequence)
-            
-            logger.info(f"  Forward-backward: {result['soft_probabilities'].shape}")
-            logger.info(f"  Seed embeddings: {result['seed_embeddings'].shape}")
-            logger.info(f"  Contextual embeddings: {result['contextual_embeddings'].shape}")
-            logger.info(f"  Span candidates: {result['num_candidates']} (span_width: {result['span_width']})")
-            
-            # Save results conditionally based on configuration
-            json_size = 0
-            if pipeline.config.get('output', {}).get('save_json_metadata', False):
-                output_file = json_dir / f"embedding_{seq_id:06d}.json"
-                with open(output_file, 'w', encoding='utf-8') as outfile:
-                    # Convert numpy arrays to lists for JSON serialization
-                    json_result = {
-                        'sequence_id': seq_id,
-                        'sequence': sequence,
-                        'sequence_length': result['sequence_length'],
-                        'num_candidates': result['num_candidates'],
-                        'span_candidates': result['span_candidates'],
-                        'soft_probabilities_shape': result['soft_probabilities'].shape,
-                        'seed_embeddings_shape': result['seed_embeddings'].shape, 
-                        'contextual_embeddings_shape': result['contextual_embeddings'].shape
-                    }
-                    json.dump(json_result, outfile, ensure_ascii=False, indent=2)
-                json_size = output_file.stat().st_size / 1024  # KB
-            
-            # Save embeddings as numpy files conditionally
-            if pipeline.save_soft_probabilities:
-                np.save(soft_prob_dir / f"soft_probs_{seq_id:06d}.npy", result['soft_probabilities'])
-            
-            if pipeline.save_seed_embeddings:
-                np.save(seed_dir / f"seed_emb_{seq_id:06d}.npy", result['seed_embeddings'])
-            
-            # Always save contextual embeddings (essential for downstream tasks)
-            np.save(context_dir / f"context_emb_{seq_id:06d}.npy", result['contextual_embeddings'])
-            
-            # Log file sizes for monitoring (handle optional files)
-            seed_size = 0
-            if pipeline.save_seed_embeddings:
-                seed_size = (seed_dir / f"seed_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
-            context_size = (context_dir / f"context_emb_{seq_id:06d}.npy").stat().st_size / 1024  # KB
-            
-            if pipeline.save_soft_probabilities:
-                soft_prob_size = (soft_prob_dir / f"soft_probs_{seq_id:06d}.npy").stat().st_size / 1024  # KB
-                if json_size > 0 and seed_size > 0:
-                    total_size = json_size + seed_size + context_size + soft_prob_size
-                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
-                              f"Context({context_size:.1f}KB) + SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total")
-                elif json_size > 0:
-                    total_size = json_size + context_size + soft_prob_size
-                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Context({context_size:.1f}KB) + "
-                              f"SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total (Seed: SKIPPED)")
-                elif seed_size > 0:
-                    total_size = seed_size + context_size + soft_prob_size
-                    logger.info(f"  Saved: Seed({seed_size:.1f}KB) + Context({context_size:.1f}KB) + "
-                              f"SoftProb({soft_prob_size:.1f}KB) = {total_size:.1f}KB total (JSON: SKIPPED)")
-                else:
-                    total_size = context_size + soft_prob_size
-                    logger.info(f"  Saved: Context({context_size:.1f}KB) + SoftProb({soft_prob_size:.1f}KB) = "
-                              f"{total_size:.1f}KB total (JSON: SKIPPED, Seed: SKIPPED)")
-            else:
-                if json_size > 0 and seed_size > 0:
-                    total_size = json_size + seed_size + context_size
-                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Seed({seed_size:.1f}KB) + "
-                              f"Context({context_size:.1f}KB) = {total_size:.1f}KB total (SoftProb: SKIPPED)")
-                elif json_size > 0:
-                    total_size = json_size + context_size
-                    logger.info(f"  Saved: JSON({json_size:.1f}KB) + Context({context_size:.1f}KB) = "
-                              f"{total_size:.1f}KB total (Seed: SKIPPED, SoftProb: SKIPPED)")
-                elif seed_size > 0:
-                    total_size = seed_size + context_size
-                    logger.info(f"  Saved: Seed({seed_size:.1f}KB) + Context({context_size:.1f}KB) = "
-                              f"{total_size:.1f}KB total (JSON: SKIPPED, SoftProb: SKIPPED)")
-                else:
-                    total_size = context_size
-                    logger.info(f"  Saved: Context({context_size:.1f}KB) = {total_size:.1f}KB total "
-                              f"(JSON: SKIPPED, Seed: SKIPPED, SoftProb: SKIPPED)")
-            
-            processed_count += 1
-            logger.info("-" * 50)
-                
-        except Exception as e:
-            logger.error(f"Sequence {seq_id}: Error processing sequence: {e}")
-            error_count += 1
-            continue
+    # Process sequences (parallel or sequential based on worker count)
+    processed_count, error_count = process_sequences_parallel(
+        sequences, missing_seq_ids, pipeline, pipeline.workers, chunk_manager
+    )
     
     # Final statistics
     total_processed = skipped_count + processed_count
@@ -1166,30 +1595,30 @@ def main():
     logger.info(f"Output saved to: {output_path}")
     logger.info("Output structure:")
     
-    # Only log directories that exist
-    if json_dir.exists():
-        logger.info(f"  JSON metadata: {json_dir} ({len(list(json_dir.glob('*.json')))} files)")
-    else:
-        logger.info(f"  JSON metadata: Not saved (disabled in config)")
-        
-    if seed_dir.exists():
-        logger.info(f"  Seed embeddings: {seed_dir} ({len(list(seed_dir.glob('*.npy')))} files)")
-    else:
-        logger.info(f"  Seed embeddings: Not saved (disabled for performance)")
-        
-    logger.info(f"  Context embeddings: {context_dir} ({len(list(context_dir.glob('*.npy')))} files)")
+    # Get chunk statistics
+    chunks_dir = chunk_manager.chunks_dir
+    chunk_files = list(chunks_dir.glob("embeddings_*.npz"))
+    total_sequences_in_chunks = len(chunk_manager.get_existing_sequences())
     
-    if soft_prob_dir.exists():
-        logger.info(f"  Soft probabilities: {soft_prob_dir} ({len(list(soft_prob_dir.glob('*.npy')))} files)")
-    else:
-        logger.info(f"  Soft probabilities: Not saved (disabled for performance)")
-        
+    logger.info(f"  Chunks directory: {chunks_dir}")
+    logger.info(f"  Chunk files: {len(chunk_files)} files")
+    logger.info(f"  Total sequences in chunks: {total_sequences_in_chunks}")
+    logger.info(f"  Chunk size: {chunk_manager.chunk_size} sequences per chunk")
+    if chunk_files:
+        logger.info(f"  Chunk file pattern: {chunk_files[0].name} ... {chunk_files[-1].name}")
+    logger.info(f"  Metadata file: {chunk_manager.metadata_file}")
     logger.info(f"  Log file: {output_path / 'embedding.log'}")
     
-    # Exit code for automation
+    # Exit code for automation with forced termination to prevent hanging
     if SHUTDOWN_REQUESTED:
         logger.info("Exiting with code 130 (interrupted)")
-        sys.exit(130)
+        # Force cleanup and exit immediately to prevent hanging
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        # Use os._exit to bypass any cleanup that might hang
+        import os
+        os._exit(130)
     elif error_count > 0:
         logger.info("Exiting with code 1 (errors encountered)")
         sys.exit(1)

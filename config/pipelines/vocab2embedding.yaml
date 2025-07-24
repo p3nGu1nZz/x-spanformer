@@ -30,6 +30,9 @@ processing:
   device: "cuda" # cuda | cpu (falls back to cpu if cuda unavailable)
   device_id: 0 # GPU device ID for multi-GPU systems
 
+  # Parallel processing workers
+  workers: 1 # Number of worker processes for parallel sequence processing
+
   # Batch processing parameters
   batch_size: 64
   max_sequence_length: 512
@@ -46,6 +49,9 @@ numerical:
 output:
   # Save intermediate representations for analysis (disable by default for performance)
   save_intermediate: false
+
+  # Chunked storage configuration - saves embeddings in batches for better I/O efficiency
+  chunk_size: 100 # Number of sequences per chunk file (overrideable via --chunk-size)
 
   # OPTIONAL: Seed embeddings (H0) - intermediate representation for analysis
   # Only needed for debugging vocabulary distribution before contextualization
