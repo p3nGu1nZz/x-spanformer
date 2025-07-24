@@ -199,4 +199,4 @@ data/vocab/out/full_freq/*
 data/vocab/out/pruning/*
 
 # Embedding
-data/embedding/out
+data/embedding/

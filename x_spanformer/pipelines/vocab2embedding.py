@@ -116,7 +116,15 @@ def sequence_processor_worker(task_queue: Queue, result_queue: Queue, worker_id:
                         tau_comp=float(span_config.get('tau_comp', 1e-6)),
                         w_max=task.dynamic_w_max
                     )
-                    print(f"Worker {worker_id}: Pipeline initialized on {pipeline.device}")
+                    
+                    # GPU memory status after initialization
+                    if torch.cuda.is_available():
+                        allocated = torch.cuda.memory_allocated() / 1024**3
+                        reserved = torch.cuda.memory_reserved() / 1024**3
+                        print(f"Worker {worker_id}: Pipeline initialized on {pipeline.device} "
+                              f"[GPU: {allocated:.2f}GB alloc, {reserved:.2f}GB res]")
+                    else:
+                        print(f"Worker {worker_id}: Pipeline initialized on {pipeline.device}")
                 
                 # Process the sequence
                 start_time = time.time()
@@ -131,22 +139,34 @@ def sequence_processor_worker(task_queue: Queue, result_queue: Queue, worker_id:
                     
                     # CRITICAL: Detach tensors for multiprocessing serialization
                     # PyTorch tensors with requires_grad=True cannot be serialized across processes
-                    # We detach but keep them on their original device for optimal performance
+                    # Move tensors to CPU to prevent GPU memory accumulation in shared memory
                     result_for_queue = {}
                     for key, value in result.items():
                         if isinstance(value, torch.Tensor):
-                            # Detach from computation graph but preserve device placement
-                            result_for_queue[key] = value.detach()
+                            # Detach and move to CPU to avoid shared GPU memory issues
+                            result_for_queue[key] = value.detach().cpu()
                         else:
                             result_for_queue[key] = value
+                    
+                    # Clear original result to free GPU memory immediately
+                    del result
                     
                     # Send successful result
                     result_queue.put(ProcessingResult(task.seq_id, True, result_for_queue))
                     processed_count += 1
                     
+                    # GPU memory monitoring for debugging
+                    if torch.cuda.is_available():
+                        allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+                        reserved = torch.cuda.memory_reserved() / 1024**3    # GB
+                        peak = torch.cuda.max_memory_allocated() / 1024**3   # GB
+                    else:
+                        allocated = reserved = peak = 0.0
+                    
                     print(f"Worker {worker_id}: Completed sequence {task.seq_id} "
                           f"({len(task.sequence)} chars, {processing_time:.2f}s, "
-                          f"{result['num_candidates']} candidates)")
+                          f"{result_for_queue['num_candidates']} candidates) "
+                          f"[GPU: {allocated:.2f}GB alloc, {reserved:.2f}GB res, {peak:.2f}GB peak]")
                     
                 except Exception as e:
                     # Send error result
@@ -166,7 +186,40 @@ def sequence_processor_worker(task_queue: Queue, result_queue: Queue, worker_id:
     except Exception as e:
         print(f"Worker {worker_id}: Fatal error: {e}")
     finally:
-        print(f"Worker {worker_id}: Shutting down (processed {processed_count} sequences)")
+        # GPU memory status before cleanup
+        if torch.cuda.is_available():
+            allocated_before = torch.cuda.memory_allocated() / 1024**3
+            reserved_before = torch.cuda.memory_reserved() / 1024**3
+            peak_before = torch.cuda.max_memory_allocated() / 1024**3
+        else:
+            allocated_before = reserved_before = peak_before = 0.0
+        
+        # Cleanup GPU memory and pipeline resources
+        print(f"Worker {worker_id}: Cleaning up GPU memory and shutting down (processed {processed_count} sequences)")
+        print(f"Worker {worker_id}: GPU before cleanup - {allocated_before:.2f}GB alloc, {reserved_before:.2f}GB res, {peak_before:.2f}GB peak")
+        
+        if pipeline is not None:
+            # Clear all pipeline components to release GPU memory
+            if hasattr(pipeline, 'unigram_lm') and pipeline.unigram_lm is not None:
+                del pipeline.unigram_lm
+            if hasattr(pipeline, 'seed_embedder') and pipeline.seed_embedder is not None:
+                del pipeline.seed_embedder
+            if hasattr(pipeline, 'conv_encoder') and pipeline.conv_encoder is not None:
+                del pipeline.conv_encoder
+            if hasattr(pipeline, 'candidate_generator') and pipeline.candidate_generator is not None:
+                del pipeline.candidate_generator
+            del pipeline
+            pipeline = None
+        
+        # Force CUDA memory cleanup
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            allocated_after = torch.cuda.memory_allocated() / 1024**3
+            reserved_after = torch.cuda.memory_reserved() / 1024**3
+            print(f"Worker {worker_id}: GPU after cleanup - {allocated_after:.2f}GB alloc, {reserved_after:.2f}GB res")
+        
+        print(f"Worker {worker_id}: GPU cleanup completed")
 
 def signal_handler(signum, frame):
     """Handle termination signals gracefully."""
@@ -582,6 +635,7 @@ class Vocab2EmbeddingPipeline:
         self.max_sequence_length = processing_config.get('max_sequence_length', 512)
         self.batch_size = processing_config.get('batch_size', 64)
         self.workers = processing_config.get('workers', 1)
+        
         self.epsilon = numerical_config.get('epsilon', 1e-12)
         self.max_piece_length = numerical_config.get('max_piece_length', 8)
         self.save_intermediate = output_config.get('save_intermediate', True)
@@ -906,6 +960,7 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
         return process_sequences_sequential(sequences, missing_seq_ids, pipeline, output_dirs)
     
     logger = get_embedding_logger('vocab2embedding')
+    
     logger.info(f"Starting parallel processing with {num_workers} workers")
     logger.info(f"Processing {len(missing_seq_ids)} sequences...")
     
@@ -984,8 +1039,9 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
                             output_dirs['context'], output_dirs['soft_prob'], logger
                         )
                         
-                        # Log progress
-                        progress = ((processed_count + error_count + 1) / expected_results) * 100
+                        # Log progress - calculate based on total sequences processed vs total sequences
+                        total_processed = next_seq_id  # Current sequence ID represents total processed so far
+                        progress = (total_processed / len(sequences)) * 100
                         logger.info(f"Sequence {next_seq_id}/{len(sequences)} completed "
                                   f"(Worker {seq_result.result.get('worker_id', '?')}, "
                                   f"{seq_result.result.get('processing_time', 0):.2f}s, "
@@ -1012,13 +1068,21 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
             logger.error(f"Error collecting results: {e}")
             break
     
-    # Cleanup: wait for workers to finish
+    # Cleanup: wait for workers to finish with shorter timeout and force termination
     logger.info("Waiting for workers to finish...")
     for worker in workers:
-        worker.join(timeout=10.0)
+        worker.join(timeout=5.0)  # Reduced timeout for faster shutdown
         if worker.is_alive():
-            logger.warning(f"Worker {worker.name} did not finish cleanly")
+            logger.warning(f"Worker {worker.name} did not finish cleanly - terminating forcefully")
             worker.terminate()
+            worker.join(timeout=2.0)  # Brief wait for termination
+            if worker.is_alive():
+                logger.error(f"Worker {worker.name} failed to terminate - may require manual cleanup")
+    
+    # Additional cleanup for any remaining GPU resources
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
     
     logger.info(f"Parallel processing completed: {processed_count} processed, {error_count} errors")
     return processed_count, error_count
@@ -1572,10 +1636,16 @@ def main():
         
     logger.info(f"  Log file: {output_path / 'embedding.log'}")
     
-    # Exit code for automation
+    # Exit code for automation with forced termination to prevent hanging
     if SHUTDOWN_REQUESTED:
         logger.info("Exiting with code 130 (interrupted)")
-        sys.exit(130)
+        # Force cleanup and exit immediately to prevent hanging
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        # Use os._exit to bypass any cleanup that might hang
+        import os
+        os._exit(130)
     elif error_count > 0:
         logger.info("Exiting with code 1 (errors encountered)")
         sys.exit(1)
