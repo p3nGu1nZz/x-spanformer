@@ -47,7 +47,7 @@ from x_spanformer.embedding.embedding_utils import (
     analyze_embedding_quality
 )
 from x_spanformer.embedding.embedding_chunk import (
-    ChunkManager, ChunkMetadata, save_sequence_results_chunked
+    ChunkManager, ChunkMetadata, save_sequence_individually_chunked
 )
 from x_spanformer.pipelines.shared.jsonl_processor import load_pretrain_records
 from x_spanformer.kernel import ConvEncoderKernel, validate_convolution_parameters
@@ -952,7 +952,6 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
     # Result collection with sequential ordering and chunked storage
     results_buffer = {}  # seq_id -> ProcessingResult
     processed_results = set()  # Track which sequence IDs have been saved
-    chunk_buffer = {}  # Buffer for accumulating results before chunking
     processed_count = 0
     error_count = 0
     expected_results = len(missing_seq_ids)
@@ -983,9 +982,6 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
                 
                 if seq_result.success:
                     try:
-                        # Add result to chunk buffer
-                        chunk_buffer[next_seq_id] = seq_result.result
-                        
                         # Log progress - calculate based on total sequences processed vs total sequences
                         total_processed = next_seq_id  # Current sequence ID represents total processed so far
                         progress = (total_processed / len(sequences)) * 100
@@ -996,21 +992,11 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
                         
                         processed_count += 1
                         
-                        # Check if we should save a chunk
-                        if len(chunk_buffer) >= chunk_manager.chunk_size:
-                            # Save chunk with earliest sequences
-                            chunk_seq_ids = sorted(chunk_buffer.keys())
-                            chunk_to_save = {}
-                            
-                            for i in range(chunk_manager.chunk_size):
-                                if i < len(chunk_seq_ids):
-                                    seq_id_to_save = chunk_seq_ids[i]
-                                    chunk_to_save[seq_id_to_save] = chunk_buffer.pop(seq_id_to_save)
-                            
-                            # Save the chunk
-                            chunk_meta = save_sequence_results_chunked(
-                                chunk_manager, chunk_to_save, pipeline.config, logger
-                            )
+                        # Process each sequence individually with contiguous chunking
+                        single_result = {next_seq_id: seq_result.result}
+                        saved_chunks = save_sequence_individually_chunked(
+                            chunk_manager, single_result, pipeline.config, logger
+                        )
                         
                     except Exception as e:
                         logger.error(f"Error processing results for sequence {next_seq_id}: {e}")
@@ -1030,11 +1016,14 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
             logger.error(f"Error collecting results: {e}")
             break
     
-    # Save any remaining results in chunk buffer
-    if chunk_buffer:
-        chunk_meta = save_sequence_results_chunked(
-            chunk_manager, chunk_buffer, pipeline.config, logger
-        )
+    # Flush any remaining sequences in the chunk manager's buffer
+    final_chunks = chunk_manager.flush_remaining_sequences(pipeline.config)
+    if final_chunks:
+        for chunk_meta in final_chunks:
+            logger.info(f"Final flush saved chunk {chunk_meta.chunk_id}: "
+                       f"sequences {chunk_meta.start_seq_id}-{chunk_meta.end_seq_id}")
+    else:
+        logger.info("No remaining sequences to flush")
     
     # Cleanup: wait for workers to finish with shorter timeout and force termination
     logger.info("Waiting for workers to finish...")
@@ -1075,7 +1064,6 @@ def process_sequences_sequential(sequences: List[str], missing_seq_ids: List[int
     
     processed_count = 0
     error_count = 0
-    chunk_buffer = {}
     
     for seq_id in missing_seq_ids:
         if SHUTDOWN_REQUESTED:
@@ -1101,18 +1089,16 @@ def process_sequences_sequential(sequences: List[str], missing_seq_ids: List[int
             logger.info(f"  Contextual embeddings: {result['contextual_embeddings'].shape}")
             logger.info(f"  Span candidates: {result['num_candidates']} (span_width: {result['span_width']})")
             
-            # Add result to chunk buffer
-            result['sequence'] = sequence  # Add sequence text for storage
-            chunk_buffer[seq_id] = result
+            # Add sequence text for storage
+            result['sequence'] = sequence
             
             processed_count += 1
             
-            # Check if we should save a chunk
-            if len(chunk_buffer) >= chunk_manager.chunk_size:
-                chunk_meta = save_sequence_results_chunked(
-                    chunk_manager, chunk_buffer, pipeline.config, logger
-                )
-                chunk_buffer.clear()  # Clear buffer after saving
+            # Process sequence individually with contiguous chunking
+            single_result = {seq_id: result}
+            saved_chunks = save_sequence_individually_chunked(
+                chunk_manager, single_result, pipeline.config, logger
+            )
             
             logger.info("-" * 50)
             
@@ -1121,11 +1107,12 @@ def process_sequences_sequential(sequences: List[str], missing_seq_ids: List[int
             error_count += 1
             continue
     
-    # Save any remaining results in chunk buffer
-    if chunk_buffer:
-        chunk_meta = save_sequence_results_chunked(
-            chunk_manager, chunk_buffer, pipeline.config, logger
-        )
+    # Flush any remaining sequences in the chunk manager's buffer
+    final_chunks = chunk_manager.flush_remaining_sequences(pipeline.config)
+    if final_chunks:
+        for chunk_meta in final_chunks:
+            logger.info(f"Final sequential flush saved chunk {chunk_meta.chunk_id}: "
+                       f"sequences {chunk_meta.start_seq_id}-{chunk_meta.end_seq_id}")
     
     return processed_count, error_count
 
