@@ -206,29 +206,63 @@ class ChunkManager:
         """
         Save a chunk of embedding data to disk.
         
+        If sequences span multiple chunks, they will be automatically grouped
+        and saved to their appropriate chunks.
+        
         Args:
             chunk_data: Dictionary mapping sequence_id -> result_dict
             pipeline_config: Pipeline configuration for determining what to save
             
         Returns:
-            ChunkMetadata if successful, None otherwise
+            ChunkMetadata of the last chunk saved, None if no data saved
         """
         if not chunk_data:
-            self.logger.warning("Attempted to save empty chunk data")
+            self.logger.debug("Empty chunk data, skipping save")
             return None
         
-        # Determine chunk ID from sequence IDs
+        # Group sequences by their target chunks
         seq_ids = sorted(chunk_data.keys())
-        chunk_id = self.get_chunk_id(seq_ids[0])
-        chunk_file = self.get_chunk_file_path(chunk_id)
+        chunks_to_save = {}
         
-        # Validate sequence ID consistency
-        expected_chunk_id = self.get_chunk_id(seq_ids[-1])
-        if chunk_id != expected_chunk_id:
-            self.logger.warning(
-                f"Sequence IDs span multiple chunks: {seq_ids[0]}-{seq_ids[-1]} "
-                f"(chunk {chunk_id} to {expected_chunk_id})"
+        for seq_id in seq_ids:
+            chunk_id = self.get_chunk_id(seq_id)
+            if chunk_id not in chunks_to_save:
+                chunks_to_save[chunk_id] = {}
+            chunks_to_save[chunk_id][seq_id] = chunk_data[seq_id]
+        
+        # If sequences span multiple chunks, save each chunk separately
+        if len(chunks_to_save) > 1:
+            self.logger.debug(
+                f"Sequences {seq_ids[0]}-{seq_ids[-1]} span {len(chunks_to_save)} chunks, "
+                f"saving separately"
             )
+            
+            last_chunk_meta = None
+            for chunk_id in sorted(chunks_to_save.keys()):
+                chunk_meta = self._save_single_chunk(chunks_to_save[chunk_id], pipeline_config, chunk_id)
+                if chunk_meta:
+                    last_chunk_meta = chunk_meta
+            return last_chunk_meta
+        
+        # Single chunk case
+        chunk_id = list(chunks_to_save.keys())[0]
+        return self._save_single_chunk(chunk_data, pipeline_config, chunk_id)
+    
+    def _save_single_chunk(self, chunk_data: Dict[int, Dict], pipeline_config: Dict, 
+                          chunk_id: int) -> Optional[ChunkMetadata]:
+        """
+        Save a single chunk of data to disk.
+        
+        Args:
+            chunk_data: Dictionary mapping sequence_id -> result_dict (all same chunk)
+            pipeline_config: Pipeline configuration for determining what to save
+            chunk_id: Target chunk ID
+            
+        Returns:
+            ChunkMetadata if successful, None otherwise
+        """
+        seq_ids = sorted(chunk_data.keys())
+        chunk_file = self.get_chunk_file_path(chunk_id)
         
         try:
             # Prepare data for saving

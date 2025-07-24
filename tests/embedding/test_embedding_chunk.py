@@ -479,7 +479,7 @@ class TestEdgeCases:
             mock_logger.return_value.error.assert_called()
     
     def test_sequence_ids_spanning_chunks(self, temp_dir):
-        """Test warning when sequence IDs span multiple chunks."""
+        """Test automatic handling when sequence IDs span multiple chunks."""
         manager = ChunkManager(temp_dir, chunk_size=5)
         
         # Create data spanning chunk boundary
@@ -498,9 +498,22 @@ class TestEdgeCases:
         
         config = {'output': {}}
         
-        # Should still save but log warning (warning is logged by the actual manager)
+        # Should automatically split and save to appropriate chunks
         chunk_meta = manager.save_chunk(chunk_data, config)
         assert chunk_meta is not None
+        
+        # Verify sequences were saved to correct chunks
+        chunk1_data = manager.load_chunk(1)
+        chunk2_data = manager.load_chunk(2)
+        
+        assert chunk1_data is not None
+        assert chunk2_data is not None
+        assert 4 in chunk1_data
+        assert 6 in chunk2_data
+        
+        # Verify all sequences are accessible
+        existing_sequences = manager.get_existing_sequences()
+        assert {4, 6}.issubset(existing_sequences)
 
 
 if __name__ == "__main__":
