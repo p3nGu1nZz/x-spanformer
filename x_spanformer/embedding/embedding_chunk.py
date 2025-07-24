@@ -106,6 +106,9 @@ class ChunkManager:
         self.chunks_metadata: Dict[int, ChunkMetadata] = {}
         self.logger = get_embedding_logger('embedding_chunk')
         
+        # Buffer for accumulating sequences before saving complete chunks
+        self.sequence_buffer: Dict[int, Dict] = {}
+        
         # Load existing metadata
         self._load_metadata()
         
@@ -535,6 +538,168 @@ class ChunkManager:
                 self.logger.error(f"Failed to remove orphaned file {orphaned_file}: {e}")
         
         return orphaned_files
+    
+    def add_sequence_to_buffer(self, seq_id: int, sequence_data: Dict, pipeline_config: Optional[Dict] = None) -> List[ChunkMetadata]:
+        """
+        Add a sequence to the buffer and save any complete chunks.
+        
+        This method accumulates sequences and only saves complete, contiguous chunks
+        of the specified chunk_size. This ensures consistent chunk sizes and faster
+        loading performance.
+        
+        Args:
+            seq_id: Sequence ID
+            sequence_data: Sequence result data
+            pipeline_config: Pipeline configuration (uses minimal config if None)
+            
+        Returns:
+            List of ChunkMetadata objects for any chunks that were saved
+        """
+        if pipeline_config is None:
+            pipeline_config = {'output': {}}
+            
+        # Add sequence to buffer
+        self.sequence_buffer[seq_id] = sequence_data
+        
+        saved_chunks = []
+        
+        # Check if we can save any complete chunks
+        while True:
+            # Find the lowest chunk that could be complete
+            buffered_ids = set(self.sequence_buffer.keys())
+            if not buffered_ids:
+                break
+                
+            # Get the lowest chunk ID that has sequences in buffer
+            min_seq_id = min(buffered_ids)
+            chunk_id = self.get_chunk_id(min_seq_id)
+            
+            # Get the expected range for this chunk
+            start_seq_id, end_seq_id = self.get_chunk_range(chunk_id)
+            expected_sequences = set(range(start_seq_id, end_seq_id + 1))
+            
+            # Check if we have all sequences for this chunk
+            buffered_for_chunk = buffered_ids & expected_sequences
+            
+            if len(buffered_for_chunk) == self.chunk_size:
+                # We have a complete chunk, save it
+                chunk_data = {
+                    seq_id: self.sequence_buffer[seq_id] 
+                    for seq_id in expected_sequences 
+                    if seq_id in self.sequence_buffer
+                }
+                
+                # Save the chunk using the single chunk method directly
+                chunk_meta = self._save_single_chunk(chunk_data, pipeline_config, chunk_id)
+                if chunk_meta:
+                    saved_chunks.append(chunk_meta)
+                
+                # Remove saved sequences from buffer
+                for seq_id in expected_sequences:
+                    self.sequence_buffer.pop(seq_id, None)
+                    
+                self.logger.info(
+                    f"Saved complete chunk {chunk_id}: sequences {start_seq_id}-{end_seq_id} "
+                    f"({self.chunk_size} sequences)"
+                )
+            else:
+                # Cannot complete this chunk yet
+                break
+        
+        return saved_chunks
+    
+    def flush_remaining_sequences(self, pipeline_config: Dict) -> List[ChunkMetadata]:
+        """
+        Save any remaining sequences in buffer as partial chunks.
+        
+        This should be called at the end of processing to save any sequences
+        that don't form complete chunks.
+        
+        Args:
+            pipeline_config: Pipeline configuration for determining what to save
+            
+        Returns:
+            List of ChunkMetadata objects for any chunks that were saved
+        """
+        if not self.sequence_buffer:
+            return []
+        
+        saved_chunks = []
+        
+        # Group remaining sequences by chunk
+        chunks_to_save = {}
+        for seq_id in self.sequence_buffer.keys():
+            chunk_id = self.get_chunk_id(seq_id)
+            if chunk_id not in chunks_to_save:
+                chunks_to_save[chunk_id] = {}
+            chunks_to_save[chunk_id][seq_id] = self.sequence_buffer[seq_id]
+        
+        # Save each partial chunk
+        for chunk_id in sorted(chunks_to_save.keys()):
+            chunk_data = chunks_to_save[chunk_id]
+            chunk_meta = self._save_single_chunk(chunk_data, pipeline_config, chunk_id)
+            if chunk_meta:
+                saved_chunks.append(chunk_meta)
+                seq_ids = sorted(chunk_data.keys())
+                self.logger.info(
+                    f"Saved partial chunk {chunk_id}: sequences {seq_ids[0]}-{seq_ids[-1]} "
+                    f"({len(chunk_data)} sequences)"
+                )
+        
+        # Clear the buffer
+        self.sequence_buffer.clear()
+        
+        return saved_chunks
+
+
+def save_sequence_individually_chunked(chunk_manager: ChunkManager, result_buffer: Dict[int, Dict], 
+                                      pipeline_config: Dict, logger) -> List[ChunkMetadata]:
+    """
+    Save accumulated sequence results, maintaining contiguous chunks.
+    
+    This function processes sequences individually and only saves complete,
+    contiguous chunks of the specified size. This ensures consistent chunk
+    sizes and optimal loading performance.
+    
+    Args:
+        chunk_manager: ChunkManager instance for handling storage
+        result_buffer: Dictionary of sequence_id -> result data
+        pipeline_config: Pipeline configuration for determining what to save
+        logger: Logger instance for progress reporting
+    
+    Returns:
+        List of ChunkMetadata objects for any chunks that were saved
+    """
+    if not result_buffer:
+        logger.debug("Empty result buffer, skipping chunk save")
+        return []
+    
+    saved_chunks = []
+    
+    # Process each sequence individually
+    for seq_id, result in result_buffer.items():
+        # Convert GPU tensors to CPU numpy arrays for storage
+        processed_result = {}
+        
+        # Always save contextual embeddings and basic data
+        processed_result['sequence'] = result['sequence']
+        processed_result['span_candidates'] = result['span_candidates']
+        processed_result['contextual_embeddings'] = result['contextual_embeddings'].detach().cpu().numpy()
+        
+        # Conditionally save other components based on config
+        output_config = pipeline_config.get('output', {})
+        
+        if output_config.get('save_seed_embeddings', False):
+            processed_result['seed_embeddings'] = result['seed_embeddings'].detach().cpu().numpy()
+        
+        if output_config.get('save_soft_probabilities', False):
+            processed_result['soft_probabilities'] = result['soft_probabilities'].detach().cpu().numpy()
+        
+        # Add to buffer and get any completed chunks
+        completed_chunks = chunk_manager.add_sequence_to_buffer(seq_id, processed_result, pipeline_config)
+        saved_chunks.extend(completed_chunks)
+    
+    return saved_chunks
 
 
 def save_sequence_results_chunked(chunk_manager: ChunkManager, result_buffer: Dict[int, Dict], 
@@ -542,8 +707,8 @@ def save_sequence_results_chunked(chunk_manager: ChunkManager, result_buffer: Di
     """
     Save accumulated sequence results as a chunk when buffer is full.
     
-    This is a convenience function that handles the common pattern of
-    converting GPU tensors to CPU arrays before chunked storage.
+    Legacy version that maintains original behavior for backwards compatibility.
+    For contiguous chunk management, use save_sequence_individually_chunked.
     
     Args:
         chunk_manager: ChunkManager instance for handling storage
@@ -553,6 +718,57 @@ def save_sequence_results_chunked(chunk_manager: ChunkManager, result_buffer: Di
     
     Returns:
         ChunkMetadata if a chunk was saved, None otherwise
+    """
+    if not result_buffer:
+        logger.debug("Empty result buffer, skipping chunk save")
+        return None
+    
+    # Convert GPU tensors to CPU numpy arrays for storage
+    processed_buffer = {}
+    total_size_mb = 0
+    
+    for seq_id, result in result_buffer.items():
+        processed_result = {}
+        
+        # Always save contextual embeddings and basic data
+        processed_result['sequence'] = result['sequence']
+        processed_result['span_candidates'] = result['span_candidates']
+        processed_result['contextual_embeddings'] = result['contextual_embeddings'].detach().cpu().numpy()
+        
+        # Estimate size for logging
+        total_size_mb += result['contextual_embeddings'].numel() * 4 / (1024 * 1024)  # float32 = 4 bytes
+        
+        # Conditionally save other components based on config
+        output_config = pipeline_config.get('output', {})
+        
+        if output_config.get('save_seed_embeddings', False):
+            processed_result['seed_embeddings'] = result['seed_embeddings'].detach().cpu().numpy()
+            total_size_mb += result['seed_embeddings'].numel() * 4 / (1024 * 1024)
+        
+        if output_config.get('save_soft_probabilities', False):
+            processed_result['soft_probabilities'] = result['soft_probabilities'].detach().cpu().numpy()
+            total_size_mb += result['soft_probabilities'].numel() * 4 / (1024 * 1024)
+        
+        processed_buffer[seq_id] = processed_result
+    
+    # Save the chunk
+    chunk_meta = chunk_manager.save_chunk(processed_buffer, pipeline_config)
+    
+    if chunk_meta:
+        seq_ids = sorted(processed_buffer.keys())
+        logger.info(f"Saved chunk {chunk_meta.chunk_id}: sequences {seq_ids[0]}-{seq_ids[-1]} "
+                   f"({chunk_meta.sequence_count} sequences, {chunk_meta.file_size_mb:.1f}MB)")
+    
+    return chunk_meta
+
+
+def save_sequence_results_chunked_legacy(chunk_manager: ChunkManager, result_buffer: Dict[int, Dict], 
+                                  pipeline_config: Dict, logger) -> Optional[ChunkMetadata]:
+    """
+    Legacy version that saves sequences as they arrive (may create uneven chunks).
+    
+    This is the original implementation kept for backwards compatibility.
+    Use save_sequence_results_chunked for better chunk management.
     """
     if not result_buffer:
         logger.debug("Empty result buffer, skipping chunk save")
