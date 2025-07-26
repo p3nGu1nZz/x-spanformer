@@ -43,19 +43,48 @@ from x_spanformer.embedding.embedding_logging import get_embedding_logger
 @dataclass
 class ChunkMetadata:
     """
-    Metadata for a single embedding chunk.
+    Enhanced metadata for embedding chunks supporting downstream training tasks.
     
-    Tracks essential information about each chunk including sequence ranges,
-    file paths, creation timestamps, and component availability.
+    Tracks comprehensive information needed for span induction (Section 4.1),
+    controller injection (Section 4.2), end-to-end fine-tuning (Section 4.3),
+    length estimation (Section 3.4), and modality typing (Section 3.5).
     """
+    # Core chunk identification
     chunk_id: int
     start_seq_id: int  
     end_seq_id: int
     sequence_count: int
     file_path: str
     created_at: str
-    components: List[str]  # ['context', 'seed', 'soft_prob', etc.]
+    
+    # Component tracking - what's stored in this chunk
+    components: List[str]  # ['context', 'seed', 'candidates', 'soft_prob', etc.]
     file_size_mb: float
+    
+    # Architecture parameters from config (Section 3.2)
+    embed_dim: int = 512  # Embedding dimension for dense representations
+    conv_kernels: Optional[List[int]] = None  # Multi-scale convolution kernels [3, 5, 7]
+    conv_dilations: Optional[List[int]] = None  # Dilation rates [1, 2, 4]
+    
+    # Span generation statistics (Sections 3.1.2, 3.4)
+    total_candidates: int = 0  # Total span candidates across all sequences
+    mean_candidates_per_seq: float = 0.0  # Average candidates per sequence
+    max_span_width: int = 0  # Maximum span width used (w_max)
+    
+    # Vocabulary parameters (Section 3.1)
+    vocab_size: int = 0  # Vocabulary size |V|
+    tau_vocab: float = 1e-4  # Vocabulary temperature (Section 3.1.2 Eq 1)
+    tau_comp: float = 1e-6  # Competition temperature (Section 3.1.2 Eq 2)
+    
+    # Processing metadata for debugging and analysis
+    device_used: str = "cpu"  # Device used for processing (cuda/cpu)
+    case_handling: str = "normalize"  # Case normalization strategy
+    dropout_rate: float = 0.1  # Regularization rate used
+    
+    # Sequence statistics for span predictor and length estimator
+    min_sequence_length: int = 0  # Shortest sequence in chunk
+    max_sequence_length: int = 0  # Longest sequence in chunk  
+    mean_sequence_length: float = 0.0  # Average sequence length
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -63,8 +92,29 @@ class ChunkMetadata:
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ChunkMetadata':
-        """Create from dictionary loaded from JSON."""
-        return cls(**data)
+        """Create from dictionary loaded from JSON with backwards compatibility."""
+        # Handle legacy metadata that might be missing new fields
+        defaults = {
+            'embed_dim': 512,
+            'conv_kernels': [3, 5, 7],
+            'conv_dilations': [1, 2, 4],
+            'total_candidates': 0,
+            'mean_candidates_per_seq': 0.0,
+            'max_span_width': 0,
+            'vocab_size': 0,
+            'tau_vocab': 1e-4,
+            'tau_comp': 1e-6,
+            'device_used': "cpu",
+            'case_handling': "normalize",
+            'dropout_rate': 0.1,
+            'min_sequence_length': 0,
+            'max_sequence_length': 0,
+            'mean_sequence_length': 0.0
+        }
+        
+        # Merge with defaults for missing fields
+        full_data = {**defaults, **data}
+        return cls(**full_data)
     
     def contains_sequence(self, seq_id: int) -> bool:
         """Check if this chunk contains a specific sequence ID."""
@@ -146,12 +196,67 @@ class ChunkManager:
             self.chunks_metadata = {}
     
     def _save_metadata(self) -> None:
-        """Save chunk metadata to disk."""
+        """Save enhanced chunk metadata to disk."""
+        # Calculate aggregate statistics across all chunks
+        if self.chunks_metadata:
+            total_sequences = sum(meta.sequence_count for meta in self.chunks_metadata.values())
+            total_candidates = sum(meta.total_candidates for meta in self.chunks_metadata.values())
+            total_size_mb = sum(meta.file_size_mb for meta in self.chunks_metadata.values())
+            
+            # Get representative parameters from first chunk (should be consistent)
+            first_chunk = next(iter(self.chunks_metadata.values()))
+            embed_dim = first_chunk.embed_dim
+            conv_kernels = first_chunk.conv_kernels
+            conv_dilations = first_chunk.conv_dilations
+            tau_vocab = first_chunk.tau_vocab
+            tau_comp = first_chunk.tau_comp
+            device_used = first_chunk.device_used
+            case_handling = first_chunk.case_handling
+            
+            # Calculate aggregate statistics
+            mean_candidates_global = total_candidates / total_sequences if total_sequences > 0 else 0
+            mean_chunk_size = total_sequences / len(self.chunks_metadata)
+        else:
+            total_sequences = total_candidates = total_size_mb = 0
+            mean_candidates_global = mean_chunk_size = 0
+            embed_dim = 512
+            conv_kernels = [3, 5, 7]
+            conv_dilations = [1, 2, 4]
+            tau_vocab = 1e-4
+            tau_comp = 1e-6
+            device_used = "cpu"
+            case_handling = "normalize"
+        
         metadata = {
+            # Core chunk information
             'chunk_size': self.chunk_size,
             'total_chunks': len(self.chunks_metadata),
             'created_at': datetime.now().isoformat(),
             'last_updated': datetime.now().isoformat(),
+            
+            # Pipeline-level statistics for downstream tasks
+            'pipeline_stats': {
+                'total_sequences': total_sequences,
+                'total_candidates': total_candidates,
+                'total_size_mb': round(total_size_mb, 2),
+                'mean_candidates_per_sequence': round(mean_candidates_global, 1),
+                'mean_chunk_size': round(mean_chunk_size, 1),
+                
+                # Architecture parameters (Section 3.2)
+                'embed_dim': embed_dim,
+                'conv_kernels': conv_kernels,
+                'conv_dilations': conv_dilations,
+                
+                # Span generation parameters (Section 3.1.2)
+                'tau_vocab': tau_vocab,
+                'tau_comp': tau_comp,
+                
+                # Processing configuration
+                'device_used': device_used,
+                'case_handling': case_handling
+            },
+            
+            # Individual chunk metadata
             'chunks': {
                 str(chunk_id): chunk_meta.to_dict()
                 for chunk_id, chunk_meta in self.chunks_metadata.items()
@@ -288,6 +393,7 @@ class ChunkManager:
             arrays_to_save['span_candidates'] = np.array(span_candidates, dtype=object)
             arrays_to_save['sequence_ids'] = np.array(seq_ids)
             components.append('context')
+            components.append('candidates')  # Track span candidates as a component
             
             # Seed embeddings are always required now (Section 3.3 requirement)
             seed_embeddings = []
@@ -320,8 +426,43 @@ class ChunkManager:
             # Calculate file size
             file_size_mb = chunk_file.stat().st_size / (1024 * 1024)
             
-            # Create metadata
+            # Extract rich metadata for downstream tasks
+            # Architecture parameters from config
+            arch_config = pipeline_config.get('architecture', {})
+            embed_dim = arch_config.get('embed_dim', 512)
+            conv_kernels = arch_config.get('conv_kernels', [3, 5, 7])
+            conv_dilations = arch_config.get('conv_dilations', [1, 2, 4])
+            
+            # Span generation parameters  
+            span_config = pipeline_config.get('span_generation', {})
+            tau_vocab = span_config.get('tau_vocab', 1e-4)
+            tau_comp = span_config.get('tau_comp', 1e-6)
+            
+            # Processing parameters
+            proc_config = pipeline_config.get('processing', {})
+            device_used = proc_config.get('device', 'cpu')
+            dropout_rate = arch_config.get('dropout_rate', 0.1)
+            
+            # Calculate span candidate statistics
+            total_candidates = sum(len(candidates) for candidates in span_candidates)
+            mean_candidates_per_seq = total_candidates / len(span_candidates) if span_candidates else 0.0
+            
+            # Calculate sequence length statistics
+            sequence_lengths = [len(seq) for seq in sequences]
+            min_seq_len = min(sequence_lengths) if sequence_lengths else 0
+            max_seq_len = max(sequence_lengths) if sequence_lengths else 0
+            mean_seq_len = sum(sequence_lengths) / len(sequence_lengths) if sequence_lengths else 0.0
+            
+            # Estimate max span width from candidates (Section 3.4)
+            max_span_width = 0
+            for candidates in span_candidates:
+                for start, end in candidates:
+                    span_width = end - start
+                    max_span_width = max(max_span_width, span_width)
+            
+            # Create enhanced metadata
             chunk_meta = ChunkMetadata(
+                # Core chunk identification
                 chunk_id=chunk_id,
                 start_seq_id=seq_ids[0],
                 end_seq_id=seq_ids[-1],
@@ -329,7 +470,32 @@ class ChunkManager:
                 file_path=str(chunk_file.relative_to(self.output_dir)),
                 created_at=datetime.now().isoformat(),
                 components=components,
-                file_size_mb=round(file_size_mb, 2)
+                file_size_mb=round(file_size_mb, 2),
+                
+                # Architecture parameters (Section 3.2)
+                embed_dim=embed_dim,
+                conv_kernels=conv_kernels,
+                conv_dilations=conv_dilations,
+                
+                # Span generation statistics (Sections 3.1.2, 3.4)
+                total_candidates=total_candidates,
+                mean_candidates_per_seq=round(mean_candidates_per_seq, 1),
+                max_span_width=max_span_width,
+                
+                # Vocabulary parameters (Section 3.1)
+                vocab_size=0,  # Will be filled from vocab if available
+                tau_vocab=tau_vocab,
+                tau_comp=tau_comp,
+                
+                # Processing metadata
+                device_used=device_used,
+                case_handling="normalize",  # Current default from implementation
+                dropout_rate=dropout_rate,
+                
+                # Sequence statistics
+                min_sequence_length=min_seq_len,
+                max_sequence_length=max_seq_len,
+                mean_sequence_length=round(mean_seq_len, 1)
             )
             
             # Update metadata registry
@@ -338,7 +504,12 @@ class ChunkManager:
             
             self.logger.info(
                 f"Saved chunk {chunk_id}: sequences {seq_ids[0]}-{seq_ids[-1]} "
-                f"({len(seq_ids)} sequences, {file_size_mb:.1f}MB, components: {components})"
+                f"({len(seq_ids)} sequences, {file_size_mb:.1f}MB)"
+            )
+            self.logger.info(
+                f"  Components: {components} | "
+                f"Candidates: {total_candidates} total ({mean_candidates_per_seq:.1f} avg) | "
+                f"Embed dim: {embed_dim}"
             )
             
             return chunk_meta
@@ -901,43 +1072,52 @@ class ChunkManager:
             
             # Handle case where chunk already exists (incomplete chunk continuation)
             if chunk_id in self.chunks_metadata:
-                # This chunk already exists - we're completing it
-                existing_chunk = self.chunks_metadata[chunk_id]
-                existing_sequences = set(existing_chunk.get_sequence_range())
-                
-                # Check if we now have all missing sequences for this chunk
-                missing_sequences = expected_sequences - existing_sequences
-                buffered_missing = buffered_for_chunk & missing_sequences
-                
-                if len(buffered_missing) == len(missing_sequences):
-                    # We have all missing sequences - complete the chunk
-                    # Load existing chunk data
-                    existing_data = self.load_chunk(chunk_id)
-                    if existing_data is None:
-                        self.logger.error(f"Failed to load existing chunk {chunk_id} for completion")
-                        break
+                # This chunk already exists - check if the file actually exists
+                chunk_file = self.get_chunk_file_path(chunk_id)
+                if chunk_file.exists():
+                    # Chunk file exists - we're completing it
+                    existing_chunk = self.chunks_metadata[chunk_id]
+                    existing_sequences = set(existing_chunk.get_sequence_range())
                     
-                    # Merge with new buffered data
-                    chunk_data = existing_data.copy()
-                    for seq_id in buffered_missing:
-                        chunk_data[seq_id] = self.sequence_buffer[seq_id]
+                    # Check if we now have all missing sequences for this chunk
+                    missing_sequences = expected_sequences - existing_sequences
+                    buffered_missing = buffered_for_chunk & missing_sequences
                     
-                    # Save the completed chunk (will overwrite existing)
-                    chunk_meta = self._save_single_chunk(chunk_data, pipeline_config, chunk_id)
-                    if chunk_meta:
-                        saved_chunks.append(chunk_meta)
-                    
-                    # Remove saved sequences from buffer
-                    for seq_id in buffered_missing:
-                        self.sequence_buffer.pop(seq_id, None)
+                    if len(buffered_missing) == len(missing_sequences):
+                        # We have all missing sequences - complete the chunk
+                        # Load existing chunk data
+                        existing_data = self.load_chunk(chunk_id)
+                        if existing_data is None:
+                            self.logger.error(f"Failed to load existing chunk {chunk_id} for completion")
+                            break
                         
-                    self.logger.info(
-                        f"Completed existing chunk {chunk_id}: sequences {start_seq_id}-{end_seq_id} "
-                        f"(added {len(buffered_missing)} sequences, {self.chunk_size} total)"
-                    )
+                        # Merge with new buffered data
+                        chunk_data = existing_data.copy()
+                        for seq_id in buffered_missing:
+                            chunk_data[seq_id] = self.sequence_buffer[seq_id]
+                        
+                        # Save the completed chunk (will overwrite existing)
+                        chunk_meta = self._save_single_chunk(chunk_data, pipeline_config, chunk_id)
+                        if chunk_meta:
+                            saved_chunks.append(chunk_meta)
+                        
+                        # Remove saved sequences from buffer
+                        for seq_id in buffered_missing:
+                            self.sequence_buffer.pop(seq_id, None)
+                            
+                        self.logger.info(
+                            f"Completed existing chunk {chunk_id}: sequences {start_seq_id}-{end_seq_id} "
+                            f"(added {len(buffered_missing)} sequences, {self.chunk_size} total)"
+                        )
+                    else:
+                        # Still missing some sequences for this chunk
+                        break
                 else:
-                    # Still missing some sequences for this chunk
-                    break
+                    # Chunk in metadata but file doesn't exist - treat as new chunk
+                    self.logger.warning(f"Chunk {chunk_id} in metadata but file missing - treating as new chunk")
+                    # Remove from metadata and proceed as new chunk
+                    self.chunks_metadata.pop(chunk_id, None)
+                    # Fall through to new chunk logic below
             else:
                 # New chunk - use original logic
                 if len(buffered_for_chunk) == self.chunk_size:

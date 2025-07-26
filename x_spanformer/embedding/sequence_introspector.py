@@ -381,14 +381,35 @@ class SequenceIntrospector:
                 print(f"\n== SEED EMBEDDINGS (H0) - SAMPLE VALUES:")
                 print(f"   Shape: {seed_embeddings.shape}")
                 if seed_embeddings.size > 0:
-                    # Show first 3 positions with first 10 dimensions each
-                    sample_positions = min(3, seed_embeddings.shape[0])
+                    seq_len = seed_embeddings.shape[0]
                     sample_dims = min(10, seed_embeddings.shape[1])
-                    print(f"   Sample values (first {sample_positions} positions, first {sample_dims} dimensions):")
-                    for i in range(sample_positions):
-                        values = seed_embeddings[i, :sample_dims]
-                        values_str = ' '.join([f"{v:8.6f}" for v in values])
-                        print(f"     Position {i:3d}: [{values_str}...]")
+                    
+                    if seq_len <= 20:
+                        # If sequence is short, show all positions
+                        print(f"   Sample values (all {seq_len} positions, first {sample_dims} dimensions):")
+                        for i in range(seq_len):
+                            values = seed_embeddings[i, :sample_dims]
+                            values_str = ' '.join([f"{v:8.6f}" for v in values])
+                            print(f"     Position {i:3d}: [{values_str}...]")
+                    else:
+                        # Show first 10, ..., last 10 positions
+                        print(f"   Sample values (first 10, ..., last 10 positions, first {sample_dims} dimensions):")
+                        
+                        # First 10 positions
+                        for i in range(10):
+                            values = seed_embeddings[i, :sample_dims]
+                            values_str = ' '.join([f"{v:8.6f}" for v in values])
+                            print(f"     Position {i:3d}: [{values_str}...]")
+                        
+                        # Ellipsis
+                        if seq_len > 20:
+                            print(f"     ... ({seq_len - 20} positions omitted) ...")
+                        
+                        # Last 10 positions
+                        for i in range(max(10, seq_len - 10), seq_len):
+                            values = seed_embeddings[i, :sample_dims]
+                            values_str = ' '.join([f"{v:8.6f}" for v in values])
+                            print(f"     Position {i:3d}: [{values_str}...]")
             else:
                 print(f"\n== SEED EMBEDDINGS (H0):")
                 print(f"   Not available (disabled for performance optimization)")
@@ -399,14 +420,35 @@ class SequenceIntrospector:
                 print(f"\n== CONTEXTUAL EMBEDDINGS (H) - SAMPLE VALUES:")
                 print(f"   Shape: {contextual_embeddings.shape}")
                 if contextual_embeddings.size > 0:
-                    # Show first 3 positions with first 10 dimensions each
-                    sample_positions = min(3, contextual_embeddings.shape[0])
+                    seq_len = contextual_embeddings.shape[0]
                     sample_dims = min(10, contextual_embeddings.shape[1])
-                    print(f"   Sample values (first {sample_positions} positions, first {sample_dims} dimensions):")
-                    for i in range(sample_positions):
-                        values = contextual_embeddings[i, :sample_dims]
-                        values_str = ' '.join([f"{v:8.6f}" for v in values])
-                        print(f"     Position {i:3d}: [{values_str}...]")
+                    
+                    if seq_len <= 20:
+                        # If sequence is short, show all positions
+                        print(f"   Sample values (all {seq_len} positions, first {sample_dims} dimensions):")
+                        for i in range(seq_len):
+                            values = contextual_embeddings[i, :sample_dims]
+                            values_str = ' '.join([f"{v:8.6f}" for v in values])
+                            print(f"     Position {i:3d}: [{values_str}...]")
+                    else:
+                        # Show first 10, ..., last 10 positions
+                        print(f"   Sample values (first 10, ..., last 10 positions, first {sample_dims} dimensions):")
+                        
+                        # First 10 positions
+                        for i in range(10):
+                            values = contextual_embeddings[i, :sample_dims]
+                            values_str = ' '.join([f"{v:8.6f}" for v in values])
+                            print(f"     Position {i:3d}: [{values_str}...]")
+                        
+                        # Ellipsis
+                        if seq_len > 20:
+                            print(f"     ... ({seq_len - 20} positions omitted) ...")
+                        
+                        # Last 10 positions
+                        for i in range(max(10, seq_len - 10), seq_len):
+                            values = contextual_embeddings[i, :sample_dims]
+                            values_str = ' '.join([f"{v:8.6f}" for v in values])
+                            print(f"     Position {i:3d}: [{values_str}...]")
             else:
                 print(f"\n== CONTEXTUAL EMBEDDINGS (H):")
                 print(f"   Not available (unexpected - this should always be present)")
