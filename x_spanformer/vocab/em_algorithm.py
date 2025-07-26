@@ -38,7 +38,7 @@ PERPLEXITY_CAP = 1000000.0  # Cap perplexity at 1M instead of inf for better num
 MAX_WORKERS = min(MAX_WORKERS_LIMIT, (multiprocessing.cpu_count() or 1) + WORKER_CPU_OFFSET)
 
 
-def _process_segment_batch(segment_batch: List[str], V: List[str], p_u: Dict[str, float]) -> Counter:
+def _process_segment_batch(segment_batch: List[str], V: List[str], p_u: Dict[str, float], case_handling: str = "normalize") -> Counter:
     """
     Process a batch of segments for E-step (used by worker processes).
     
@@ -46,13 +46,14 @@ def _process_segment_batch(segment_batch: List[str], V: List[str], p_u: Dict[str
         segment_batch: Batch of text segments to process
         V: Vocabulary list
         p_u: Probability dictionary
+        case_handling: Case handling strategy
         
     Returns:
         Counter of piece counts for this batch
     """
     batch_counts = Counter()
     for segment in segment_batch:
-        segmentation = viterbi_segment(segment, V, p_u)
+        segmentation = viterbi_segment(segment, V, p_u, case_handling)
         for piece in segmentation:
             batch_counts[piece] += 1
     return batch_counts
@@ -62,6 +63,7 @@ async def _process_segments_parallel(
     corpus: List[str], 
     V: List[str], 
     p_u: Dict[str, float], 
+    case_handling: str = "normalize",
     batch_size: Optional[int] = None
 ) -> Counter:
     """
@@ -71,6 +73,7 @@ async def _process_segments_parallel(
         corpus: List of text segments
         V: Vocabulary list  
         p_u: Probability dictionary
+        case_handling: Case handling strategy
         batch_size: Size of batches to process (auto-calculated if None)
         
     Returns:
@@ -90,8 +93,8 @@ async def _process_segments_parallel(
     # Process batches in parallel using ProcessPoolExecutor
     loop = asyncio.get_event_loop()
     with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        # Create partial function with fixed V and p_u parameters
-        process_func = partial(_process_segment_batch, V=V, p_u=p_u)
+        # Create partial function with fixed V, p_u and case_handling parameters
+        process_func = partial(_process_segment_batch, V=V, p_u=p_u, case_handling=case_handling)
         
         # Submit all batch processing tasks at once for better throughput
         tasks = [
@@ -127,7 +130,8 @@ async def _process_segments_parallel(
 def _compute_segment_perplexity_batch(
     segment_batch: List[str], 
     V: List[str], 
-    p_u: Dict[str, float]
+    p_u: Dict[str, float],
+    case_handling: str = "normalize"
 ) -> Tuple[float, int, int]:
     """
     Compute perplexity metrics for a batch of segments (used by worker processes).
@@ -136,6 +140,7 @@ def _compute_segment_perplexity_batch(
         segment_batch: Batch of text segments
         V: Vocabulary list
         p_u: Probability dictionary
+        case_handling: Case handling strategy
         
     Returns:
         Tuple of (total_log_prob, total_pieces, total_oov_positions)
@@ -145,7 +150,7 @@ def _compute_segment_perplexity_batch(
     total_oov_positions = 0
     
     for segment in segment_batch:
-        segmentation = viterbi_segment(segment, V, p_u)
+        segmentation = viterbi_segment(segment, V, p_u, case_handling)
         
         # Count pieces for this segment (piece-level normalization per paper)
         total_pieces += len(segmentation)
@@ -171,7 +176,8 @@ def _compute_segment_perplexity_batch(
 def _compute_coverage_batch(
     segment_batch: List[str], 
     V: List[str], 
-    p_u: Dict[str, float]
+    p_u: Dict[str, float],
+    case_handling: str = "normalize"
 ) -> Tuple[int, int]:
     """
     Compute coverage metrics for a batch of segments (used by worker processes).
@@ -180,6 +186,7 @@ def _compute_coverage_batch(
         segment_batch: Batch of text segments
         V: Vocabulary list
         p_u: Probability dictionary
+        case_handling: Case handling strategy
         
     Returns:
         Tuple of (total_covered_positions, total_positions)
@@ -190,7 +197,7 @@ def _compute_coverage_batch(
     total_positions = 0
     
     for segment in segment_batch:
-        segmentation = viterbi_segment(segment, V, p_u)
+        segmentation = viterbi_segment(segment, V, p_u, case_handling)
         covered = compute_coverage(segment, segmentation)
         total_covered += len(covered)
         total_positions += len(segment)
@@ -202,6 +209,7 @@ async def compute_corpus_coverage_parallel(
     corpus: List[str], 
     V: List[str], 
     p_u: Dict[str, float],
+    case_handling: str = "normalize",
     batch_size: Optional[int] = None
 ) -> float:
     """
@@ -231,7 +239,7 @@ async def compute_corpus_coverage_parallel(
     loop = asyncio.get_event_loop()
     with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         # Create partial function with fixed parameters
-        coverage_func = partial(_compute_coverage_batch, V=V, p_u=p_u)
+        coverage_func = partial(_compute_coverage_batch, V=V, p_u=p_u, case_handling=case_handling)
         
         # Submit all batch processing tasks
         tasks = [
@@ -266,7 +274,8 @@ async def compute_corpus_coverage_parallel(
 def _compute_oov_batch(
     segment_batch: List[str], 
     V: List[str], 
-    p_u: Dict[str, float]
+    p_u: Dict[str, float],
+    case_handling: str = "normalize"
 ) -> Tuple[int, int]:
     """
     Compute OOV metrics for a batch of segments (used by worker processes).
@@ -275,6 +284,7 @@ def _compute_oov_batch(
         segment_batch: Batch of text segments
         V: Vocabulary list
         p_u: Probability dictionary
+        case_handling: Case handling strategy
         
     Returns:
         Tuple of (total_positions, total_oov_positions)
@@ -283,7 +293,7 @@ def _compute_oov_batch(
     total_oov_positions = 0
     
     for segment in segment_batch:
-        segmentation = viterbi_segment(segment, V, p_u)
+        segmentation = viterbi_segment(segment, V, p_u, case_handling)
         covered_positions = sum(len(piece) for piece in segmentation)
         oov_positions = len(segment) - covered_positions
         
@@ -297,6 +307,7 @@ async def compute_baseline_oov_parallel(
     corpus: List[str], 
     V: List[str], 
     p_u: Dict[str, float],
+    case_handling: str = "normalize",
     batch_size: Optional[int] = None
 ) -> float:
     """
@@ -326,7 +337,7 @@ async def compute_baseline_oov_parallel(
     loop = asyncio.get_event_loop()
     with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         # Create partial function with fixed parameters
-        oov_func = partial(_compute_oov_batch, V=V, p_u=p_u)
+        oov_func = partial(_compute_oov_batch, V=V, p_u=p_u, case_handling=case_handling)
         
         # Submit all batch processing tasks
         tasks = [
@@ -361,7 +372,8 @@ async def compute_baseline_oov_parallel(
 def _compute_baseline_batch(
     segment_batch: List[str], 
     V: List[str], 
-    p_u: Dict[str, float]
+    p_u: Dict[str, float],
+    case_handling: str = "normalize"
 ) -> Tuple[int, float]:
     """
     Compute baseline perplexity metrics for a batch of segments (used by worker processes).
@@ -370,6 +382,7 @@ def _compute_baseline_batch(
         segment_batch: Batch of text segments
         V: Vocabulary list
         p_u: Probability dictionary
+        case_handling: Case handling strategy
         
     Returns:
         Tuple of (total_pieces, total_log_prob)
@@ -378,7 +391,7 @@ def _compute_baseline_batch(
     total_log_prob = 0.0
     
     for segment in segment_batch:
-        segmentation = viterbi_segment(segment, V, p_u)
+        segmentation = viterbi_segment(segment, V, p_u, case_handling)
         total_pieces += len(segmentation)
         
         for piece in segmentation:
@@ -396,6 +409,7 @@ async def compute_baseline_perplexity_parallel(
     corpus: List[str], 
     V: List[str], 
     p_u: Dict[str, float],
+    case_handling: str = "normalize",
     batch_size: Optional[int] = None
 ) -> float:
     """
@@ -427,7 +441,7 @@ async def compute_baseline_perplexity_parallel(
     loop = asyncio.get_event_loop()
     with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         # Create partial function with fixed parameters
-        baseline_func = partial(_compute_baseline_batch, V=V, p_u=p_u)
+        baseline_func = partial(_compute_baseline_batch, V=V, p_u=p_u, case_handling=case_handling)
         
         # Submit all batch processing tasks
         tasks = [
@@ -491,6 +505,7 @@ async def _compute_perplexity_parallel(
     corpus: List[str], 
     V: List[str], 
     p_u: Dict[str, float],
+    case_handling: str = "normalize",
     batch_size: Optional[int] = None
 ) -> Tuple[float, float]:
     """
@@ -518,7 +533,7 @@ async def _compute_perplexity_parallel(
     loop = asyncio.get_event_loop()
     with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         # Create partial function with fixed parameters
-        compute_func = partial(_compute_segment_perplexity_batch, V=V, p_u=p_u)
+        compute_func = partial(_compute_segment_perplexity_batch, V=V, p_u=p_u, case_handling=case_handling)
         
         # Submit all batch processing tasks
         tasks = [
@@ -642,7 +657,8 @@ def adaptive_pruning(
     current_ppl: float,
     eps: float,
     tau_ppl: float,
-    delta_oov: float
+    delta_oov: float,
+    case_handling: str = "normalize"
 ) -> Tuple[List[str], float]:
     """
     Perform adaptive pruning following the paper's criteria.
@@ -714,7 +730,7 @@ def adaptive_pruning(
         p_prime = {v: p_next[v] / total_prob_remaining for v in V_prime}
         
         # Simulate removal and compute new metrics using pruning formula
-        ppl_prime, oov_prime = asyncio.run(_compute_perplexity_parallel(corpus, V_prime, p_prime))
+        ppl_prime, oov_prime = asyncio.run(_compute_perplexity_parallel(corpus, V_prime, p_prime, case_handling))
         
         # Check pruning criteria from the paper
         ppl_increase = ppl_prime - current_ppl_updated
@@ -748,7 +764,7 @@ def induce_vocabulary(
         corpus: List of text segments
         V: Initial candidate vocabulary
         freq: Frequency counter for vocabulary pieces
-        hyperparams: Dictionary with T_max_iters, min_piece_prob, delta_perplexity, delta_oov
+        hyperparams: Dictionary with T_max_iters, min_piece_prob, delta_perplexity, delta_oov, case_handling
         output_dir: Optional output directory for intermediate results
         
     Returns:
@@ -765,8 +781,9 @@ def induce_vocabulary(
     eps = float(hyperparams["min_piece_prob"])
     tau_ppl = float(hyperparams["delta_perplexity"])
     delta_oov = float(hyperparams["delta_oov"])
+    case_handling = hyperparams.get("case_handling", "normalize")
     
-    logger.info(f"Hyperparameters: T_max={T_max}, min_prob={eps}, delta_ppl={tau_ppl}, delta_oov={delta_oov}")
+    logger.info(f"Hyperparameters: T_max={T_max}, min_prob={eps}, delta_ppl={tau_ppl}, delta_oov={delta_oov}, case={case_handling}")
 
     # Initialize piece probabilities
     logger.info("Step 1: Initializing probabilities...")
@@ -776,11 +793,11 @@ def induce_vocabulary(
 
     # Compute baseline perplexity
     logger.info("Step 2: Computing baseline perplexity...")
-    baseline_ppl = asyncio.run(compute_baseline_perplexity_parallel(corpus, V, p_u))
+    baseline_ppl = asyncio.run(compute_baseline_perplexity_parallel(corpus, V, p_u, case_handling))
     
     # Compute baseline OOV rate using parallel processing
     logger.info("Step 2b: Computing baseline OOV rate...")
-    baseline_oov = asyncio.run(compute_baseline_oov_parallel(corpus, V, p_u))
+    baseline_oov = asyncio.run(compute_baseline_oov_parallel(corpus, V, p_u, case_handling))
     
     logger.info(f"  → Baseline: PPL={baseline_ppl:.2f}, OOV={baseline_oov:.4f}")
 
@@ -798,7 +815,7 @@ def induce_vocabulary(
         
         # Adaptive pruning
         V, current_ppl = adaptive_pruning(
-            corpus, V, p_next, current_ppl, eps, tau_ppl, delta_oov
+            corpus, V, p_next, current_ppl, eps, tau_ppl, delta_oov, case_handling
         )
         logger.info(f"  → After pruning: {len(V):,} pieces, PPL={current_ppl:.2f}")
 
@@ -812,8 +829,8 @@ def induce_vocabulary(
     
     # Run both final computations in parallel using asyncio.run
     async def compute_final_stats():
-        coverage_task = compute_corpus_coverage_parallel(corpus, V, p_u)
-        perplexity_task = _compute_perplexity_parallel(corpus, V, p_u)
+        coverage_task = compute_corpus_coverage_parallel(corpus, V, p_u, case_handling)
+        perplexity_task = _compute_perplexity_parallel(corpus, V, p_u, case_handling)
         return await asyncio.gather(coverage_task, perplexity_task)
     
     final_coverage, (final_ppl, final_oov_rate) = asyncio.run(compute_final_stats())

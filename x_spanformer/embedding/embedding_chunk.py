@@ -289,19 +289,19 @@ class ChunkManager:
             arrays_to_save['sequence_ids'] = np.array(seq_ids)
             components.append('context')
             
+            # Seed embeddings are always required now (Section 3.3 requirement)
+            seed_embeddings = []
+            for seq_id in seq_ids:
+                if 'seed_embeddings' in chunk_data[seq_id]:
+                    seed_embeddings.append(chunk_data[seq_id]['seed_embeddings'])
+                else:
+                    self.logger.warning(f"Sequence {seq_id} missing seed_embeddings (required)")
+                    return None
+            arrays_to_save['seed_embeddings'] = np.array(seed_embeddings, dtype=object)
+            components.append('seed')
+            
             # Conditionally save other components based on config
             output_config = pipeline_config.get('output', {})
-            
-            if output_config.get('save_seed_embeddings', False):
-                seed_embeddings = []
-                for seq_id in seq_ids:
-                    if 'seed_embeddings' in chunk_data[seq_id]:
-                        seed_embeddings.append(chunk_data[seq_id]['seed_embeddings'])
-                    else:
-                        self.logger.warning(f"Sequence {seq_id} missing seed_embeddings but config requires it")
-                        return None
-                arrays_to_save['seed_embeddings'] = np.array(seed_embeddings, dtype=object)
-                components.append('seed')
             
             if output_config.get('save_soft_probabilities', False):
                 soft_probs = []
@@ -1043,13 +1043,11 @@ def save_sequence_individually_chunked(chunk_manager: ChunkManager, result_buffe
         # Always save contextual embeddings and basic data
         processed_result['sequence'] = result['sequence']
         processed_result['span_candidates'] = result['span_candidates']
+        processed_result['seed_embeddings'] = result['seed_embeddings'].detach().cpu().numpy()  # Always required
         processed_result['contextual_embeddings'] = result['contextual_embeddings'].detach().cpu().numpy()
         
         # Conditionally save other components based on config
         output_config = pipeline_config.get('output', {})
-        
-        if output_config.get('save_seed_embeddings', False):
-            processed_result['seed_embeddings'] = result['seed_embeddings'].detach().cpu().numpy()
         
         if output_config.get('save_soft_probabilities', False):
             processed_result['soft_probabilities'] = result['soft_probabilities'].detach().cpu().numpy()
@@ -1097,12 +1095,12 @@ def save_sequence_results_chunked(chunk_manager: ChunkManager, result_buffer: Di
         # Estimate size for logging
         total_size_mb += result['contextual_embeddings'].numel() * 4 / (1024 * 1024)  # float32 = 4 bytes
         
+        # Seed embeddings are always required now
+        processed_result['seed_embeddings'] = result['seed_embeddings'].detach().cpu().numpy()
+        total_size_mb += result['seed_embeddings'].numel() * 4 / (1024 * 1024)
+        
         # Conditionally save other components based on config
         output_config = pipeline_config.get('output', {})
-        
-        if output_config.get('save_seed_embeddings', False):
-            processed_result['seed_embeddings'] = result['seed_embeddings'].detach().cpu().numpy()
-            total_size_mb += result['seed_embeddings'].numel() * 4 / (1024 * 1024)
         
         if output_config.get('save_soft_probabilities', False):
             processed_result['soft_probabilities'] = result['soft_probabilities'].detach().cpu().numpy()
@@ -1151,9 +1149,9 @@ def save_sequence_results_chunked_legacy(chunk_manager: ChunkManager, result_buf
         # Conditionally save other components based on config
         output_config = pipeline_config.get('output', {})
         
-        if output_config.get('save_seed_embeddings', False):
-            processed_result['seed_embeddings'] = result['seed_embeddings'].detach().cpu().numpy()
-            total_size_mb += result['seed_embeddings'].numel() * 4 / (1024 * 1024)
+        # Seed embeddings are always required now
+        processed_result['seed_embeddings'] = result['seed_embeddings'].detach().cpu().numpy()
+        total_size_mb += result['seed_embeddings'].numel() * 4 / (1024 * 1024)
         
         if output_config.get('save_soft_probabilities', False):
             processed_result['soft_probabilities'] = result['soft_probabilities'].detach().cpu().numpy()

@@ -10,7 +10,7 @@ from typing import List, Dict, Set, Union
 from .core import viterbi_segment, compute_coverage
 
 
-def validate_vocabulary_completeness(corpus: List[str], V: List[str]) -> None:
+def validate_vocabulary_completeness(corpus: List[str], V: List[str], case_handling: str = "normalize") -> None:
     """
     Validate that vocabulary includes all single codepoints from corpus.
     
@@ -20,12 +20,19 @@ def validate_vocabulary_completeness(corpus: List[str], V: List[str]) -> None:
     Args:
         corpus: List of text segments
         V: Vocabulary list
+        case_handling: Case handling strategy ("normalize" or "preserve")
         
     Raises:
         ValueError: If vocabulary is missing required single codepoints
     """
+    # Apply the same case normalization as used during vocabulary construction
+    if case_handling == "normalize":
+        corpus_for_validation = [text.lower() for text in corpus]
+    else:  # preserve
+        corpus_for_validation = corpus
+    
     corpus_chars = set()
-    for x in corpus:
+    for x in corpus_for_validation:
         corpus_chars.update(x)
     
     vocab_chars = set(u for u in V if len(u) == 1)
@@ -70,7 +77,8 @@ def validate_probabilities(p_u: Dict[str, float]) -> None:
 def validate_segmentation_consistency(
     corpus: List[str], 
     V: List[str], 
-    p_u: Dict[str, float]
+    p_u: Dict[str, float],
+    case_handling: str = "normalize"
 ) -> Dict[str, int]:
     """
     Validate that segmentation is consistent across the corpus.
@@ -96,13 +104,15 @@ def validate_segmentation_consistency(
     
     for i, x in enumerate(corpus):
         try:
-            segmentation = viterbi_segment(x, V, p_u)
+            segmentation = viterbi_segment(x, V, p_u, case_handling)
             coverage = compute_coverage(x, segmentation)
             
             # Check if segmentation reconstructs original string
             reconstructed = ''.join(segmentation)
-            if reconstructed != x:
-                raise ValueError(f"Segmentation failed to reconstruct string at index {i}: '{x}' != '{reconstructed}'")
+            # For case normalization, compare normalized versions
+            expected = x.lower() if case_handling == "normalize" else x
+            if reconstructed != expected:
+                raise ValueError(f"Segmentation failed to reconstruct string at index {i}: '{expected}' != '{reconstructed}'")
                 
             stats["successful_segments"] += 1
             stats["total_coverage"] += len(coverage)

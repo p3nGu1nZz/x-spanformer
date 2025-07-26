@@ -341,8 +341,39 @@ class SequenceIntrospector:
             print(f"\n== SEQUENCE PREVIEW:")
             print(f"   {repr(analysis['sequence_preview'])}")
             
-            # Always show partial arrays (removed verbose requirement)
+            # Load data once for both span candidates and arrays display
             data = self.load_sequence(seq_id)
+            metadata = data['metadata']
+            
+            # Show span candidates if available
+            if metadata and metadata.get('span_candidates'):
+                span_candidates = metadata['span_candidates']
+                print(f"\n== SPAN CANDIDATES:")
+                print(f"   Total candidates: {len(span_candidates)}")
+                
+                # Show first 10 candidates with their text
+                sequence_text = metadata.get('sequence', '')
+                if sequence_text and len(span_candidates) > 0:
+                    print(f"   First 10 candidates:")
+                    for i, (start, end) in enumerate(span_candidates[:10]):
+                        candidate_text = sequence_text[start:end] if start < len(sequence_text) and end <= len(sequence_text) else "<invalid>"
+                        print(f"     {i+1:2d}. [{start:3d}, {end:3d}) = {repr(candidate_text)}")
+                    
+                    if len(span_candidates) > 10:
+                        print(f"     ... and {len(span_candidates) - 10} more candidates")
+                else:
+                    print(f"   Cannot display candidate text (sequence not available)")
+                    # Show positions only
+                    for i, (start, end) in enumerate(span_candidates[:10]):
+                        print(f"     {i+1:2d}. [{start:3d}, {end:3d}) length={end-start}")
+                    if len(span_candidates) > 10:
+                        print(f"     ... and {len(span_candidates) - 10} more candidates")
+            else:
+                print(f"\n== SPAN CANDIDATES:")
+                print(f"   Not available in metadata")
+            
+            # Always show partial arrays (removed verbose requirement)
+            # (data already loaded above)
             
             # Show seed embeddings sample (if available)
             if data['seed_embeddings'] is not None:

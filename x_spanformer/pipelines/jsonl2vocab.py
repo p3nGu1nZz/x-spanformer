@@ -86,10 +86,7 @@ def load_hparams(path: Path) -> dict:
     return hparams
 
 
-
-
-
-def build_candidate_set_with_output(corpus: List[str], L_max: int, M: int, out: Path) -> Tuple[List[str], Counter]:
+def build_candidate_set_with_output(corpus: List[str], L_max: int, M: int, case_handling: str, out: Path) -> Tuple[List[str], Counter]:
     """
     Build candidate set and save output files for inspection.
     
@@ -103,6 +100,7 @@ def build_candidate_set_with_output(corpus: List[str], L_max: int, M: int, out: 
         corpus: List of text segments from JSONL files
         L_max: Maximum substring length (paper: L_max)
         M: Number of top multi-character substrings to keep (paper: M)
+        case_handling: Case handling strategy ("normalize" or "preserve")
         out: Output directory for intermediate results
         
     Returns:
@@ -112,16 +110,16 @@ def build_candidate_set_with_output(corpus: List[str], L_max: int, M: int, out: 
     logger.info("=" * 50)
     logger.info("STAGE 2: CANDIDATE SET GENERATION")
     logger.info("=" * 50)
-    logger.info(f"Parameters: L_max={L_max}, M_candidates={M}")
+    logger.info(f"Parameters: L_max={L_max}, M_candidates={M}, case_handling={case_handling}")
     
     freq_dir = out / "full_freq"
     freq_dir.mkdir(parents=True, exist_ok=True)
 
     start_time = time.time()
     
-    # Use the core function
+    # Use the core function with case handling
     logger.info("Extracting candidate substrings from corpus...")
-    U_0, freq = build_candidate_set(corpus, L_max, M)
+    U_0, freq = build_candidate_set(corpus, L_max, M, case_handling)
     
     extraction_time = time.time() - start_time
     logger.info(f"Candidate extraction completed in {extraction_time:.2f} seconds")
@@ -289,11 +287,11 @@ def main():
     corpus = load_corpus_with_logging(files, stage_name="CORPUS LOADING")
     
     # Build initial vocabulary U_0 with frequency-based candidate selection
-    U_0, freq = build_candidate_set_with_output(corpus, h["L_max"], h["M_candidates"], out)
+    U_0, freq = build_candidate_set_with_output(corpus, h["L_max"], h["M_candidates"], h.get("case_handling", "normalize"), out)
     
     # Validate vocabulary completeness before proceeding
     logger.info("Validating vocabulary completeness...")
-    validate_vocabulary_completeness(corpus, U_0)
+    validate_vocabulary_completeness(corpus, U_0, h.get("case_handling", "normalize"))
     logger.info("Vocabulary completeness validation passed")
     
     # Algorithm Steps 2-19: EM-based vocabulary induction with adaptive pruning
@@ -309,8 +307,16 @@ def main():
     
     logger.info("EM algorithm completed successfully")
     
+    # Apply case normalization to corpus for downstream consistency
+    case_handling = h.get("case_handling", "normalize")
+    if case_handling == "normalize":
+        normalized_corpus = [text.lower() for text in corpus]
+        logger.info("Applied case normalization to corpus for downstream pipelines")
+    else:
+        normalized_corpus = corpus
+    
     # Save consolidated corpus for downstream pipelines (renamed to corpus.jsonl)
-    corpus_path = save_consolidated_corpus(corpus, out, filename="corpus.jsonl", source_info="jsonl2vocab")
+    corpus_path = save_consolidated_corpus(normalized_corpus, out, filename="corpus.jsonl", source_info="jsonl2vocab")
     
     # Save final vocabulary with statistics following VocabStats schema
     save_vocab(out / "vocab.jsonl", V_final, p_final, stats)
@@ -325,13 +331,14 @@ def main():
     logger.info(f"Pipeline completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"Total execution time: {pipeline_time:.2f} seconds")
     logger.info(f"Final vocabulary size: {len(V_final)} pieces")
-    logger.info(f"Consolidated corpus: {corpus_path} ({len(corpus)} sequences)")
+    corpus_status = "normalized" if case_handling == "normalize" else "original"
+    logger.info(f"Consolidated corpus: {corpus_path} ({len(normalized_corpus)} sequences, {corpus_status})")
     logger.info(f"Output files saved to: {out}")
     logger.info("=" * 80)
 
     logger.info(f"[bold green]✅ Vocabulary induction complete! → {out / 'vocab.jsonl'}[/bold green]")
     logger.info(f"[dim]Final vocabulary size: {len(V_final)} pieces[/dim]")
-    logger.info(f"[dim]Consolidated corpus: {corpus_path.name} ({len(corpus)} sequences)[/dim]")
+    logger.info(f"[dim]Consolidated corpus: {corpus_path.name} ({len(normalized_corpus)} sequences, {corpus_status})[/dim]")
     logger.info(f"[dim]Baseline PPL: {stats.get('baseline_ppl', 'N/A'):.2f}, Final PPL: {stats.get('final_ppl', 'N/A'):.2f}[/dim]")
     logger.info(f"[dim]OOV rate: {stats.get('oov_rate', 0.0):.4f}, EM iterations: {stats.get('em_iterations', 0)}[/dim]")
     logger.info(f"[dim]Pipeline completed in {pipeline_time:.1f}s[/dim]")

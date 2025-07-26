@@ -4,3 +4,4 @@ T_max_iters: 5 # EM iters
 min_piece_prob: 1e-6 # prune threshold ε
 delta_perplexity: 0.01 # max ΔPPL per prune
 delta_oov: 0.001 # max ΔOOV per prune
+case_handling: "normalize" # "normalize" or "preserve"

@@ -681,8 +681,8 @@ class Vocab2EmbeddingPipeline:
         self.max_piece_length = numerical_config.get('max_piece_length', 8)
         self.save_intermediate = output_config.get('save_intermediate', True)
         
-        # Optional embedding controls (contextual embeddings H are ALWAYS saved as essential)
-        self.save_seed_embeddings = output_config.get('save_seed_embeddings', False)  # Optional intermediate H⁰
+        # Essential embedding controls (seed H⁰ and contextual H embeddings are ALWAYS saved as required)
+        # Seed embeddings are required for Section 3.3 span prediction pipeline
         
         self.save_json_metadata = output_config.get('save_json_metadata', True)
         self.add_analysis = output_config.get('add_analysis', False)
@@ -1565,9 +1565,9 @@ def verify_processed_sequence(json_dir: Path, seed_dir: Path, context_dir: Path,
                     if not all(key in data for key in ['sequence_id', 'sequence', 'num_candidates']):
                         return False
         
-        if output_config.get('save_seed_embeddings', False):
-            seed_file = seed_dir / f"seed_emb_{seq_id:06d}.npy"
-            files_to_check.append(seed_file)
+        # Seed embeddings are always required now
+        seed_file = seed_dir / f"seed_emb_{seq_id:06d}.npy"
+        files_to_check.append(seed_file)
         
         if output_config.get('save_soft_probabilities', False):
             # Check for soft probabilities (either .npy or .npz format)
@@ -1787,13 +1787,12 @@ def main():
                             processed_result = {
                                 'sequence': sequence,
                                 'span_candidates': result['span_candidates'],
+                                'seed_embeddings': result['seed_embeddings'].detach().cpu().numpy(),  # Always required
                                 'contextual_embeddings': result['contextual_embeddings'].detach().cpu().numpy()
                             }
                             
                             # Conditionally add other components based on config
                             output_config = pipeline.config.get('output', {})
-                            if output_config.get('save_seed_embeddings', False):
-                                processed_result['seed_embeddings'] = result['seed_embeddings'].detach().cpu().numpy()
                             if output_config.get('save_soft_probabilities', False):
                                 processed_result['soft_probabilities'] = result['soft_probabilities'].detach().cpu().numpy()
                             

@@ -53,12 +53,6 @@ output:
   # Chunked storage configuration - saves embeddings in batches for better I/O efficiency
   chunk_size: 100 # Number of sequences per chunk file (overrideable via --chunk-size)
 
-  # OPTIONAL: Seed embeddings (H0) - intermediate representation for analysis
-  # Only needed for debugging vocabulary distribution before contextualization
-  # Disable by default since only contextual embeddings (H) are needed downstream (saves ~1MB per sequence)
-  # Note: Contextual embeddings (H) are ALWAYS saved as they're essential for ALL downstream tasks
-  save_seed_embeddings: false
-
   # Include JSON metadata with embeddings (disable by default - not needed for core tasks)
   save_json_metadata: false
 
