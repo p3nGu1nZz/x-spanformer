@@ -260,13 +260,13 @@ class TestJsonl2VocabPipeline:
         mock_build_candidates.return_value = (["a", "b", "hello"], Counter({"a": 5, "b": 3, "hello": 2}))
         
         corpus = ["hello", "ab"]
-        U_0, freq = jsonl2vocab.build_candidate_set_with_output(corpus, 5, 10, self.output_dir)
+        U_0, freq = jsonl2vocab.build_candidate_set_with_output(corpus, 5, 10, "lower", self.output_dir)
         
         assert U_0 == ["a", "b", "hello"]
         assert freq == Counter({"a": 5, "b": 3, "hello": 2})
         
-        # Verify the core function was called
-        mock_build_candidates.assert_called_once_with(corpus, 5, 10)
+        # Verify the core function was called with new signature
+        mock_build_candidates.assert_called_once_with(corpus, 5, 10, "lower")
         assert freq["a"] == 5
         assert freq["b"] == 3
         assert freq["hello"] == 2
@@ -274,8 +274,6 @@ class TestJsonl2VocabPipeline:
         # Check output files were created
         assert (self.output_dir / "full_freq" / "full_freq.json").exists()
         assert (self.output_dir / "candidates" / "candidates.txt").exists()
-        
-        mock_build_candidates.assert_called_once_with(corpus, 5, 10)
     
     def test_save_vocab(self):
         """Test saving vocabulary to JSONL format."""

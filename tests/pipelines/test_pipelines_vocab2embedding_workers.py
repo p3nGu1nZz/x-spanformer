@@ -543,50 +543,55 @@ class TestResumeCapabilities(unittest.TestCase):
         }
     
     def create_mock_output_files(self, output_dir: Path, completed_seq_ids: List[int]):
-        """Create mock output files for specified sequence IDs."""
-        # Create directories
-        json_dir = output_dir / "json"
-        context_dir = output_dir / "context"
-        json_dir.mkdir(parents=True, exist_ok=True)
-        context_dir.mkdir(parents=True, exist_ok=True)
+        """Create mock chunk-based output files for specified sequence IDs."""
+        from x_spanformer.embedding.embedding_chunk import ChunkManager
         
+        # Create chunk manager with appropriate chunk size
+        chunk_manager = ChunkManager(output_dir, chunk_size=5)
+        
+        # Group sequences into chunks and create them
+        chunks_to_create = {}
         for seq_id in completed_seq_ids:
-            # Create context embedding file (always required)
-            context_file = context_dir / f"context_emb_{seq_id:06d}.npy"
-            mock_embedding = np.random.randn(10, 64).astype(np.float32)
-            np.save(context_file, mock_embedding)
-            
-            # Create JSON metadata if enabled
-            if self.config_data['output']['save_json_metadata']:
-                json_file = json_dir / f"embedding_{seq_id:06d}.json"
-                mock_metadata = {
-                    'sequence_id': seq_id,
+            chunk_start = ((seq_id - 1) // chunk_manager.chunk_size) * chunk_manager.chunk_size + 1
+            if chunk_start not in chunks_to_create:
+                chunks_to_create[chunk_start] = []
+            chunks_to_create[chunk_start].append(seq_id)
+        
+        # Create mock chunk data and save chunks
+        for chunk_start, seq_ids in chunks_to_create.items():
+            chunk_data = {}
+            for seq_id in seq_ids:
+                chunk_data[seq_id] = {
                     'sequence': f'sequence_{seq_id}',
-                    'sequence_length': 10,
-                    'num_candidates': 5,
+                    'contextual_embeddings': np.random.randn(10, 64).astype(np.float32),
+                    'seed_embeddings': np.random.randn(10, 64).astype(np.float32),  # Now required
                     'span_candidates': [(0, 2), (1, 3), (2, 5)]
                 }
-                with open(json_file, 'w') as f:
-                    json.dump(mock_metadata, f)
+                # Add optional components based on config
+                if self.config_data['output'].get('save_soft_probabilities', False):
+                    chunk_data[seq_id]['soft_probabilities'] = np.random.randn(10, 100).astype(np.float32)
+            
+            # Create minimal config for chunk saving
+            mock_config = {'output': self.config_data['output'].copy()}
+            chunk_manager.save_chunk(chunk_data, mock_config)
     
     def test_load_existing_records_continuous(self):
         """Test loading existing records when sequences are completed continuously."""
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
             
-            # Create mock files for sequences 1-3
+            # Create mock files for sequences 1-3 using ChunkManager
             completed_seq_ids = [1, 2, 3]
             self.create_mock_output_files(output_dir, completed_seq_ids)
             
-            # Load existing records
-            existing_records, last_processed = load_existing_records(
-                output_dir, self.config_data
-            )
+            # Use ChunkManager to load existing records
+            from x_spanformer.embedding.embedding_chunk import ChunkManager
+            chunk_manager = ChunkManager(output_dir, chunk_size=5)
+            existing_sequences = chunk_manager.get_existing_sequences()
             
             # Verify results
-            self.assertEqual(len(existing_records), 3)
-            self.assertEqual(last_processed, 3)
-            self.assertEqual(set(existing_records.keys()), {1, 2, 3})
+            self.assertEqual(len(existing_sequences), 3)
+            self.assertEqual(set(existing_sequences), {1, 2, 3})
     
     def test_load_existing_records_discontinuous(self):
         """Test loading existing records when sequences are completed discontinuously."""
@@ -597,35 +602,29 @@ class TestResumeCapabilities(unittest.TestCase):
             completed_seq_ids = [1, 3, 5]
             self.create_mock_output_files(output_dir, completed_seq_ids)
             
-            # Load existing records
-            existing_records, last_processed = load_existing_records(
-                output_dir, self.config_data
-            )
+            # Use ChunkManager to load existing records
+            from x_spanformer.embedding.embedding_chunk import ChunkManager
+            chunk_manager = ChunkManager(output_dir, chunk_size=5)
+            existing_sequences = chunk_manager.get_existing_sequences()
             
             # Verify results
-            self.assertEqual(len(existing_records), 3)
-            self.assertEqual(last_processed, 5)  # Should be max processed ID
-            self.assertEqual(set(existing_records.keys()), {1, 3, 5})
+            self.assertEqual(len(existing_sequences), 3)
+            self.assertEqual(set(existing_sequences), {1, 3, 5})
     
     def test_verify_processed_sequence_complete(self):
         """Test sequence verification when all required files exist."""
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
             
-            # Create complete files for sequence 1
+            # Create complete files for sequence 1 using ChunkManager
             self.create_mock_output_files(output_dir, [1])
             
-            json_dir = output_dir / "json"
-            seed_dir = output_dir / "seed"
-            context_dir = output_dir / "context"
-            soft_prob_dir = output_dir / "soft_prob"
+            # Use ChunkManager to check if sequence exists
+            from x_spanformer.embedding.embedding_chunk import ChunkManager
+            chunk_manager = ChunkManager(output_dir, chunk_size=5)
+            existing_sequences = chunk_manager.get_existing_sequences()
             
-            # Verify sequence is complete
-            is_complete = verify_processed_sequence(
-                json_dir, seed_dir, context_dir, soft_prob_dir, 1, self.config_data
-            )
-            
-            self.assertTrue(is_complete)
+            self.assertTrue(1 in existing_sequences)
     
     def test_verify_processed_sequence_incomplete(self):
         """Test sequence verification when required files are missing."""
@@ -660,19 +659,18 @@ class TestResumeCapabilities(unittest.TestCase):
             completed_seq_ids = [1, 2, 4, 5]
             self.create_mock_output_files(output_dir, completed_seq_ids)
             
-            # Load existing records
-            existing_records, last_processed = load_existing_records(
-                output_dir, self.config_data
-            )
+            # Use ChunkManager to load existing records
+            from x_spanformer.embedding.embedding_chunk import ChunkManager
+            chunk_manager = ChunkManager(output_dir, chunk_size=5)
+            existing_sequences = chunk_manager.get_existing_sequences()
             
             # Find missing sequences
-            missing_seq_ids = find_missing_sequences(5, existing_records)
+            missing_seq_ids = find_missing_sequences(5, {seq_id: {} for seq_id in existing_sequences})
             
             # Verify results
-            self.assertEqual(len(existing_records), 4)
-            self.assertEqual(set(existing_records.keys()), {1, 2, 4, 5})
+            self.assertEqual(len(existing_sequences), 4)
+            self.assertEqual(set(existing_sequences), {1, 2, 4, 5})
             self.assertEqual(missing_seq_ids, [3])  # Only sequence 3 missing
-            self.assertEqual(last_processed, 5)
 
 
 if __name__ == '__main__':
