@@ -59,6 +59,10 @@ This approach ensures that text like \texttt{"function(x, y)"} is consistently t
 \]
 where single space characters are atomic tokens, maintaining clear boundaries between semantic content and structural spacing.
 
+\subsubsection{Case Handling}
+
+To ensure robust matching across varied case patterns in real-world text, we provide configurable case handling strategies during both vocabulary induction and inference. The system supports two modes: \textbf{normalization} (default) and \textbf{preservation}. In normalization mode, all text is converted to lowercase following successful practices in models like BERT-uncased and sentence-transformers, preventing vocabulary fragmentation due to case variations while maintaining semantic meaning. In preservation mode, original casing is maintained for applications where case distinctions carry semantic importance, such as code analysis or proper noun identification. The selected strategy is applied consistently throughout the pipeline during both vocabulary construction and inference, ensuring consistent piece matching across training and inference phases.
+
 \subsubsection{Unigram LM via EM}
 
 We initialize the piece probabilities by normalizing raw frequency counts:

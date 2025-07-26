@@ -132,7 +132,7 @@ class TestChunkManager:
         """Provide sample pipeline configuration."""
         return {
             'output': {
-                'save_seed_embeddings': False,  # Don't require by default
+                'save_seed_embeddings': True,  # Now required in new implementation
                 'save_soft_probabilities': False,
                 'save_json_metadata': True
             }
@@ -206,8 +206,10 @@ class TestChunkManager:
         assert chunk_meta.end_seq_id == 5
         assert chunk_meta.sequence_count == 5
         assert "context" in chunk_meta.components
-        # Seed embeddings should not be saved with current config
-        assert "seed" not in chunk_meta.components
+        # All 3 components should now be saved (context, candidates, seed)
+        assert "seed" in chunk_meta.components
+        assert "candidates" in chunk_meta.components
+        assert len(chunk_meta.components) == 3  # context, candidates, seed
         assert chunk_meta.file_size_mb > 0
         
         # Verify file was created
@@ -225,8 +227,9 @@ class TestChunkManager:
             loaded_seq = loaded_data[seq_id]
             assert loaded_seq['sequence'] == f"This is test sequence {seq_id}"
             assert isinstance(loaded_seq['contextual_embeddings'], np.ndarray)
-            # Seed embeddings should not be in loaded data since config disabled them
-            assert 'seed_embeddings' not in loaded_seq
+            # Seed embeddings are now always included (required component)
+            assert 'seed_embeddings' in loaded_seq
+            assert isinstance(loaded_seq['seed_embeddings'], np.ndarray)
             assert loaded_seq['span_candidates'] == [(0, 5), (2, 8), (10, 15)]
     
     def test_metadata_persistence(self, temp_dir, sample_pipeline_config):
@@ -238,6 +241,7 @@ class TestChunkManager:
             1: {
                 'sequence': "Test sequence",
                 'contextual_embeddings': np.random.randn(10, 512).astype(np.float32),
+                'seed_embeddings': np.random.randn(10, 512).astype(np.float32),  # Now required
                 'span_candidates': [(0, 4)]
             }
         }
@@ -269,6 +273,7 @@ class TestChunkManager:
             chunk_data_1[seq_id] = {
                 'sequence': f"Sequence {seq_id}",
                 'contextual_embeddings': np.random.randn(10, 512).astype(np.float32),
+                'seed_embeddings': np.random.randn(10, 512).astype(np.float32),  # Now required
                 'span_candidates': [(0, 4)]
             }
         
@@ -280,6 +285,7 @@ class TestChunkManager:
             chunk_data_2[seq_id] = {
                 'sequence': f"Sequence {seq_id}",
                 'contextual_embeddings': np.random.randn(10, 512).astype(np.float32),
+                'seed_embeddings': np.random.randn(10, 512).astype(np.float32),  # Now required
                 'span_candidates': [(0, 4)]
             }
         
@@ -302,6 +308,7 @@ class TestChunkManager:
             1: {
                 'sequence': "Test sequence",
                 'contextual_embeddings': np.random.randn(10, 512).astype(np.float32),
+                'seed_embeddings': np.random.randn(10, 512).astype(np.float32),  # Now required
                 'span_candidates': [(0, 4)]
             }
         }
@@ -335,6 +342,7 @@ class TestChunkManager:
                 chunk_data[seq_id] = {
                     'sequence': f"Sequence {seq_id}",
                     'contextual_embeddings': np.random.randn(10, 512).astype(np.float32),
+                    'seed_embeddings': np.random.randn(10, 512).astype(np.float32),  # Now required
                     'span_candidates': [(0, 4)]
                 }
             chunk_manager.save_chunk(chunk_data, sample_pipeline_config)
@@ -487,11 +495,13 @@ class TestEdgeCases:
             4: {  # End of chunk 1
                 'sequence': "Sequence 4",
                 'contextual_embeddings': np.random.randn(10, 512).astype(np.float32),
+                'seed_embeddings': np.random.randn(10, 512).astype(np.float32),  # Now required
                 'span_candidates': [(0, 4)]
             },
             6: {  # Start of chunk 2
                 'sequence': "Sequence 6", 
                 'contextual_embeddings': np.random.randn(10, 512).astype(np.float32),
+                'seed_embeddings': np.random.randn(10, 512).astype(np.float32),  # Now required
                 'span_candidates': [(0, 4)]
             }
         }

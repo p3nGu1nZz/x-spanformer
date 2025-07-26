@@ -23,6 +23,11 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple, Union
 import sys
 
+# Add the parent directory to the path to import schema modules
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from x_spanformer.embedding.embedding_chunk import ChunkManager
+
 
 class SequenceIntrospector:
     """
@@ -33,136 +38,146 @@ class SequenceIntrospector:
     - Contextual embeddings (H): Multi-scale convolutionally enhanced representations
     - Soft probabilities (P): Forward-backward probability matrix
     - Span candidates: Filtered spans for boundary prediction
+    
+    Uses the new chunk-based storage system.
     """
     
     def __init__(self, output_dir: Path):
         """Initialize introspector with output directory."""
         self.output_dir = Path(output_dir)
-        self.json_dir = self.output_dir / "json"
-        self.seed_dir = self.output_dir / "seed"
-        self.context_dir = self.output_dir / "context"
-        self.soft_prob_dir = self.output_dir / "soft_prob"
         
-        # Validate essential directories exist
-        essential_dirs = [self.context_dir]  # Only contextual embeddings are essential
-        for dir_path in essential_dirs:
-            if not dir_path.exists():
-                raise FileNotFoundError(f"Essential directory not found: {dir_path}")
+        # Check for chunk-based storage
+        self.chunks_dir = self.output_dir / "chunks"
+        self.metadata_file = self.output_dir / "metadata.json"
         
-        # Optional directories (may not exist based on config)
-        self.json_available = self.json_dir.exists()
-        self.seed_available = self.seed_dir.exists()
-        self.soft_prob_available = self.soft_prob_dir.exists()
+        if not (self.chunks_dir.exists() and self.metadata_file.exists()):
+            raise FileNotFoundError(
+                f"Chunk-based storage not found in {output_dir}. "
+                f"Expected chunks/ directory and metadata.json file."
+            )
+        
+        # Initialize chunk manager
+        self.chunk_manager = ChunkManager(self.output_dir)
+        self._total_sequences = None  # Will be computed from metadata
     
     def get_sequence_count(self) -> int:
         """Get total number of processed sequences."""
-        if self.json_available:
-            json_files = list(self.json_dir.glob("embedding_*.json"))
-            return len(json_files)
-        elif self.seed_available:
-            # Fall back to counting seed embedding files
-            seed_files = list(self.seed_dir.glob("seed_emb_*.npy"))
-            return len(seed_files)
-        else:
-            # Final fallback to contextual embedding files
-            context_files = list(self.context_dir.glob("context_emb_*.npy"))
-            return len(context_files)
+        if self._total_sequences is None:
+            # Calculate from chunk metadata
+            existing_sequences = self.chunk_manager.get_existing_sequences()
+            self._total_sequences = len(existing_sequences)
+        return self._total_sequences
     
     def load_sequence(self, seq_id: int) -> Dict[str, Any]:
         """
-        Load all data for a specific sequence ID.
+        Load all data for a specific sequence ID from chunks.
         
         Args:
             seq_id: Sequence identifier (1-based)
             
         Returns:
             Dictionary containing all sequence data:
-            - metadata: JSON metadata including span candidates
-            - seed_embeddings: H⁰ matrix (T × 512)
+            - metadata: JSON metadata including span candidates (if saved)
+            - seed_embeddings: H⁰ matrix (T × 512) (if saved)
             - contextual_embeddings: H matrix (T × 512)  
-            - soft_probabilities: P matrix (T × |V|)
+            - soft_probabilities: P matrix (T × |V|) (if saved)
             
         Raises:
-            FileNotFoundError: If sequence files don't exist
+            FileNotFoundError: If sequence doesn't exist in chunks
             ValueError: If seq_id is invalid
         """
         if seq_id < 1:
             raise ValueError("Sequence ID must be >= 1")
+        
+        print(f"Loading sequence {seq_id}...")
         
         # Check if sequence exists
         total_sequences = self.get_sequence_count()
         if seq_id > total_sequences:
             raise ValueError(f"Sequence ID {seq_id} exceeds total sequences {total_sequences}")
         
-        # Load metadata if available
-        metadata = None
-        if self.json_available:
-            json_file = self.json_dir / f"embedding_{seq_id:06d}.json"
-            if json_file.exists():
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
+        # Use the efficient single-sequence loader
+        sequence_data = self.chunk_manager.load_single_sequence(seq_id)
+        if sequence_data is None:
+            raise FileNotFoundError(f"Sequence {seq_id} not found in chunks")
         
-        # Load numpy arrays
-        seed_file = self.seed_dir / f"seed_emb_{seq_id:06d}.npy"
-        context_file = self.context_dir / f"context_emb_{seq_id:06d}.npy"
-        soft_prob_file = self.soft_prob_dir / f"soft_probs_{seq_id:06d}.npy"
+        print(f"Sequence {seq_id} loaded successfully")
         
-        # Essential files that must exist
-        essential_files = [
-            ("contextual embeddings", context_file)
-        ]
+        # Extract sequence text and build metadata if available
+        sequence_text = sequence_data.get('sequence', '')
+        span_candidates = sequence_data.get('span_candidates', [])
         
-        for name, file_path in essential_files:
-            if not file_path.exists():
-                raise FileNotFoundError(f"{name} file not found: {file_path}")
-        
-        # Load arrays
-        data = {
-            'metadata': metadata,
-            'contextual_embeddings': np.load(context_file),
+        # Build metadata-like structure from available data
+        extracted_metadata = {
+            'sequence': sequence_text,
+            'sequence_length': len(sequence_text) if sequence_text else None,
+            'num_candidates': len(span_candidates) if span_candidates else None,
+            'span_candidates': span_candidates
         }
         
-        # Seed embeddings are optional (may be disabled for performance)
-        if self.seed_available and seed_file.exists():
-            data['seed_embeddings'] = np.load(seed_file)
-        else:
-            data['seed_embeddings'] = None
-        
-        # Soft probabilities are optional (may be disabled for performance)  
-        if self.soft_prob_available and soft_prob_file.exists():
-            data['soft_probabilities'] = np.load(soft_prob_file)
-        else:
-            data['soft_probabilities'] = None
-        
-        return data
+        # Return the data with standardized keys
+        return {
+            'metadata': extracted_metadata,
+            'seed_embeddings': sequence_data.get('seed_embeddings'),
+            'contextual_embeddings': sequence_data.get('contextual_embeddings'),
+            'soft_probabilities': sequence_data.get('soft_probabilities')
+        }
     
     def get_file_sizes(self, seq_id: int) -> Dict[str, float]:
-        """Get file sizes in KB for all files related to a sequence."""
+        """Get file sizes in KB for chunk storage related to a sequence."""
         sizes = {}
         
-        # Essential files
-        context_file = self.context_dir / f"context_emb_{seq_id:06d}.npy"
-        if context_file.exists():
-            sizes['contextual_embeddings'] = context_file.stat().st_size / 1024
+        # For chunk-based storage, we can estimate the sequence's contribution
+        # to the chunk file size, but it's not exact since it's compressed
+        chunk_id = self.chunk_manager.get_chunk_id(seq_id)
+        chunk_file = self.chunk_manager.get_chunk_file_path(chunk_id)
         
-        # Optional files
-        if self.seed_available:
-            seed_file = self.seed_dir / f"seed_emb_{seq_id:06d}.npy"
-            if seed_file.exists():
-                sizes['seed_embeddings'] = seed_file.stat().st_size / 1024
+        if chunk_file.exists():
+            chunk_size_kb = chunk_file.stat().st_size / 1024
+            
+            # Load the chunk to see how many sequences it contains
+            chunk_data = self.chunk_manager.load_chunk(chunk_id)
+            if chunk_data:
+                num_sequences_in_chunk = len(chunk_data)
+                estimated_size_per_sequence = chunk_size_kb / num_sequences_in_chunk
+                sizes['chunk_contribution'] = estimated_size_per_sequence
+                sizes['total_chunk_size'] = chunk_size_kb
+                sizes['sequences_in_chunk'] = num_sequences_in_chunk
+            else:
+                sizes['chunk_contribution'] = 0.0
+                sizes['total_chunk_size'] = chunk_size_kb
+                sizes['sequences_in_chunk'] = 0
         
-        if self.json_available:
-            json_file = self.json_dir / f"embedding_{seq_id:06d}.json"
-            if json_file.exists():
-                sizes['json_metadata'] = json_file.stat().st_size / 1024
+        # Total is just the estimated contribution
+        sizes['total'] = sizes.get('chunk_contribution', 0.0)
         
-        if self.soft_prob_available:
-            soft_prob_file = self.soft_prob_dir / f"soft_probs_{seq_id:06d}.npy"
-            if soft_prob_file.exists():
-                sizes['soft_probabilities'] = soft_prob_file.stat().st_size / 1024
+        return sizes
+    
+    def get_file_sizes_fast(self, seq_id: int) -> Dict[str, float]:
+        """Get file sizes in KB for chunk storage without loading chunk data."""
+        sizes = {}
         
-        # Calculate total
-        sizes['total'] = sum(sizes.values())
+        # Just get the chunk file size without loading the data
+        chunk_id = self.chunk_manager.get_chunk_id(seq_id)
+        chunk_file = self.chunk_manager.get_chunk_file_path(chunk_id)
+        
+        if chunk_file.exists():
+            chunk_size_kb = chunk_file.stat().st_size / 1024
+            
+            # Estimate based on chunk size (100 sequences per chunk typically)
+            estimated_sequences_per_chunk = self.chunk_manager.chunk_size
+            estimated_size_per_sequence = chunk_size_kb / estimated_sequences_per_chunk
+            
+            sizes['chunk_contribution'] = estimated_size_per_sequence
+            sizes['total_chunk_size'] = chunk_size_kb
+            sizes['sequences_in_chunk'] = estimated_sequences_per_chunk
+        else:
+            sizes['chunk_contribution'] = 0.0
+            sizes['total_chunk_size'] = 0.0
+            sizes['sequences_in_chunk'] = 0
+        
+        # Total is just the estimated contribution
+        sizes['total'] = sizes.get('chunk_contribution', 0.0)
         
         return sizes
 
@@ -178,59 +193,71 @@ class SequenceIntrospector:
             Analysis dictionary with statistics and insights
         """
         data = self.load_sequence(seq_id)
+        
         metadata = data['metadata']
         
-        # Get file sizes
-        file_sizes = self.get_file_sizes(seq_id)
+        # Get file sizes (but avoid loading chunk again)
+        file_sizes = self.get_file_sizes_fast(seq_id)
         
         # Handle missing metadata gracefully
         if metadata:
             analysis = {
                 'sequence_id': seq_id,
-                'sequence_length': metadata['sequence_length'],
-                'num_span_candidates': metadata['num_candidates'],
-                'sequence_preview': metadata['sequence'][:100] + "..." if len(metadata['sequence']) > 100 else metadata['sequence']
+                'sequence_length': metadata.get('sequence_length', 'Unknown'),
+                'num_span_candidates': metadata.get('num_candidates', 'Unknown'),
+                'sequence_preview': metadata.get('sequence', 'Not available')[:100] + "..." if metadata.get('sequence') and len(metadata.get('sequence', '')) > 100 else metadata.get('sequence', 'Not available')
             }
         else:
             # Fallback when no JSON metadata available
-            context_shape = data['contextual_embeddings'].shape
-            analysis = {
-                'sequence_id': seq_id,
-                'sequence_length': context_shape[0],  # Infer from embedding shape
-                'num_span_candidates': 'Unknown (no metadata)',
-                'sequence_preview': 'Not available (no metadata)'
-            }
+            context_emb = data['contextual_embeddings']
+            if context_emb is not None:
+                context_shape = context_emb.shape
+                analysis = {
+                    'sequence_id': seq_id,
+                    'sequence_length': context_shape[0],  # Infer from embedding shape
+                    'num_span_candidates': 'Unknown (no metadata)',
+                    'sequence_preview': 'Not available (no metadata)'
+                }
+            else:
+                analysis = {
+                    'sequence_id': seq_id,
+                    'sequence_length': 'Unknown',
+                    'num_span_candidates': 'Unknown (no metadata)',
+                    'sequence_preview': 'Not available (no metadata)'
+                }
         
         # Array shape analysis
-        seed_shape = data['seed_embeddings'].shape if data['seed_embeddings'] is not None else None
-        context_shape = data['contextual_embeddings'].shape
-        soft_prob_shape = data['soft_probabilities'].shape if data['soft_probabilities'] is not None else None
+        seed_emb = data['seed_embeddings']
+        context_emb = data['contextual_embeddings']
+        soft_probs = data['soft_probabilities']
+        
+        seed_shape = seed_emb.shape if seed_emb is not None else None
+        context_shape = context_emb.shape if context_emb is not None else None
+        soft_prob_shape = soft_probs.shape if soft_probs is not None else None
         
         analysis.update({
             'seed_embeddings_shape': seed_shape,  # Should be (T, 512) or None
             'contextual_embeddings_shape': context_shape,  # Should be (T, 512)
             'soft_probabilities_shape': soft_prob_shape,  # Should be (T, |V|) or None
             'vocabulary_size': soft_prob_shape[1] if soft_prob_shape is not None and len(soft_prob_shape) > 1 else None,
-            'seed_embeddings_available': data['seed_embeddings'] is not None,
-            'soft_probabilities_available': data['soft_probabilities'] is not None,
+            'seed_embeddings_available': seed_emb is not None,
+            'soft_probabilities_available': soft_probs is not None,
             'file_sizes': file_sizes
         })
         
         if detailed:
             # Statistical analysis
-            seed_emb = data['seed_embeddings']
-            context_emb = data['contextual_embeddings']
-            soft_probs = data['soft_probabilities']
+            analysis['detailed_stats'] = {}
             
-            analysis['detailed_stats'] = {
-                'contextual_embeddings': {
+            # Contextual embeddings stats (should always be available)
+            if context_emb is not None:
+                analysis['detailed_stats']['contextual_embeddings'] = {
                     'mean': float(context_emb.mean()),
                     'std': float(context_emb.std()),
                     'min': float(context_emb.min()),
                     'max': float(context_emb.max()),
                     'sparsity': float((context_emb == 0).mean())
                 }
-            }
             
             # Add seed embeddings stats only if available
             if seed_emb is not None:
@@ -304,28 +331,49 @@ class SequenceIntrospector:
             else:
                 print(f"   Soft Probabilities (P):    Not saved (performance optimization)")
             
-            print(f"\n== FILE SIZES:")
+            print(f"\n== FILE STORAGE (CHUNK-BASED):")
             file_sizes = analysis['file_sizes']
-            if 'json_metadata' in file_sizes:
-                print(f"   JSON Metadata: {file_sizes['json_metadata']:.1f} KB")
-            else:
-                print(f"   JSON Metadata: Not saved (disabled in config)")
-            if 'seed_embeddings' in file_sizes:
-                print(f"   Seed Embeddings: {file_sizes['seed_embeddings']:.1f} KB")
-            else:
-                print(f"   Seed Embeddings: Not saved (performance optimization)")
-            print(f"   Contextual Embeddings: {file_sizes['contextual_embeddings']:.1f} KB")
-            if 'soft_probabilities' in file_sizes:
-                print(f"   Soft Probabilities: {file_sizes['soft_probabilities']:.1f} KB")
-            else:
-                print(f"   Soft Probabilities: Not saved (performance optimization)")
-            print(f"   Total Size: {file_sizes['total']:.1f} KB")
+            print(f"   Chunk Contribution: {file_sizes.get('chunk_contribution', 0.0):.1f} KB (estimated)")
+            print(f"   Total Chunk Size: {file_sizes.get('total_chunk_size', 0.0):.1f} KB")
+            print(f"   Sequences in Chunk: {file_sizes.get('sequences_in_chunk', 0)}")
+            print(f"   Storage Type: Compressed chunk (.npz)")
             
             print(f"\n== SEQUENCE PREVIEW:")
             print(f"   {repr(analysis['sequence_preview'])}")
             
-            # Always show partial arrays (removed verbose requirement)
+            # Load data once for both span candidates and arrays display
             data = self.load_sequence(seq_id)
+            metadata = data['metadata']
+            
+            # Show span candidates if available
+            if metadata and metadata.get('span_candidates'):
+                span_candidates = metadata['span_candidates']
+                print(f"\n== SPAN CANDIDATES:")
+                print(f"   Total candidates: {len(span_candidates)}")
+                
+                # Show first 10 candidates with their text
+                sequence_text = metadata.get('sequence', '')
+                if sequence_text and len(span_candidates) > 0:
+                    print(f"   First 10 candidates:")
+                    for i, (start, end) in enumerate(span_candidates[:10]):
+                        candidate_text = sequence_text[start:end] if start < len(sequence_text) and end <= len(sequence_text) else "<invalid>"
+                        print(f"     {i+1:2d}. [{start:3d}, {end:3d}) = {repr(candidate_text)}")
+                    
+                    if len(span_candidates) > 10:
+                        print(f"     ... and {len(span_candidates) - 10} more candidates")
+                else:
+                    print(f"   Cannot display candidate text (sequence not available)")
+                    # Show positions only
+                    for i, (start, end) in enumerate(span_candidates[:10]):
+                        print(f"     {i+1:2d}. [{start:3d}, {end:3d}) length={end-start}")
+                    if len(span_candidates) > 10:
+                        print(f"     ... and {len(span_candidates) - 10} more candidates")
+            else:
+                print(f"\n== SPAN CANDIDATES:")
+                print(f"   Not available in metadata")
+            
+            # Always show partial arrays (removed verbose requirement)
+            # (data already loaded above)
             
             # Show seed embeddings sample (if available)
             if data['seed_embeddings'] is not None:
@@ -333,31 +381,77 @@ class SequenceIntrospector:
                 print(f"\n== SEED EMBEDDINGS (H0) - SAMPLE VALUES:")
                 print(f"   Shape: {seed_embeddings.shape}")
                 if seed_embeddings.size > 0:
-                    # Show first 3 positions with first 10 dimensions each
-                    sample_positions = min(3, seed_embeddings.shape[0])
+                    seq_len = seed_embeddings.shape[0]
                     sample_dims = min(10, seed_embeddings.shape[1])
-                    print(f"   Sample values (first {sample_positions} positions, first {sample_dims} dimensions):")
-                    for i in range(sample_positions):
-                        values = seed_embeddings[i, :sample_dims]
-                        values_str = ' '.join([f"{v:8.6f}" for v in values])
-                        print(f"     Position {i:3d}: [{values_str}...]")
+                    
+                    if seq_len <= 20:
+                        # If sequence is short, show all positions
+                        print(f"   Sample values (all {seq_len} positions, first {sample_dims} dimensions):")
+                        for i in range(seq_len):
+                            values = seed_embeddings[i, :sample_dims]
+                            values_str = ' '.join([f"{v:8.6f}" for v in values])
+                            print(f"     Position {i:3d}: [{values_str}...]")
+                    else:
+                        # Show first 10, ..., last 10 positions
+                        print(f"   Sample values (first 10, ..., last 10 positions, first {sample_dims} dimensions):")
+                        
+                        # First 10 positions
+                        for i in range(10):
+                            values = seed_embeddings[i, :sample_dims]
+                            values_str = ' '.join([f"{v:8.6f}" for v in values])
+                            print(f"     Position {i:3d}: [{values_str}...]")
+                        
+                        # Ellipsis
+                        if seq_len > 20:
+                            print(f"     ... ({seq_len - 20} positions omitted) ...")
+                        
+                        # Last 10 positions
+                        for i in range(max(10, seq_len - 10), seq_len):
+                            values = seed_embeddings[i, :sample_dims]
+                            values_str = ' '.join([f"{v:8.6f}" for v in values])
+                            print(f"     Position {i:3d}: [{values_str}...]")
             else:
                 print(f"\n== SEED EMBEDDINGS (H0):")
                 print(f"   Not available (disabled for performance optimization)")
             
             # Show contextual embeddings sample
-            contextual_embeddings = data['contextual_embeddings']
-            print(f"\n== CONTEXTUAL EMBEDDINGS (H) - SAMPLE VALUES:")
-            print(f"   Shape: {contextual_embeddings.shape}")
-            if contextual_embeddings.size > 0:
-                # Show first 3 positions with first 10 dimensions each
-                sample_positions = min(3, contextual_embeddings.shape[0])
-                sample_dims = min(10, contextual_embeddings.shape[1])
-                print(f"   Sample values (first {sample_positions} positions, first {sample_dims} dimensions):")
-                for i in range(sample_positions):
-                    values = contextual_embeddings[i, :sample_dims]
-                    values_str = ' '.join([f"{v:8.6f}" for v in values])
-                    print(f"     Position {i:3d}: [{values_str}...]")
+            if data['contextual_embeddings'] is not None:
+                contextual_embeddings = data['contextual_embeddings']
+                print(f"\n== CONTEXTUAL EMBEDDINGS (H) - SAMPLE VALUES:")
+                print(f"   Shape: {contextual_embeddings.shape}")
+                if contextual_embeddings.size > 0:
+                    seq_len = contextual_embeddings.shape[0]
+                    sample_dims = min(10, contextual_embeddings.shape[1])
+                    
+                    if seq_len <= 20:
+                        # If sequence is short, show all positions
+                        print(f"   Sample values (all {seq_len} positions, first {sample_dims} dimensions):")
+                        for i in range(seq_len):
+                            values = contextual_embeddings[i, :sample_dims]
+                            values_str = ' '.join([f"{v:8.6f}" for v in values])
+                            print(f"     Position {i:3d}: [{values_str}...]")
+                    else:
+                        # Show first 10, ..., last 10 positions
+                        print(f"   Sample values (first 10, ..., last 10 positions, first {sample_dims} dimensions):")
+                        
+                        # First 10 positions
+                        for i in range(10):
+                            values = contextual_embeddings[i, :sample_dims]
+                            values_str = ' '.join([f"{v:8.6f}" for v in values])
+                            print(f"     Position {i:3d}: [{values_str}...]")
+                        
+                        # Ellipsis
+                        if seq_len > 20:
+                            print(f"     ... ({seq_len - 20} positions omitted) ...")
+                        
+                        # Last 10 positions
+                        for i in range(max(10, seq_len - 10), seq_len):
+                            values = contextual_embeddings[i, :sample_dims]
+                            values_str = ' '.join([f"{v:8.6f}" for v in values])
+                            print(f"     Position {i:3d}: [{values_str}...]")
+            else:
+                print(f"\n== CONTEXTUAL EMBEDDINGS (H):")
+                print(f"   Not available (unexpected - this should always be present)")
             
             # Show soft probabilities sample if available
             if data['soft_probabilities'] is not None:
@@ -391,8 +485,9 @@ class SequenceIntrospector:
                     print(f"\n--- SEED EMBEDDINGS (COMPLETE) ---")
                     print("Not available (disabled for performance optimization)")
                 
-                print(f"\n--- CONTEXTUAL EMBEDDINGS (COMPLETE) ---")
-                print(contextual_embeddings)
+                if data['contextual_embeddings'] is not None:
+                    print(f"\n--- CONTEXTUAL EMBEDDINGS (COMPLETE) ---")
+                    print(data['contextual_embeddings'])
                 
                 if data['soft_probabilities'] is not None:
                     print(f"\n--- SOFT PROBABILITIES (COMPLETE) ---")
@@ -465,7 +560,7 @@ Examples:
     
     parser.add_argument(
         "--output", type=str, required=True,
-        help="Path to embedding output directory containing seed/, context/, and optional json/, soft_prob/ subdirectories"
+        help="Path to embedding output directory containing chunks/ subdirectory and metadata.json (chunk-based storage)"
     )
     
     parser.add_argument(

@@ -13,7 +13,10 @@ X-Spanformer learns to segment and fuse overlapping spans directly from raw inpu
 - **Span-Aware Attention Routing** – structure is learned and fused into prefix/control signals  
 - **Multi-Domain Compositionality** – supports code, prose, REPLs, Markdown, etc.  
 - **Entropy-Annealed Training** – spans are initially exploratory, then crystallize over time  
-- **X-Bar Inspired Representation** – spans learned hierarchically, with linguistic roles and projections  
+- **X-Bar Inspired Representation** – spans learned hierarchically, with linguistic roles and projections
+- **Chunk-Based Storage System** – efficient compressed storage with automatic validation and resume capabilities
+- **Comprehensive Integrity Checking** – ensures no missing sequences with gap detection and repair
+- **Fast Sequence Introspection** – millisecond loading of individual sequences for analysis and debugging  
 
 ---
 
@@ -89,16 +92,16 @@ Transform vocabulary into contextualized embeddings and span candidates using Se
 uv run -m x_spanformer.pipelines.vocab2embedding \
   --vocab data/vocab/out/vocab.jsonl \
   --input data/vocab/out/corpus.jsonl \
-  --output data/embeddings/ \
-  --device cuda  # or omit for CPU default
+  --output data/embedding \
+  --config config/pipelines/vocab2embedding.yaml
 
 # Parallel processing with multiple workers for high throughput
 uv run -m x_spanformer.pipelines.vocab2embedding \
   --vocab data/vocab/out/vocab.jsonl \
   --input data/vocab/out/corpus.jsonl \
-  --output data/embeddings/ \
+  --output data/embedding \
   --workers 4 \
-  --device cuda
+  --config config/pipelines/vocab2embedding.yaml
 ```
 
 This implements the unified algorithm from Section 3.2, featuring:
@@ -107,12 +110,60 @@ This implements the unified algorithm from Section 3.2, featuring:
 - **Vocabulary-aware Xavier initialization** with probability-adjusted embedding variance
 - **Multi-scale dilated convolutions** for contextual encoding (kernels [3,5,7], dilations [1,2,4])
 - **Parallel processing support** with multiple worker processes for high-throughput production
+- **Chunk-based storage system** with compressed `.npz` files for efficient processing and resumption
+- **Comprehensive validation and integrity checking** with automatic gap detection and repair
 - **Intelligent device fallback** from CUDA to CPU when GPU unavailable (CI/CD compatible)
 - **Vocabulary-informed span filtering** using alignment, compositional potential, and whitespace coherence
 
-The pipeline outputs both `vocab.jsonl` (final vocabulary with probabilities) and `vocab_stats.json` (comprehensive training statistics), enabling detailed analysis of the vocabulary induction process.
+**Output Structure (Chunk-Based):**
+```
+data/embedding/
+├── chunks/                       # Compressed chunk storage
+│   ├── embeddings_000001.npz    # Sequences 1-100
+│   ├── embeddings_000002.npz    # Sequences 101-200
+│   └── embeddings_000052.npz    # Final chunk (partial)
+├── metadata.json                 # Global metadata and chunk information
+└── embedding.log                 # Processing log with stage-by-stage validation
+```
 
-All pipelines utilize shared utilities from `x_spanformer.pipelines.shared` for consistent text processing and schema validation, eliminating code duplication and ensuring data format consistency across the preprocessing workflow.
+**Key Features:**
+- **Automatic Resume**: Validates existing chunks and continues from where processing left off
+- **Final Integrity Verification**: Ensures all sequences are processed correctly with comprehensive gap detection
+- **Efficient Analysis Tools**: Sequence introspector with fast single-sequence loading from chunks
+- **Performance Optimization**: Optional components can be disabled for storage efficiency
+
+### Introspection and Analysis
+
+Analyze processed embeddings with the integrated sequence introspector:
+
+```bash
+# Basic sequence analysis
+uv run -m x_spanformer.embedding.sequence_introspector \
+  --id 1 --output data/embedding
+
+# Detailed statistical analysis with span coverage
+uv run -m x_spanformer.embedding.sequence_introspector \
+  --id 5 --output data/embedding --analyze
+
+# Check total processed sequences
+uv run -m x_spanformer.embedding.sequence_introspector \
+  --id 1 --output data/embedding --list-total
+
+# Verbose output (complete arrays)
+uv run -m x_spanformer.embedding.sequence_introspector \
+  --id 10 --output data/embedding --analyze --verbose
+```
+
+The introspector efficiently loads individual sequences from chunk files without decompressing entire chunks, providing:
+
+- **Fast Single-Sequence Loading**: Loads specific sequences from compressed chunks in milliseconds
+- **Comprehensive Analysis**: Embedding quality metrics, span coverage statistics, and array shape validation
+- **Chunk Storage Information**: Storage efficiency, compression ratios, and chunk contribution estimates
+- **Statistical Insights**: Mean/std analysis, sparsity detection, and span length distribution
+
+### Pipeline Integration
+
+The pipeline outputs both `vocab.jsonl` (final vocabulary with probabilities) and `vocab_stats.json` (comprehensive training statistics), enabling detailed analysis of the vocabulary induction process.
 
 All pipelines utilize shared utilities from `x_spanformer.pipelines.shared` for consistent text processing and schema validation, eliminating code duplication and ensuring data format consistency across the preprocessing workflow.
 
@@ -136,6 +187,8 @@ X-Spanformer includes comprehensive test coverage organized into focused categor
 
 - **`tests/embedding/`** - Embedding analysis utilities (Section 3.2)
   - `test_pipeline.py` - Complete vocab2embedding pipeline validation
+  - `test_sequence_introspector.py` - Chunk-based sequence loading tests
+  - `test_embedding_chunk.py` - Chunk management and validation tests
 
 - **`tests/schema/`** - Pydantic schema validation
   - `test_schema.py` - Basic schema validation
@@ -204,6 +257,8 @@ x-spanformer/
 │   │   ├── span_analysis.py   # Span patterns, hierarchy, coverage
 │   │   ├── embedding_viz.py   # Visualization tools (optional deps)
 │   │   ├── analyze_results.py # CLI analysis workflows
+│   │   ├── sequence_introspector.py # Efficient single-sequence chunk loading
+│   │   ├── embedding_chunk.py # Chunk management and validation
 │   │   └── test_pipeline.py   # Pipeline validation
 │   ├── schema/           # Pydantic data models and validation
 │   │   ├── pretrain_record.py # Training data schema
@@ -217,6 +272,7 @@ x-spanformer/
 ├── data/                 # Training and vocabulary data
 │   ├── pretraining/      # Raw segments from PDF processing
 │   ├── vocab/            # Vocabulary induction outputs
+│   ├── embedding/        # Chunk-based embedding storage
 │   └── benchmarks/       # Performance benchmark results (timestamped)
 ├── docs/                 # Documentation and paper materials
 │   ├── vocab_induction.md    # Section 3.1 documentation
@@ -319,6 +375,9 @@ data/benchmarks/
 - **Candidates per Sequence**: ~4,500-5,000 (comprehensive coverage)
 - **Stage Breakdown**: 40% candidate generation, 40% forward-backward algorithm
 - **GPU Memory Scaling**: 4 workers ≈ 4× GPU memory usage per worker
+- **Chunk Storage Efficiency**: ~30-60MB per 100-sequence chunk with compression
+- **Resume Performance**: Near-instant startup with existing chunk validation
+- **Introspection Speed**: <100ms single-sequence loading from chunks
 - **Optimization Targets**: Automatically identifies bottlenecks for targeted improvements
 
 ### Development Workflow
@@ -427,9 +486,10 @@ python x_spanformer/embedding/test_pipeline.py
 - **Quality Assessment** — Embedding norms, variance ratios, similarity analysis
 - **Span Pattern Analysis** — Hierarchy detection, coverage gaps, overlap patterns  
 - **Visualization Suite** — Heatmaps, PCA plots, span coverage maps (matplotlib/seaborn integration)
-- **Visualization Suite** — Heatmaps, PCA plots, span coverage maps (matplotlib/seaborn integration)
+- **Chunk-Based Loading** — Efficient single-sequence access from compressed chunk storage
 - **Batch Processing** — Aggregate statistics across multiple sequences
 - **Export Capabilities** — Numpy format, JSON metadata, comprehensive reporting
+- **Fast Introspection** — Millisecond loading times with sequence introspector tool
 
 This module bridges Section 3.2 outputs with downstream X-Spanformer components, providing essential debugging and analysis capabilities for span-aware embedding research.
 

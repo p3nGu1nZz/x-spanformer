@@ -1,0 +1,10 @@
+{
+  "total_pieces": 13625,
+  "baseline_ppl": 654.9140995087873,
+  "final_ppl": 139.33122830859875,
+  "oov_rate": 0.0,
+  "coverage": 0.051168185422503835,
+  "em_iterations": 5,
+  "pruned_pieces": 36445,
+  "baseline_oov": 0.0
+}

@@ -23,7 +23,7 @@ def truncate_string(s: str, max_len: int) -> str:
     return s[:max_len-3] + "..."
 
 
-def viterbi_segment(x: str, V: List[str], p_u: Dict[str, float]) -> List[str]:
+def viterbi_segment(x: str, V: List[str], p_u: Dict[str, float], case_handling: str = "normalize") -> List[str]:
     """
     Viterbi segmentation following the paper's formulation.
     
@@ -33,6 +33,7 @@ def viterbi_segment(x: str, V: List[str], p_u: Dict[str, float]) -> List[str]:
         x: Input string to segment
         V: Vocabulary list
         p_u: Probability dictionary for vocabulary pieces
+        case_handling: Case handling strategy ("normalize" or "preserve")
         
     Returns:
         List of vocabulary pieces representing the best segmentation
@@ -40,6 +41,10 @@ def viterbi_segment(x: str, V: List[str], p_u: Dict[str, float]) -> List[str]:
     Raises:
         ValueError: If piece not found in probability dictionary or has invalid probability
     """
+    # Apply case normalization if specified
+    if case_handling == "normalize":
+        x = x.lower()
+    
     T = len(x)
     dp = [-math.inf] * (T + 1)
     back = [None] * (T + 1)
@@ -271,7 +276,7 @@ def is_whitespace_coherent(candidate: str) -> bool:
     return False
 
 
-def build_candidate_set(corpus: List[str], L_max: int, M: int) -> Tuple[List[str], Counter]:
+def build_candidate_set(corpus: List[str], L_max: int, M: int, case_handling: str = "normalize") -> Tuple[List[str], Counter]:
     """
     Build the initial candidate set U_0 with atomic whitespace handling.
     
@@ -284,11 +289,16 @@ def build_candidate_set(corpus: List[str], L_max: int, M: int) -> Tuple[List[str
         corpus: List of text segments
         L_max: Maximum substring length
         M: Number of top multi-character substrings to keep
+        case_handling: Case handling strategy ("normalize" or "preserve")
         
     Returns:
         Tuple of (candidate_vocabulary, frequency_counter)
     """
     freq = Counter()
+    
+    # Apply case normalization if specified
+    if case_handling == "normalize":
+        corpus = [x.lower() for x in corpus]
     
     for x in corpus:
         T = len(x)
