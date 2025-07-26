@@ -32,7 +32,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional, Union
 from multiprocessing import Process, Queue, Manager, current_process
-from queue import Empty
+from queue import Empty, Full
+import threading
 
 import numpy as np
 import torch
@@ -98,10 +99,11 @@ def sequence_processor_worker(task_queue: Queue, result_queue: Queue, worker_id:
         
         while True:
             try:
-                # Get task from queue with timeout
-                task = task_queue.get(timeout=1.0)
+                # Get task from queue with longer timeout to allow for worker initialization
+                task = task_queue.get(timeout=5.0)  # Increased from 1.0 to 5.0 seconds
                 
                 if task is None:  # Poison pill - shutdown signal
+                    print(f"Worker {worker_id}: Received shutdown signal")
                     break
                 
                 # Initialize pipeline on first task (lazy initialization)
@@ -147,15 +149,39 @@ def sequence_processor_worker(task_queue: Queue, result_queue: Queue, worker_id:
                     for key, value in result.items():
                         if isinstance(value, torch.Tensor):
                             # Detach and move to CPU to avoid shared GPU memory issues
-                            result_for_queue[key] = value.detach().cpu()
+                            # Clone to completely separate from original computation graph
+                            result_for_queue[key] = value.detach().cpu().clone()
                         else:
                             result_for_queue[key] = value
                     
                     # Clear original result to free GPU memory immediately
                     del result
                     
-                    # Send successful result
-                    result_queue.put(ProcessingResult(task.seq_id, True, result_for_queue))
+                    # Force immediate GPU memory cleanup after each sequence
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+                    
+                    # Send successful result with retry mechanism for Windows shared memory issues
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            result_queue.put(ProcessingResult(task.seq_id, True, result_for_queue))
+                            break  # Success
+                        except Exception as queue_error:
+                            if attempt < max_retries - 1:
+                                print(f"Worker {worker_id}: Queue put failed (attempt {attempt + 1}/{max_retries}), retrying: {queue_error}")
+                                time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+                                continue
+                            else:
+                                # Final attempt failed - send error instead
+                                error_msg = f"Worker {worker_id}: Failed to send result after {max_retries} attempts: {queue_error}"
+                                try:
+                                    result_queue.put(ProcessingResult(task.seq_id, False, error=error_msg))
+                                except:
+                                    print(f"Worker {worker_id}: Critical - Cannot send any result for sequence {task.seq_id}")
+                                raise queue_error
+                    
                     processed_count += 1
                     
                     # GPU memory monitoring for debugging
@@ -172,9 +198,21 @@ def sequence_processor_worker(task_queue: Queue, result_queue: Queue, worker_id:
                           f"[GPU: {allocated:.2f}GB alloc, {reserved:.2f}GB res, {peak:.2f}GB peak]")
                     
                 except Exception as e:
-                    # Send error result
+                    # Send error result with retry mechanism
                     error_msg = f"Worker {worker_id} error processing sequence {task.seq_id}: {str(e)}"
-                    result_queue.put(ProcessingResult(task.seq_id, False, error=error_msg))
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            result_queue.put(ProcessingResult(task.seq_id, False, error=error_msg))
+                            break  # Success
+                        except Exception as queue_error:
+                            if attempt < max_retries - 1:
+                                print(f"Worker {worker_id}: Error queue put failed (attempt {attempt + 1}/{max_retries}), retrying: {queue_error}")
+                                time.sleep(0.1 * (attempt + 1))
+                                continue
+                            else:
+                                print(f"Worker {worker_id}: Critical - Cannot send error result for sequence {task.seq_id}: {queue_error}")
+                                break
                     print(error_msg)
                 
             except Empty:
@@ -916,29 +954,11 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
     logger.info(f"Chunk size: {chunk_manager.chunk_size} sequences per chunk")
     
     # Create queues for task distribution and result collection
-    task_queue = Queue()
-    result_queue = Queue()
+    # Use larger maxsize to prevent blocking on task population
+    task_queue = Queue(maxsize=max(50, num_workers * 10))  # Larger queue to prevent blocking
+    result_queue = Queue(maxsize=num_workers * 2)  # Keep result queue smaller
     
-    # Populate task queue with missing sequences
-    for seq_id in missing_seq_ids:
-        if SHUTDOWN_REQUESTED:
-            break
-            
-        sequence = sequences[seq_id - 1]  # Convert to 0-based index
-        task = WorkerTask(
-            seq_id=seq_id,
-            sequence=sequence,
-            config_path=pipeline.config.get('_config_path', 'config/pipelines/vocab2embedding.yaml'),
-            vocab_path=pipeline.config.get('_vocab_path', ''),
-            dynamic_w_max=pipeline.w_max
-        )
-        task_queue.put(task)
-    
-    # Add poison pills for workers
-    for _ in range(num_workers):
-        task_queue.put(None)
-    
-    # Start worker processes
+    # Start worker processes FIRST before populating queue
     workers = []
     for worker_id in range(num_workers):
         worker = Process(
@@ -949,20 +969,139 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
         worker.start()
         workers.append(worker)
     
+    logger.info(f"Started {len(workers)} workers")
+    
+    # Give workers a moment to start up before flooding the queue
+    import time
+    import threading
+    time.sleep(1.0)
+    logger.info("Workers startup delay completed")
+    
+    # Use threading to handle queueing and result collection concurrently
+    tasks_queued = 0
+    failed_queue_attempts = 0
+    queueing_complete = threading.Event()
+    
+    def producer_thread():
+        """Thread to queue tasks while main thread collects results."""
+        nonlocal tasks_queued, failed_queue_attempts
+        
+        max_failed_attempts = 10
+        
+        logger.info("Producer thread: Starting task queueing...")
+        
+        for seq_id in missing_seq_ids:
+            if SHUTDOWN_REQUESTED or queueing_complete.is_set():
+                break
+                
+            if failed_queue_attempts >= max_failed_attempts:
+                logger.error(f"Too many failed queue attempts ({failed_queue_attempts}), stopping task queuing")
+                break
+                
+            sequence = sequences[seq_id - 1]  # Convert to 0-based index
+            task = WorkerTask(
+                seq_id=seq_id,
+                sequence=sequence,
+                config_path=pipeline.config.get('_config_path', 'config/pipelines/vocab2embedding.yaml'),
+                vocab_path=pipeline.config.get('_vocab_path', ''),
+                dynamic_w_max=pipeline.w_max
+            )
+            
+            # Adaptive queueing: wait for queue space before attempting
+            task_queued = False
+            max_wait_time = 30.0  # Maximum wait time for queue space
+            wait_start = time.time()
+            
+            while time.time() - wait_start < max_wait_time:
+                if SHUTDOWN_REQUESTED or queueing_complete.is_set():
+                    break
+                
+                try:
+                    # Check queue size first
+                    current_queue_size = task_queue.qsize()
+                    queue_capacity = max(50, num_workers * 10)  # Use the same value as queue creation
+                    queue_usage = current_queue_size / queue_capacity if queue_capacity > 0 else 0
+                    
+                    # Only attempt to queue if there's reasonable space (< 90% full)
+                    if queue_usage < 0.9:
+                        task_queue.put(task, timeout=0.1)  # Very short timeout
+                        task_queued = True
+                        tasks_queued += 1
+                        if tasks_queued % 25 == 0:  # Progress updates
+                            logger.info(f"Producer: Queued {tasks_queued}/{len(missing_seq_ids)} tasks (queue: {current_queue_size}/{queue_capacity})")
+                        break  # Success, move to next task
+                    else:
+                        # Queue is too full, wait a bit before checking again
+                        time.sleep(0.2)
+                        
+                except Full:
+                    # Queue is full, wait before retrying
+                    time.sleep(0.5)
+                    continue
+                    
+                except Exception as e:
+                    logger.error(f"Producer: Failed to queue task for sequence {seq_id}: {type(e).__name__}: {e}")
+                    failed_queue_attempts += 1
+                    break  # Move to next task
+            
+            if not task_queued:
+                logger.warning(f"Producer: Could not queue task for sequence {seq_id} within {max_wait_time}s")
+                failed_queue_attempts += 1
+        
+        # Add poison pills for workers (wait for queue space)
+        logger.info("Producer: Queueing poison pills...")
+        poison_pills_added = 0
+        for i in range(num_workers):
+            if SHUTDOWN_REQUESTED or queueing_complete.is_set():
+                break
+                
+            # Wait for queue space before adding poison pill
+            max_wait = 10.0
+            wait_start = time.time()
+            while time.time() - wait_start < max_wait:
+                try:
+                    task_queue.put(None, timeout=0.1)
+                    poison_pills_added += 1
+                    break
+                except Full:
+                    time.sleep(0.5)
+                    continue
+                except Exception as e:
+                    logger.warning(f"Producer: Failed to add poison pill {i+1}: {e}")
+                    break
+        
+        # Report final queueing status
+        if failed_queue_attempts > 0:
+            logger.warning(f"Producer: Task queueing completed with {failed_queue_attempts} failed attempts")
+        logger.info(f"Producer: Successfully queued {tasks_queued}/{len(missing_seq_ids)} tasks and {poison_pills_added}/{num_workers} poison pills")
+        logger.info("Producer thread: Task queueing completed")
+    
+    # Start producer thread
+    producer = threading.Thread(target=producer_thread, name="TaskProducer")
+    producer.daemon = True  # Dies when main thread dies
+    producer.start()
+    logger.info("Started producer thread for task queueing")
+    
     # Result collection with sequential ordering and chunked storage
     results_buffer = {}  # seq_id -> ProcessingResult
     processed_results = set()  # Track which sequence IDs have been saved
     processed_count = 0
     error_count = 0
-    expected_results = len(missing_seq_ids)
+    # We'll update expected_results when producer finishes
+    expected_results = 0
+    producer_finished = False
     
     logger.info("Collecting results and maintaining sequential order...")
     
-    while processed_count + error_count < expected_results and not SHUTDOWN_REQUESTED:
+    # Wait for producer to start and give initial status
+    time.sleep(0.5)
+    
+    while not SHUTDOWN_REQUESTED:
         try:
             # Get result from queue with timeout
             result = result_queue.get(timeout=2.0)
             results_buffer[result.seq_id] = result
+            logger.debug(f"Received result for sequence {result.seq_id} (success: {result.success})")
             
             # Process results in sequential order based on missing_seq_ids
             while True:
@@ -998,23 +1137,63 @@ def process_sequences_parallel(sequences: List[str], missing_seq_ids: List[int],
                             chunk_manager, single_result, pipeline.config, logger
                         )
                         
+                        # Periodic GPU memory cleanup every 10 sequences
+                        if processed_count % 10 == 0 and torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            torch.cuda.synchronize()
+                        
                     except Exception as e:
                         logger.error(f"Error processing results for sequence {next_seq_id}: {e}")
                         error_count += 1
                 else:
                     logger.error(seq_result.error)
                     error_count += 1
-                
+        
         except Empty:
-            # Check if workers are still alive
-            alive_workers = [w for w in workers if w.is_alive()]
-            if not alive_workers and result_queue.empty():
-                logger.warning("All workers finished but some results may be missing")
+            # Check if producer thread is done and update expected_results
+            if not producer.is_alive() and not producer_finished:
+                producer_finished = True
+                expected_results = tasks_queued
+                logger.info(f"Producer finished: expecting {expected_results} results (processed: {processed_count}, errors: {error_count})")
+            
+            # If producer is finished and we've collected all expected results, we can exit
+            if producer_finished and processed_count + error_count >= expected_results:
+                logger.info(f"All expected results collected: {processed_count} processed, {error_count} errors")
                 break
+            
+            # Check if workers are still alive and handle dead workers
+            alive_workers = [w for w in workers if w.is_alive()]
+            dead_workers = [w for w in workers if not w.is_alive()]
+            
+            if dead_workers:
+                for dead_worker in dead_workers:
+                    logger.warning(f"Worker {dead_worker.name} died unexpectedly (likely tensor serialization issue)")
+                    # Check if it terminated with an error
+                    if dead_worker.exitcode and dead_worker.exitcode != 0:
+                        logger.error(f"Worker {dead_worker.name} exited with code {dead_worker.exitcode}")
+            
+            # If all workers are dead and no producer, and result queue is empty, exit
+            if not alive_workers and producer_finished and result_queue.empty():
+                logger.warning("All workers finished and result queue is empty")
+                if expected_results > 0:
+                    missing_results = expected_results - (processed_count + error_count)
+                    if missing_results > 0:
+                        logger.warning(f"Missing {missing_results} results - likely due to worker crashes")
+                break
+            
+            # Continue waiting for more results
             continue
         except Exception as e:
             logger.error(f"Error collecting results: {e}")
             break
+    
+    # Wait for producer thread to finish (with timeout)
+    if producer.is_alive():
+        logger.info("Waiting for producer thread to finish...")
+        queueing_complete.set()  # Signal producer to stop
+        producer.join(timeout=5.0)
+        if producer.is_alive():
+            logger.warning("Producer thread did not finish cleanly")
     
     # Only flush remaining sequences if shutdown was NOT requested
     # This ensures we never save partial chunks during interruption
@@ -1467,7 +1646,7 @@ def main():
     # Initialize chunk manager
     chunk_manager = ChunkManager(output_path, chunk_size)
     
-    # Now load existing records using chunk manager
+    # Load initial existing records for resume detection
     existing_sequences = chunk_manager.get_existing_sequences()
     existing_records = {seq_id: {'sequence_id': seq_id} for seq_id in existing_sequences}
     last_processed = max(existing_sequences) if existing_sequences else 0
@@ -1545,6 +1724,124 @@ def main():
         w_max=dynamic_w_max
     )
     
+    # Validate existing chunks and repair if needed BEFORE determining missing sequences
+    if existing_records:
+        logger.info("=" * 50)
+        logger.info("STAGE 4.5: CHUNK VALIDATION AND REPAIR")
+        logger.info("=" * 50)
+        
+        logger.info(f"Validating {len(chunk_manager.chunks_metadata)} existing chunks...")
+        
+        # Get all missing sequences and chunk gaps
+        all_missing, chunk_gaps = chunk_manager.validate_and_get_missing_sequences(len(sequences))
+        
+        if chunk_gaps:
+            logger.warning(f"Found {len(chunk_gaps)} incomplete chunks that need repair")
+            
+            # Add option to skip repair if it causes issues
+            skip_repair = False
+            try:
+                # Test pipeline processing first with a simple sequence
+                logger.info("Testing pipeline before chunk repair...")
+                test_sequence = "test"
+                test_result = pipeline.process_sequence(test_sequence)
+                logger.info("Pipeline test successful - proceeding with chunk repair")
+                
+                # Clear test result from GPU
+                if torch.cuda.is_available():
+                    del test_result
+                    torch.cuda.empty_cache()
+                
+            except Exception as e:
+                logger.error(f"Pipeline test failed: {e}")
+                logger.warning("Skipping chunk repair due to pipeline issues - will process all missing sequences instead")
+                skip_repair = True
+            
+            if not skip_repair:
+                # Create a sequence processor function for chunk repair
+                def repair_sequence_processor(seq_id: int):
+                    """Process a single sequence for chunk repair."""
+                    repair_logger = get_embedding_logger('vocab2embedding')
+                    try:
+                        repair_logger.info(f"Repair: Starting sequence {seq_id}")
+                        
+                        if seq_id <= len(sequences):
+                            sequence = sequences[seq_id - 1]  # Convert to 0-based index
+                            repair_logger.info(f"Repair: Processing sequence {seq_id} ({len(sequence)} chars)")
+                            
+                            # Check pipeline components before processing
+                            if pipeline.unigram_lm is None or pipeline.seed_embedder is None or pipeline.conv_encoder is None:
+                                repair_logger.error(f"Repair: Pipeline components not properly initialized")
+                                return None
+                            
+                            # Check CUDA availability
+                            if pipeline.device.startswith('cuda') and not torch.cuda.is_available():
+                                repair_logger.error(f"Repair: CUDA device specified but not available")
+                                return None
+                            
+                            repair_logger.info(f"Repair: Calling pipeline.process_sequence for {seq_id}")
+                            result = pipeline.process_sequence(sequence)
+                            repair_logger.info(f"Repair: Pipeline processing completed for {seq_id}")
+                            
+                            # Convert GPU tensors to CPU numpy arrays for storage
+                            processed_result = {
+                                'sequence': sequence,
+                                'span_candidates': result['span_candidates'],
+                                'contextual_embeddings': result['contextual_embeddings'].detach().cpu().numpy()
+                            }
+                            
+                            # Conditionally add other components based on config
+                            output_config = pipeline.config.get('output', {})
+                            if output_config.get('save_seed_embeddings', False):
+                                processed_result['seed_embeddings'] = result['seed_embeddings'].detach().cpu().numpy()
+                            if output_config.get('save_soft_probabilities', False):
+                                processed_result['soft_probabilities'] = result['soft_probabilities'].detach().cpu().numpy()
+                            
+                            repair_logger.info(f"Repair: processed sequence {seq_id} ({len(sequence)} chars, {result['num_candidates']} candidates)")
+                            return processed_result
+                        else:
+                            repair_logger.error(f"Repair: sequence {seq_id} out of range (max: {len(sequences)})")
+                            return None
+                    except Exception as e:
+                        repair_logger.error(f"Repair: failed to process sequence {seq_id}: {e}")
+                        import traceback
+                        repair_logger.error(f"Repair: traceback: {traceback.format_exc()}")
+                        return None
+                
+                # Repair incomplete chunks with timeout protection
+                logger.info(f"Repairing {len(chunk_gaps)} incomplete chunks...")
+                repair_start_time = time.time()
+                
+                try:
+                    repair_success = chunk_manager.repair_incomplete_chunks(
+                        chunk_gaps, repair_sequence_processor, pipeline.config
+                    )
+                    
+                    repair_duration = time.time() - repair_start_time
+                    logger.info(f"Chunk repair completed in {repair_duration:.2f}s")
+                    
+                    if not repair_success:
+                        logger.error("Some chunk repairs failed - proceeding but data integrity may be compromised")
+                    else:
+                        logger.info("All chunk repairs completed successfully")
+                        
+                    # Reload existing records after repairs
+                    existing_sequences = chunk_manager.get_existing_sequences()
+                    existing_records = {seq_id: {'sequence_id': seq_id} for seq_id in existing_sequences}
+                    last_processed = max(existing_sequences) if existing_sequences else 0
+                    logger.info(f"After repairs: {len(existing_records)} sequences processed, last ID: {last_processed}")
+                    
+                except Exception as e:
+                    repair_duration = time.time() - repair_start_time
+                    logger.error(f"Chunk repair failed after {repair_duration:.2f}s: {e}")
+                    import traceback
+                    logger.error(f"Repair traceback: {traceback.format_exc()}")
+                    logger.warning("Proceeding without repairs - some chunks may remain incomplete")
+            else:
+                logger.info("Skipped chunk repair - will process all missing sequences instead")
+        else:
+            logger.info("All existing chunks are complete - no repairs needed")
+    
     # Determine missing sequences for processing (handles discontinuous completions)
     missing_seq_ids = find_missing_sequences(len(sequences), existing_records)
     
@@ -1568,6 +1865,19 @@ def main():
         sequences, missing_seq_ids, pipeline, pipeline.workers, chunk_manager
     )
     
+    # Perform final integrity check after processing
+    logger.info("=" * 50)
+    logger.info("STAGE 6: FINAL INTEGRITY VERIFICATION")
+    logger.info("=" * 50)
+    
+    integrity_check_passed = chunk_manager.final_integrity_check(len(sequences))
+    
+    if not integrity_check_passed:
+        logger.error("FINAL INTEGRITY CHECK FAILED - Some sequences may be missing!")
+        logger.warning("Consider running the pipeline again to repair any missing sequences")
+    else:
+        logger.info("FINAL INTEGRITY CHECK PASSED - All sequences are present and accounted for")
+    
     # Final statistics
     total_processed = skipped_count + processed_count
     logger.info("=" * 50)
@@ -1576,8 +1886,10 @@ def main():
     
     if SHUTDOWN_REQUESTED:
         logger.warning("Pipeline terminated by user request (graceful shutdown)")
+    elif not integrity_check_passed:
+        logger.warning("Pipeline completed with integrity issues - some sequences may be missing")
     else:
-        logger.info("Pipeline completed normally")
+        logger.info("Pipeline completed successfully with all sequences verified")
     
     logger.info(f"Total sequences in dataset: {len(sequences)}")
     logger.info(f"Previously processed (skipped): {skipped_count}")
@@ -1619,6 +1931,9 @@ def main():
         # Use os._exit to bypass any cleanup that might hang
         import os
         os._exit(130)
+    elif not integrity_check_passed:
+        logger.info("Exiting with code 2 (integrity check failed)")
+        sys.exit(2)
     elif error_count > 0:
         logger.info("Exiting with code 1 (errors encountered)")
         sys.exit(1)

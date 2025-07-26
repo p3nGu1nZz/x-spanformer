@@ -196,10 +196,12 @@ numerical:
 
 # Output configuration
 output:
-  save_intermediate: true           # Save intermediate representations
-  save_numpy_arrays: true          # Export .npy files
-  save_json_metadata: true         # Include JSON metadata
-  add_analysis: false               # Detailed analysis
+  save_intermediate: false         # Save intermediate representations (deprecated)
+  chunk_size: 100                  # Sequences per chunk file
+  save_seed_embeddings: false      # Include seed embeddings in chunks (performance optimization)
+  save_json_metadata: false        # Include JSON metadata (deprecated in favor of chunk metadata)
+  add_analysis: false              # Detailed analysis (deprecated)
+  save_soft_probabilities: false   # Include soft probabilities in chunks (performance optimization)
 ```
 
 ## Input/Output
@@ -221,42 +223,104 @@ output:
 
 ### Output Structure
 
+The pipeline uses a **chunk-based storage system** for efficient processing and resumption:
+
 ```
 output_dir/
-├── json/                         # JSON metadata files
-│   ├── embedding_000001.json
-│   └── embedding_000002.json
-├── seed/                         # Seed embeddings (.npy)
-│   ├── seed_emb_000001.npy
-│   └── seed_emb_000002.npy
-├── context/                      # Contextual embeddings (.npy)
-│   ├── context_emb_000001.npy
-│   └── context_emb_000002.npy
-├── soft_prob/                    # Soft probabilities (.npy)
-│   ├── soft_probs_000001.npy
-│   └── soft_probs_000002.npy
+├── chunks/                       # Chunk-based storage (.npz files)
+│   ├── embeddings_000001.npz    # Sequences 1-100
+│   ├── embeddings_000002.npz    # Sequences 101-200
+│   ├── embeddings_000003.npz    # Sequences 201-300
+│   └── embeddings_000052.npz    # Final chunk (partial)
+├── metadata.json                 # Global metadata and chunk information
 └── embedding.log                 # Processing log
 ```
 
-### JSON Metadata Format
+**Chunk Structure:**
+- Each `.npz` file contains up to 100 sequences
+- Compressed storage with contextual embeddings always included
+- Optional seed embeddings and soft probabilities (based on configuration)
+- Automatic chunk validation and integrity checking
+- Efficient single-sequence loading for analysis tools
+
+### Chunk Metadata Format (metadata.json)
 
 ```json
 {
-  "sequence_id": 1,
-  "sequence": "Hello world",
-  "sequence_length": 11,
-  "num_candidates": 24,
-  "span_width": 32,
-  "span_candidates": [[0, 5], [6, 11], [0, 11]],
-  "timestamp": "2025-01-22T10:30:45Z"
+  "chunk_size": 100,
+  "total_sequences": 5107,
+  "created_timestamp": "2025-07-25T19:09:45Z",
+  "last_updated": "2025-07-25T19:12:23Z",
+  "chunks": {
+    "1": {
+      "file_path": "chunks/embeddings_000001.npz",
+      "sequence_range": [1, 100],
+      "sequence_count": 100,
+      "is_complete": true,
+      "components": ["contextual_embeddings", "span_candidates"],
+      "created_timestamp": "2025-07-25T19:10:15Z",
+      "file_size_mb": 56.2
+    },
+    "52": {
+      "file_path": "chunks/embeddings_000052.npz", 
+      "sequence_range": [5101, 5107],
+      "sequence_count": 7,
+      "is_complete": true,
+      "components": ["contextual_embeddings", "span_candidates"],
+      "created_timestamp": "2025-07-25T19:12:23Z",
+      "file_size_mb": 2.0
+    }
+  }
 }
+```
+
+### Chunk File Format (.npz)
+
+Each chunk contains compressed numpy arrays for multiple sequences:
+
+```python
+# Loading a chunk file
+import numpy as np
+data = np.load('embeddings_000001.npz', allow_pickle=True)
+
+# Available arrays:
+# - sequence_ids: [1, 2, 3, ..., 100] 
+# - sequences: ["text1", "text2", ...]
+# - contextual_embeddings: array of shape (N, seq_len, embed_dim)
+# - span_candidates: array of candidate spans per sequence
+# - seed_embeddings: optional, if save_seed_embeddings=true
+# - soft_probabilities: optional, if save_soft_probabilities=true
 ```
 
 ### Array Shapes
 
-- **Soft Probabilities**: `(sequence_length, vocabulary_size)`
-- **Seed Embeddings**: `(sequence_length, embed_dim)`
-- **Context Embeddings**: `(sequence_length, embed_dim)`
+- **Soft Probabilities**: `(sequence_length, vocabulary_size)` - optional component
+- **Seed Embeddings**: `(sequence_length, embed_dim)` - optional component  
+- **Context Embeddings**: `(sequence_length, embed_dim)` - always included
+- **Span Candidates**: Variable length list of `[start, end]` tuples per sequence
+
+### Processing Stages
+
+The pipeline executes in 6 distinct stages with comprehensive validation:
+
+1. **STAGE 1: PIPELINE INITIALIZATION** - Configuration and device setup
+2. **STAGE 2: VOCABULARY LOADING** - Load and validate vocabulary file
+3. **STAGE 3: SEQUENCE LOADING** - Load and validate input sequences  
+4. **STAGE 4: DYNAMIC W_MAX COMPUTATION** - Compute corpus-adaptive span width
+5. **STAGE 4.5: CHUNK VALIDATION AND REPAIR** - Validate existing chunks and resume processing
+6. **STAGE 5: SEQUENCE PROCESSING** - Generate embeddings with parallel workers
+7. **STAGE 6: FINAL INTEGRITY VERIFICATION** - Verify all sequences processed correctly
+
+### Resume and Validation Features
+
+The pipeline includes robust resume capabilities and integrity checking:
+
+- **Automatic Resume**: Detects existing chunks and skips processed sequences
+- **Chunk Validation**: Verifies completeness of existing chunks before processing
+- **Pipeline Testing**: Tests chunk repair process before starting new processing  
+- **Final Integrity Check**: Counts all sequences across all chunks after completion
+- **Gap Detection**: Identifies and reports any missing sequence ranges
+- **Exit Codes**: Returns appropriate codes based on processing and integrity results
 
 ## Usage
 
@@ -298,15 +362,47 @@ python -m x_spanformer.pipelines.vocab2embedding \
 
 ### Resume Processing
 
-The pipeline automatically detects and resumes from existing outputs:
+The pipeline automatically detects and resumes from existing chunk-based outputs:
 
 ```bash
-# This will skip already processed sequences
+# This will validate existing chunks and skip already processed sequences
 python -m x_spanformer.pipelines.vocab2embedding \
   --vocab data/vocab/vocab.jsonl \
   --input data/pretraining/dataset.jsonl \
   --output data/embeddings
 ```
+
+**Resume Process:**
+1. **Load Existing Metadata**: Read chunk information from `metadata.json`
+2. **Validate Chunks**: Verify completeness of each existing chunk file
+3. **Detect Missing Sequences**: Identify gaps in sequence processing
+4. **Pipeline Testing**: Test chunk repair process before starting new work
+5. **Continue Processing**: Process only missing sequences with full validation
+6. **Final Verification**: Verify all sequences are present after completion
+
+### Introspection and Analysis
+
+Use the sequence introspector to analyze processed embeddings:
+
+```bash
+# Basic sequence analysis
+python -m x_spanformer.embedding.sequence_introspector \
+  --id 1 --output data/embeddings
+
+# Detailed statistical analysis  
+python -m x_spanformer.embedding.sequence_introspector \
+  --id 5 --output data/embeddings --analyze
+
+# Check total processed sequences
+python -m x_spanformer.embedding.sequence_introspector \
+  --id 1 --output data/embeddings --list-total
+
+# Verbose output (complete arrays)
+python -m x_spanformer.embedding.sequence_introspector \
+  --id 10 --output data/embeddings --analyze --verbose
+```
+
+The introspector efficiently loads individual sequences from chunk files without decompressing entire chunks.
 
 ## Mathematical Details
 
@@ -400,13 +496,15 @@ With default configuration (embed_dim=512, T=256):
 
 ### Log Levels
 
-The pipeline provides detailed logging across 5 stages:
+The pipeline provides detailed logging across 6 stages:
 
 1. **PIPELINE INITIALIZATION**: Configuration loading and validation
 2. **VOCABULARY LOADING**: Vocabulary statistics and component initialization  
 3. **SEQUENCE LOADING**: Corpus statistics and preprocessing
 4. **DYNAMIC W_MAX COMPUTATION**: Span width calculation details
-5. **SEQUENCE PROCESSING**: Per-sequence processing statistics
+5. **CHUNK VALIDATION AND REPAIR**: Existing chunk verification and missing sequence detection
+6. **SEQUENCE PROCESSING**: Per-sequence processing statistics with parallel workers
+7. **FINAL INTEGRITY VERIFICATION**: Complete dataset validation and gap detection
 
 ### Key Metrics Logged
 
@@ -414,15 +512,21 @@ The pipeline provides detailed logging across 5 stages:
 - **Device**: CUDA availability, selected device, memory usage (simplified device list format)
 - **Sequences**: Count, length statistics, processing rate
 - **Dynamic w_max**: Corpus-based vs sequence-based values
-- **File Sizes**: Individual array sizes and total storage
+- **Chunk Validation**: Per-chunk verification status, missing sequence ranges
+- **Processing Progress**: Real-time percentage completion, worker status, sequence timing
+- **Final Integrity**: Total sequence count verification, chunk completeness validation
+- **File Sizes**: Chunk sizes, compression ratios, total storage usage
 
 ### Error Handling
 
-- **Graceful Shutdown**: Handles SIGINT/SIGTERM signals
-- **Resume Capability**: Automatic detection of partial processing
-- **Validation**: Input format validation and error reporting
-- **Resource Management**: Memory cleanup and device management
+- **Graceful Shutdown**: Handles SIGINT/SIGTERM signals with proper cleanup
+- **Chunk-Based Resume**: Automatic detection of partial processing with chunk validation
+- **Validation**: Input format validation, chunk integrity checking, and error reporting
+- **Resource Management**: Memory cleanup, device management, and worker process cleanup
 - **Device Fallback**: Intelligent CPU fallback when CUDA unavailable (CI/CD compatibility)
+- **Pipeline Testing**: Pre-processing validation to prevent hanging during chunk repair
+- **Integrity Verification**: Post-processing validation to ensure no missing sequences
+- **Exit Codes**: 0 (success), 1 (general error), 2 (integrity check failure)
 
 ## Integration
 
@@ -434,15 +538,17 @@ The pipeline provides detailed logging across 5 stages:
 
 ### Downstream Usage
 
-- **Section 3.3+ Pipelines**: Provides contextualized embeddings and span candidates
-- **Analysis Tools**: Compatible with embedding analysis utilities
-- **Export Formats**: NumPy arrays for ML frameworks, JSON for metadata
+- **Section 3.3+ Pipelines**: Provides contextualized embeddings and span candidates through chunk-based loading
+- **Analysis Tools**: Sequence introspector with efficient single-sequence loading from chunks
+- **Export Formats**: Compressed chunk files (.npz) for efficient storage and loading
+- **Metadata Access**: Global metadata.json for chunk information and processing status
 
 ### Schema Compatibility
 
 - **Input**: `PretrainRecord` and `VocabEntry` schemas
-- **Output**: `EmbeddingResult` schema with numpy array attachments
+- **Output**: Chunk-based compressed storage with `ChunkMetadata` schema
 - **Configuration**: YAML schema with nested architecture/processing/output sections
+- **Metadata**: Global JSON metadata with chunk information and processing status
 
 ## Troubleshooting
 
@@ -451,10 +557,13 @@ The pipeline provides detailed logging across 5 stages:
 1. **CUDA Out of Memory**: Reduce `batch_size`, `max_sequence_length`, or `workers`
 2. **CUDA Unavailable**: Pipeline automatically falls back to CPU with warning message
 3. **Slow Processing**: Check GPU utilization, automatic CPU fallback for CI/CD environments
-4. **Large Output Files**: Disable `save_intermediate` or `add_analysis`
-5. **Resume Failures**: Check file permissions and disk space
+4. **Large Chunk Files**: Adjust `chunk_size` or disable optional components (`save_seed_embeddings`, `save_soft_probabilities`)
+5. **Resume Failures**: Check chunk file integrity, file permissions, and disk space
 6. **Worker Process Errors**: Reduce `workers` count if experiencing instability
 7. **GPU Memory with Multiple Workers**: Each worker uses full GPU memory - reduce workers if OOM
+8. **Chunk Validation Hanging**: Use pipeline testing to identify problematic chunks before processing
+9. **Integrity Check Failures**: Review chunk completeness and sequence gaps in final verification
+10. **Sequence Introspector Slow**: Updated with efficient single-sequence loading from chunks
 
 ### Configuration Tuning
 
@@ -465,6 +574,9 @@ The pipeline provides detailed logging across 5 stages:
 - **For CI/CD**: Omit `--device` parameter for CPU fallback when CUDA unavailable
 - **For High Throughput**: Use 4-8 workers on high-memory GPU systems
 - **For Memory Constraints**: Use single worker (workers: 1) to minimize GPU usage
+- **For Storage Efficiency**: Disable optional components (`save_seed_embeddings: false`, `save_soft_probabilities: false`)
+- **For Debugging**: Enable chunk validation logging and use sequence introspector for analysis
+- **For Large Datasets**: Adjust `chunk_size` (default 100) based on memory and storage requirements
 
 ### Performance Optimization
 

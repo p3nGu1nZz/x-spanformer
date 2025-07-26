@@ -401,21 +401,339 @@ class ChunkManager:
             self.logger.error(f"Failed to load chunk {chunk_id}: {e}")
             return None
     
+    def load_single_sequence(self, seq_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Load a single sequence from its chunk without loading the entire chunk.
+        
+        This is much more efficient than load_chunk when you only need one sequence.
+        
+        Args:
+            seq_id: Sequence ID to load
+            
+        Returns:
+            Dictionary containing sequence data, or None if failed
+        """
+        chunk_id = self.get_chunk_id(seq_id)
+        
+        if chunk_id not in self.chunks_metadata:
+            self.logger.warning(f"Chunk {chunk_id} not found in metadata for sequence {seq_id}")
+            return None
+        
+        chunk_file = self.get_chunk_file_path(chunk_id)
+        if not chunk_file.exists():
+            self.logger.error(f"Chunk file missing: {chunk_file}")
+            return None
+        
+        try:
+            # Load only the metadata first to find the sequence index
+            data = np.load(chunk_file, allow_pickle=True)
+            seq_ids = data['sequence_ids']
+            
+            # Find the index of our sequence in the chunk
+            seq_index = None
+            for i, chunk_seq_id in enumerate(seq_ids):
+                if int(chunk_seq_id) == seq_id:
+                    seq_index = i
+                    break
+            
+            if seq_index is None:
+                self.logger.error(f"Sequence {seq_id} not found in chunk {chunk_id}")
+                return None
+            
+            # Load only the data for this specific sequence
+            result = {
+                'sequence_id': int(seq_ids[seq_index]),
+                'sequence': str(data['sequences'][seq_index]),
+                'contextual_embeddings': data['contextual_embeddings'][seq_index],
+                'span_candidates': [
+                    tuple(span) if isinstance(span, list) else span
+                    for span in (
+                        data['span_candidates'][seq_index].tolist() 
+                        if hasattr(data['span_candidates'][seq_index], 'tolist')
+                        else data['span_candidates'][seq_index]
+                    )
+                ]
+            }
+            
+            # Add optional components if they exist
+            if 'seed_embeddings' in data:
+                result['seed_embeddings'] = data['seed_embeddings'][seq_index]
+            if 'soft_probabilities' in data:
+                result['soft_probabilities'] = data['soft_probabilities'][seq_index]
+            
+            self.logger.debug(f"Loaded single sequence {seq_id} from chunk {chunk_id}")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load sequence {seq_id} from chunk {chunk_id}: {e}")
+            return None
+
     def get_existing_sequences(self) -> Set[int]:
         """
         Get set of all existing sequence IDs across all chunks.
+        
+        This method loads the actual sequence IDs from chunk files rather than
+        relying on metadata ranges, to handle cases where chunks have gaps
+        due to missing sequences during processing.
         
         Returns:
             Set of sequence IDs that have been processed and stored
         """
         existing_sequences = set()
         
-        for chunk_meta in self.chunks_metadata.values():
-            # Add all sequences in the range for this chunk
-            existing_sequences.update(chunk_meta.get_sequence_range())
+        for chunk_id, chunk_meta in self.chunks_metadata.items():
+            # Load actual sequences from chunk file instead of using metadata range
+            try:
+                chunk_file = self.get_chunk_file_path(chunk_id)
+                if chunk_file.exists():
+                    data = np.load(chunk_file, allow_pickle=True)
+                    if 'sequence_ids' in data:
+                        # Add actual sequence IDs from the file
+                        actual_seq_ids = data['sequence_ids'].tolist()
+                        existing_sequences.update(actual_seq_ids)
+                        self.logger.debug(f"Chunk {chunk_id}: loaded {len(actual_seq_ids)} actual sequences")
+                    else:
+                        self.logger.warning(f"Chunk {chunk_id}: file missing sequence_ids, using metadata range")
+                        # Fallback to metadata range if sequence_ids not found
+                        existing_sequences.update(chunk_meta.get_sequence_range())
+                else:
+                    self.logger.warning(f"Chunk {chunk_id}: file not found, skipping")
+            except Exception as e:
+                self.logger.error(f"Failed to load sequences from chunk {chunk_id}: {e}")
+                # Fallback to metadata range on error
+                existing_sequences.update(chunk_meta.get_sequence_range())
         
         self.logger.debug(f"Found {len(existing_sequences)} existing sequences across {len(self.chunks_metadata)} chunks")
         return existing_sequences
+
+    def validate_and_get_missing_sequences(self, total_sequences: int) -> Tuple[Set[int], Dict[int, List[int]]]:
+        """
+        Validate existing chunks and identify missing sequences.
+        
+        This method checks each existing chunk for completeness and identifies:
+        1. Missing sequences within existing chunks (gaps that need repair)
+        2. Missing sequences beyond the last processed sequence (new processing)
+        
+        Args:
+            total_sequences: Total number of sequences in the dataset
+            
+        Returns:
+            Tuple of (all_missing_sequences, chunk_gaps) where:
+            - all_missing_sequences: Set of all sequence IDs that need processing
+            - chunk_gaps: Dict mapping chunk_id -> list of missing sequence IDs in that chunk
+        """
+        existing_sequences = self.get_existing_sequences()
+        all_sequence_ids = set(range(1, total_sequences + 1))
+        all_missing = all_sequence_ids - existing_sequences
+        
+        # Log detailed chunk verification progress
+        total_chunks = len(self.chunks_metadata)
+        self.logger.info(f"Verifying {total_chunks} chunks for completeness...")
+        
+        # Analyze gaps within existing chunks
+        chunk_gaps = {}
+        verified_count = 0
+        
+        for chunk_id in sorted(self.chunks_metadata.keys()):
+            verified_count += 1
+            start_seq_id, end_seq_id = self.get_chunk_range(chunk_id)
+            expected_chunk_sequences = set(range(start_seq_id, end_seq_id + 1))
+            
+            # Load actual sequences from this chunk
+            try:
+                chunk_file = self.get_chunk_file_path(chunk_id)
+                if chunk_file.exists():
+                    data = np.load(chunk_file, allow_pickle=True)
+                    if 'sequence_ids' in data:
+                        actual_sequences = set(data['sequence_ids'].tolist())
+                        missing_in_chunk = expected_chunk_sequences - actual_sequences
+                        # Only include missing sequences that are within the total dataset range
+                        missing_in_chunk = missing_in_chunk & set(range(1, total_sequences + 1))
+                        
+                        if missing_in_chunk:
+                            chunk_gaps[chunk_id] = sorted(missing_in_chunk)
+                            self.logger.warning(
+                                f"Chunk {chunk_id} verification {verified_count}/{total_chunks}: "
+                                f"INCOMPLETE - {len(missing_in_chunk)} missing sequences: {sorted(missing_in_chunk)}"
+                            )
+                        else:
+                            self.logger.info(
+                                f"Chunk {chunk_id} verification {verified_count}/{total_chunks}: "
+                                f"COMPLETE - {len(actual_sequences)}/{len(expected_chunk_sequences)} sequences"
+                            )
+                    else:
+                        self.logger.error(
+                            f"Chunk {chunk_id} verification {verified_count}/{total_chunks}: "
+                            f"ERROR - missing sequence_ids array"
+                        )
+                else:
+                    self.logger.error(
+                        f"Chunk {chunk_id} verification {verified_count}/{total_chunks}: "
+                        f"ERROR - chunk file does not exist: {chunk_file}"
+                    )
+            except Exception as e:
+                self.logger.error(f"Chunk {chunk_id} verification {verified_count}/{total_chunks}: ERROR - {e}")
+        
+        complete_chunks = total_chunks - len(chunk_gaps)
+        self.logger.info(
+            f"Chunk verification complete: {complete_chunks}/{total_chunks} complete, "
+            f"{len(chunk_gaps)} incomplete, {len(all_missing)} total missing sequences"
+        )
+        
+        return all_missing, chunk_gaps
+
+    def repair_incomplete_chunks(self, chunk_gaps: Dict[int, List[int]], 
+                                sequence_processor_func, pipeline_config: Dict) -> bool:
+        """
+        Repair incomplete chunks by processing missing sequences and resaving complete chunks.
+        
+        Args:
+            chunk_gaps: Dict mapping chunk_id -> list of missing sequence IDs
+            sequence_processor_func: Function to process sequences (seq_id, sequence_text) -> result_dict
+            pipeline_config: Pipeline configuration for saving
+            
+        Returns:
+            True if all repairs successful, False if any failures
+        """
+        if not chunk_gaps:
+            self.logger.info("No incomplete chunks to repair")
+            return True
+        
+        self.logger.info(f"Repairing {len(chunk_gaps)} incomplete chunks...")
+        repair_success = True
+        
+        for chunk_id, missing_seq_ids in chunk_gaps.items():
+            try:
+                self.logger.info(f"Repairing chunk {chunk_id}: processing {len(missing_seq_ids)} missing sequences")
+                
+                # Load existing chunk data
+                existing_data = self.load_chunk(chunk_id)
+                if existing_data is None:
+                    self.logger.error(f"Failed to load existing chunk {chunk_id} for repair")
+                    repair_success = False
+                    continue
+                
+                # Process missing sequences
+                repaired_data = existing_data.copy()
+                for seq_id in missing_seq_ids:
+                    try:
+                        # Call the sequence processor function
+                        result = sequence_processor_func(seq_id)
+                        if result is not None:
+                            repaired_data[seq_id] = result
+                            self.logger.debug(f"Processed missing sequence {seq_id} for chunk {chunk_id}")
+                        else:
+                            self.logger.error(f"Failed to process sequence {seq_id} for chunk {chunk_id}")
+                            repair_success = False
+                    except Exception as e:
+                        self.logger.error(f"Error processing sequence {seq_id} for chunk {chunk_id}: {e}")
+                        repair_success = False
+                
+                # Save the repaired chunk (overwrites existing)
+                chunk_meta = self._save_single_chunk(repaired_data, pipeline_config, chunk_id)
+                if chunk_meta:
+                    seq_ids = sorted(repaired_data.keys())
+                    self.logger.info(
+                        f"Repaired chunk {chunk_id}: now contains sequences {seq_ids[0]}-{seq_ids[-1]} "
+                        f"({len(repaired_data)} sequences, added {len(missing_seq_ids)} missing)"
+                    )
+                else:
+                    self.logger.error(f"Failed to save repaired chunk {chunk_id}")
+                    repair_success = False
+                    
+            except Exception as e:
+                self.logger.error(f"Failed to repair chunk {chunk_id}: {e}")
+                repair_success = False
+        
+        if repair_success:
+            self.logger.info("All chunk repairs completed successfully")
+        else:
+            self.logger.warning("Some chunk repairs failed - data integrity may be compromised")
+            
+        return repair_success
+    
+    def final_integrity_check(self, total_sequences: int) -> bool:
+        """
+        Perform final integrity check after pipeline completion to ensure no sequences are missing.
+        
+        Args:
+            total_sequences: Total number of sequences that should be in the dataset
+            
+        Returns:
+            True if all sequences are present and chunks are complete, False otherwise
+        """
+        self.logger.info("=" * 60)
+        self.logger.info("PERFORMING FINAL INTEGRITY CHECK")
+        self.logger.info("=" * 60)
+        
+        # Get all existing sequences
+        existing_sequences = self.get_existing_sequences()
+        expected_sequences = set(range(1, total_sequences + 1))
+        missing_sequences = expected_sequences - existing_sequences
+        
+        self.logger.info(f"Expected sequences: {total_sequences} (1-{total_sequences})")
+        self.logger.info(f"Found sequences: {len(existing_sequences)}")
+        
+        if missing_sequences:
+            self.logger.error(f"INTEGRITY CHECK FAILED: {len(missing_sequences)} sequences missing!")
+            missing_ranges = []
+            sorted_missing = sorted(missing_sequences)
+            start = sorted_missing[0]
+            end = start
+            
+            for seq_id in sorted_missing[1:]:
+                if seq_id == end + 1:
+                    end = seq_id
+                else:
+                    if start == end:
+                        missing_ranges.append(str(start))
+                    else:
+                        missing_ranges.append(f"{start}-{end}")
+                    start = end = seq_id
+            
+            if start == end:
+                missing_ranges.append(str(start))
+            else:
+                missing_ranges.append(f"{start}-{end}")
+            
+            self.logger.error(f"Missing sequence ranges: {', '.join(missing_ranges)}")
+            return False
+        
+        # Validate chunk completeness
+        all_missing, chunk_gaps = self.validate_and_get_missing_sequences(total_sequences)
+        
+        if chunk_gaps:
+            self.logger.error(f"INTEGRITY CHECK FAILED: {len(chunk_gaps)} chunks are incomplete!")
+            for chunk_id, missing_in_chunk in chunk_gaps.items():
+                self.logger.error(f"  Chunk {chunk_id}: missing {len(missing_in_chunk)} sequences: {missing_in_chunk}")
+            return False
+        
+        # All checks passed
+        total_chunks = len(self.chunks_metadata)
+        self.logger.info(f"INTEGRITY CHECK PASSED: All {total_sequences} sequences present in {total_chunks} complete chunks")
+        
+        # Log chunk distribution
+        sequence_counts = {}
+        for chunk_id in sorted(self.chunks_metadata.keys()):
+            try:
+                chunk_file = self.get_chunk_file_path(chunk_id)
+                if chunk_file.exists():
+                    data = np.load(chunk_file, allow_pickle=True)
+                    if 'sequence_ids' in data:
+                        sequence_counts[chunk_id] = len(data['sequence_ids'])
+            except Exception as e:
+                self.logger.warning(f"Could not count sequences in chunk {chunk_id}: {e}")
+        
+        total_counted = sum(sequence_counts.values())
+        self.logger.info(f"Sequence distribution: {total_counted} sequences across {len(sequence_counts)} chunks")
+        if len(sequence_counts) <= 10:  # Show distribution for small number of chunks
+            for chunk_id in sorted(sequence_counts.keys()):
+                count = sequence_counts[chunk_id]
+                start_seq, end_seq = self.get_chunk_range(chunk_id)
+                self.logger.info(f"  Chunk {chunk_id}: {count} sequences ({start_seq}-{end_seq})")
+        
+        self.logger.info("=" * 60)
+        return True
     
     def verify_chunk_integrity(self, chunk_id: int) -> bool:
         """
@@ -581,30 +899,71 @@ class ChunkManager:
             # Check if we have all sequences for this chunk
             buffered_for_chunk = buffered_ids & expected_sequences
             
-            if len(buffered_for_chunk) == self.chunk_size:
-                # We have a complete chunk, save it
-                chunk_data = {
-                    seq_id: self.sequence_buffer[seq_id] 
-                    for seq_id in expected_sequences 
-                    if seq_id in self.sequence_buffer
-                }
+            # Handle case where chunk already exists (incomplete chunk continuation)
+            if chunk_id in self.chunks_metadata:
+                # This chunk already exists - we're completing it
+                existing_chunk = self.chunks_metadata[chunk_id]
+                existing_sequences = set(existing_chunk.get_sequence_range())
                 
-                # Save the chunk using the single chunk method directly
-                chunk_meta = self._save_single_chunk(chunk_data, pipeline_config, chunk_id)
-                if chunk_meta:
-                    saved_chunks.append(chunk_meta)
+                # Check if we now have all missing sequences for this chunk
+                missing_sequences = expected_sequences - existing_sequences
+                buffered_missing = buffered_for_chunk & missing_sequences
                 
-                # Remove saved sequences from buffer
-                for seq_id in expected_sequences:
-                    self.sequence_buffer.pop(seq_id, None)
+                if len(buffered_missing) == len(missing_sequences):
+                    # We have all missing sequences - complete the chunk
+                    # Load existing chunk data
+                    existing_data = self.load_chunk(chunk_id)
+                    if existing_data is None:
+                        self.logger.error(f"Failed to load existing chunk {chunk_id} for completion")
+                        break
                     
-                self.logger.info(
-                    f"Saved complete chunk {chunk_id}: sequences {start_seq_id}-{end_seq_id} "
-                    f"({self.chunk_size} sequences)"
-                )
+                    # Merge with new buffered data
+                    chunk_data = existing_data.copy()
+                    for seq_id in buffered_missing:
+                        chunk_data[seq_id] = self.sequence_buffer[seq_id]
+                    
+                    # Save the completed chunk (will overwrite existing)
+                    chunk_meta = self._save_single_chunk(chunk_data, pipeline_config, chunk_id)
+                    if chunk_meta:
+                        saved_chunks.append(chunk_meta)
+                    
+                    # Remove saved sequences from buffer
+                    for seq_id in buffered_missing:
+                        self.sequence_buffer.pop(seq_id, None)
+                        
+                    self.logger.info(
+                        f"Completed existing chunk {chunk_id}: sequences {start_seq_id}-{end_seq_id} "
+                        f"(added {len(buffered_missing)} sequences, {self.chunk_size} total)"
+                    )
+                else:
+                    # Still missing some sequences for this chunk
+                    break
             else:
-                # Cannot complete this chunk yet
-                break
+                # New chunk - use original logic
+                if len(buffered_for_chunk) == self.chunk_size:
+                    # We have a complete new chunk, save it
+                    chunk_data = {
+                        seq_id: self.sequence_buffer[seq_id] 
+                        for seq_id in expected_sequences 
+                        if seq_id in self.sequence_buffer
+                    }
+                    
+                    # Save the chunk using the single chunk method directly
+                    chunk_meta = self._save_single_chunk(chunk_data, pipeline_config, chunk_id)
+                    if chunk_meta:
+                        saved_chunks.append(chunk_meta)
+                    
+                    # Remove saved sequences from buffer
+                    for seq_id in expected_sequences:
+                        self.sequence_buffer.pop(seq_id, None)
+                        
+                    self.logger.info(
+                        f"Saved complete chunk {chunk_id}: sequences {start_seq_id}-{end_seq_id} "
+                        f"({self.chunk_size} sequences)"
+                    )
+                else:
+                    # Cannot complete this chunk yet
+                    break
         
         return saved_chunks
     
