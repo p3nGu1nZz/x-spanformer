@@ -60,6 +60,237 @@ logger = None
 # Global flag for graceful shutdown
 SHUTDOWN_REQUESTED = False
 
+
+def should_update_metadata_only(chunk_manager, sequences: List[str]) -> bool:
+    """
+    Determine if we should only update metadata (no reprocessing needed).
+    
+    Returns True if:
+    1. All chunks exist and are complete
+    2. Metadata exists but missing span statistics
+    3. Total sequences match what's already processed
+    """
+    try:
+        if not chunk_manager.metadata_file.exists():
+            return False  # No existing metadata, need full processing
+            
+        with open(chunk_manager.metadata_file, 'r') as f:
+            metadata = json.load(f)
+            
+        pipeline_stats = metadata.get('pipeline_stats', {})
+        
+        # Check if all expected chunks exist
+        total_chunks = metadata.get('total_chunks', 0)
+        chunks_exist = all(
+            (chunk_manager.chunks_dir / Path(metadata['chunks'][str(i)]['file_path']).name).exists()
+            for i in range(1, total_chunks + 1)
+            if str(i) in metadata['chunks']
+        )
+        
+        # Check if sequence count matches
+        expected_sequences = len(sequences)
+        processed_sequences = pipeline_stats.get('total_sequences', 0)
+        
+        # Check if span statistics are missing
+        span_stats_missing = 'max_span_width' not in pipeline_stats
+        
+        if chunks_exist and expected_sequences == processed_sequences:
+            if span_stats_missing:
+                return True  # Only need to update metadata with span stats
+            else:
+                return False  # Everything is complete, skip entirely
+        else:
+            return False  # Need to reprocess
+            
+    except Exception as e:
+        get_embedding_logger('vocab2embedding').warning(f"Error checking metadata: {e}")
+        return False  # When in doubt, reprocess
+
+
+def compute_corpus_w_max(sequences: List[str]) -> int:
+    """Compute corpus-based w_max from sequences (extracted for reuse)."""
+    import re
+    
+    max_word_length = 0
+    for sequence in sequences:
+        if not sequence or not sequence.strip():
+            continue
+        words = re.split(r'\s+', sequence.strip())
+        for word in words:
+            if word:
+                max_word_length = max(max_word_length, len(word))
+    
+    return max_word_length
+
+
+def calculate_span_distribution(span_widths: List[int]) -> Dict[str, float]:
+    """Calculate span width distribution histogram."""
+    if not span_widths:
+        return {}
+    
+    total_spans = len(span_widths)
+    distribution = {
+        "1-2": 0,
+        "3-5": 0, 
+        "6-10": 0,
+        "11-20": 0,
+        "21-50": 0,
+        "51+": 0
+    }
+    
+    for width in span_widths:
+        if width <= 2:
+            distribution["1-2"] += 1
+        elif width <= 5:
+            distribution["3-5"] += 1
+        elif width <= 10:
+            distribution["6-10"] += 1
+        elif width <= 20:
+            distribution["11-20"] += 1
+        elif width <= 50:
+            distribution["21-50"] += 1
+        else:
+            distribution["51+"] += 1
+    
+    # Convert to percentages
+    return {k: round(v / total_spans, 3) for k, v in distribution.items()}
+
+
+def update_metadata_with_span_stats(chunk_manager, sequences: List[str], 
+                                   pipeline_config: Dict) -> bool:
+    """
+    Update existing metadata.json with global span statistics without reprocessing sequences.
+    
+    Analyzes existing chunks to compute:
+    - max_span_width (global across all chunks)
+    - min_span_width 
+    - mean_span_width
+    - span_width_distribution
+    
+    Args:
+        chunk_manager: ChunkManager instance
+        sequences: Original sequences for w_max computation
+        pipeline_config: Pipeline configuration
+        
+    Returns:
+        bool: True if metadata was successfully updated
+    """
+    logger = get_embedding_logger('vocab2embedding')
+    
+    # Check if metadata already has span stats
+    try:
+        if not chunk_manager.metadata_file.exists():
+            logger.error("❌ No existing metadata.json found")
+            return False
+            
+        with open(chunk_manager.metadata_file, 'r') as f:
+            metadata = json.load(f)
+            
+        pipeline_stats = metadata.get('pipeline_stats', {})
+        
+        if 'max_span_width' in pipeline_stats:
+            logger.info("📊 Metadata already contains span statistics")
+            logger.info(f"   Current max_span_width: {pipeline_stats['max_span_width']}")
+            return True
+    except Exception as e:
+        logger.error(f"❌ Error reading metadata: {e}")
+        return False
+    
+    logger.info("=" * 50)
+    logger.info("📈 UPDATING METADATA WITH SPAN STATISTICS")
+    logger.info("=" * 50)
+    
+    # Collect span statistics from existing chunks
+    all_span_widths = []
+    global_max_width = 0
+    total_spans_processed = 0
+    
+    logger.info(f"🔍 Analyzing {len(chunk_manager.chunks_metadata)} existing chunks...")
+    
+    for chunk_id, chunk_metadata in chunk_manager.chunks_metadata.items():
+        try:
+            # Load chunk data
+            chunk_file = chunk_manager.chunks_dir / Path(chunk_metadata.file_path).name
+            if not chunk_file.exists():
+                logger.warning(f"⚠️  Chunk file missing: {chunk_file}")
+                continue
+                
+            logger.info(f"   Processing chunk {chunk_id}...")
+            chunk_data = np.load(chunk_file, allow_pickle=True)
+            
+            # Extract span candidates for each sequence in chunk
+            candidates_data = chunk_data.get('span_candidates', None)
+            if candidates_data is None:
+                logger.warning(f"⚠️  Chunk {chunk_id}: No span_candidates data found")
+                continue
+            
+            chunk_spans_count = 0
+            
+            # candidates_data is a numpy array where each element is a list of (start, end) tuples
+            for seq_idx in range(len(candidates_data)):
+                span_list = candidates_data[seq_idx]
+                if span_list is not None:
+                    for start, end in span_list:
+                        width = end - start
+                        all_span_widths.append(width)
+                        global_max_width = max(global_max_width, width)
+                        total_spans_processed += 1
+                        chunk_spans_count += 1
+            
+            logger.info(f"     ✅ Chunk {chunk_id}: {chunk_spans_count} spans analyzed")
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing chunk {chunk_id}: {e}")
+            continue
+    
+    if not all_span_widths:
+        logger.error("❌ No span data found in existing chunks")
+        return False
+    
+    # Compute corpus-based w_max (for comparison)
+    corpus_w_max = compute_corpus_w_max(sequences)
+    
+    # Calculate global statistics
+    min_span_width = min(all_span_widths)
+    mean_span_width = np.mean(all_span_widths)
+    
+    # Create span width distribution
+    span_width_distribution = calculate_span_distribution(all_span_widths)
+    
+    logger.info(f"📊 Global span statistics computed:")
+    logger.info(f"   max_span_width: {global_max_width}")
+    logger.info(f"   min_span_width: {min_span_width}")
+    logger.info(f"   mean_span_width: {mean_span_width:.2f}")
+    logger.info(f"   corpus_based_w_max: {corpus_w_max}")
+    logger.info(f"   total_spans_analyzed: {total_spans_processed:,}")
+    
+    # Update metadata
+    try:
+        # Add global span statistics to pipeline_stats only
+        metadata['pipeline_stats'].update({
+            'max_span_width': global_max_width,
+            'min_span_width': min_span_width,
+            'mean_span_width': float(mean_span_width),
+            'corpus_based_w_max': corpus_w_max,
+            'total_spans_processed': total_spans_processed,
+            'span_width_distribution': span_width_distribution
+        })
+        
+        # Don't duplicate span stats in individual chunks - they're global properties
+        
+        # Save updated metadata
+        with open(chunk_manager.metadata_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        logger.info("✅ Successfully updated metadata.json with span statistics")
+        logger.info(f"📄 Metadata file: {chunk_manager.metadata_file}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Error updating metadata: {e}")
+        return False
+
 class WorkerTask:
     """Data structure for worker task distribution."""
     def __init__(self, seq_id: int, sequence: str, config_path: str, vocab_path: str, dynamic_w_max: int):
@@ -1706,6 +1937,65 @@ def main():
     logger.info(f"Average sequence length: {stats.get('avg_length', 'N/A')}")
     logger.info(f"Max sequence length: {stats.get('max_length', 'N/A')}")
     logger.info(f"Min sequence length: {stats.get('min_length', 'N/A')}")
+    
+    # INTELLIGENT MODE DETECTION
+    update_mode = should_update_metadata_only(chunk_manager, sequences)
+    
+    if update_mode:
+        logger.info("🔄 SMART METADATA UPDATE MODE DETECTED")
+        logger.info("✅ All chunks exist and are complete")
+        logger.info("⚠️  Span statistics missing from metadata")
+        logger.info("🚀 Updating metadata without reprocessing...")
+        
+        # Update metadata with span statistics
+        success = update_metadata_with_span_stats(chunk_manager, sequences, pipeline.config)
+        
+        if success:
+            logger.info("✅ Metadata update completed successfully!")
+            logger.info(f"📄 Updated metadata file: {chunk_manager.metadata_file}")
+            
+            # Display the key stats that were added
+            try:
+                with open(chunk_manager.metadata_file, 'r') as f:
+                    metadata = json.load(f)
+                stats = metadata['pipeline_stats']
+                logger.info(f"📊 Added span statistics:")
+                logger.info(f"   max_span_width: {stats.get('max_span_width', 'N/A')}")
+                logger.info(f"   min_span_width: {stats.get('min_span_width', 'N/A')}")
+                logger.info(f"   mean_span_width: {stats.get('mean_span_width', 'N/A')}")
+                logger.info(f"   total_spans_processed: {stats.get('total_spans_processed', 'N/A'):,}")
+            except Exception:
+                pass  # Non-critical if we can't display stats
+        else:
+            logger.error("❌ Metadata update failed!")
+            sys.exit(1)
+        
+        return
+    
+    # Check if everything is already complete
+    try:
+        if chunk_manager.metadata_file.exists():
+            with open(chunk_manager.metadata_file, 'r') as f:
+                metadata = json.load(f)
+            pipeline_stats = metadata.get('pipeline_stats', {})
+            
+            if ('max_span_width' in pipeline_stats and 
+                pipeline_stats.get('total_sequences', 0) == len(sequences)):
+                logger.info("✅ PROCESSING ALREADY COMPLETE")
+                logger.info("🎯 All chunks exist with complete metadata")
+                logger.info("⏭️  Nothing to do - pipeline already finished")
+                logger.info(f"📊 Current statistics:")
+                logger.info(f"   total_sequences: {pipeline_stats['total_sequences']}")
+                logger.info(f"   max_span_width: {pipeline_stats['max_span_width']}")
+                logger.info(f"   embed_dim: {pipeline_stats['embed_dim']}")
+                return
+            
+    except Exception:
+        pass  # No existing metadata or error reading, continue with full processing
+    
+    # Continue with normal processing
+    logger.info("🚀 FULL PROCESSING MODE")
+    logger.info("Starting embedding generation pipeline...")
     
     # Compute dynamic w_max based on actual corpus content
     logger.info("=" * 50)
