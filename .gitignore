@@ -176,22 +176,10 @@ uv.lock
 x_spanformer/agents/__pycache__/*
 dist
 
-# Batch 1
+# Pretraining
 data/pretraining/out/csv/*
 data/pretraining/out/jsonl/*/*
 
-# Batch 2
-data/pretraining2/out/csv/*
-data/pretraining2/out/jsonl/*/*
-
-# Batch 3
-data/pretraining3/out/csv/*
-data/pretraining3/out/jsonl/*/*
-
-# Batch 4
-data/pretraining4/out/csv/*
-data/pretraining4/out/jsonl/*/*
-data/pretraining4/out/temp_batches/*/*
 
 # Vocab
 data/vocab/out/candidates/*
@@ -200,3 +188,6 @@ data/vocab/out/pruning/*
 
 # Embedding
 data/embedding/
+
+# Span
+data/span/
