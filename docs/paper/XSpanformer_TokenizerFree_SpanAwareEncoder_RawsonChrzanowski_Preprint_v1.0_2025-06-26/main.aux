@@ -180,30 +180,110 @@
 \@writefile{loa}{\contentsline {algorithm}{\numberline {3}{\ignorespaces Unified Seed Embedding and Candidate Generation}}{19}{algorithm.3}\protected@file@percent }
 \newlabel{alg:seed-embedding-pipeline}{{3}{19}{Unified Seed Embedding and Candidate Generation}{algorithm.3}{}}
 \newlabel{alg:seed-embedding-pipeline@cref}{{[algorithm][3][]3}{[1][18][]19}{}{}{}}
-\abx@aux@cite{0}{vinyals2015pointer}
-\abx@aux@segm{0}{0}{vinyals2015pointer}
 \@writefile{toc}{\contentsline {paragraph}{Implementation Considerations}{20}{section*.20}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Span Predictor}{20}{subsection.3.3}\protected@file@percent }
-\newlabel{sec:span-predictor}{{3.3}{20}{Span Predictor}{subsection.3.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Span Predictor: Factorized Pointer Networks}{20}{subsection.3.3}\protected@file@percent }
+\newlabel{sec:span-predictor}{{3.3}{20}{Span Predictor: Factorized Pointer Networks}{subsection.3.3}{}}
 \newlabel{sec:span-predictor@cref}{{[subsection][3][3]3.3}{[1][20][]20}{}{}{}}
 \abx@aux@cite{0}{lee2016learning}
 \abx@aux@segm{0}{0}{lee2016learning}
 \abx@aux@cite{0}{xu2022faster}
 \abx@aux@segm{0}{0}{xu2022faster}
-\newlabel{prop:topk-marginal}{{5}{21}{Top-\(K\) Marginal Likelihood}{proposition.5}{}}
-\newlabel{prop:topk-marginal@cref}{{[proposition][5][]5}{[1][21][]21}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.1}Factorized Pointer Network Architecture}{21}{subsubsection.3.3.1}\protected@file@percent }
+\newlabel{sec:factorized-architecture}{{3.3.1}{21}{Factorized Pointer Network Architecture}{subsubsection.3.3.1}{}}
+\newlabel{sec:factorized-architecture@cref}{{[subsubsection][1][3,3]3.3.1}{[1][20][]21}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Boundary Prediction Heads}{21}{section*.21}\protected@file@percent }
+\newlabel{eq:start-logits}{{35}{21}{Boundary Prediction Heads}{equation.35}{}}
+\newlabel{eq:start-logits@cref}{{[equation][35][]35}{[1][21][]21}{}{}{}}
+\newlabel{eq:end-logits}{{36}{21}{Boundary Prediction Heads}{equation.36}{}}
+\newlabel{eq:end-logits@cref}{{[equation][36][]36}{[1][21][]21}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Probability Normalization}{21}{section*.22}\protected@file@percent }
+\newlabel{eq:start-probs}{{37}{21}{Probability Normalization}{equation.37}{}}
+\newlabel{eq:start-probs@cref}{{[equation][37][]37}{[1][21][]21}{}{}{}}
+\newlabel{eq:end-probs}{{38}{21}{Probability Normalization}{equation.38}{}}
+\newlabel{eq:end-probs@cref}{{[equation][38][]38}{[1][21][]21}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.2}Span Scoring and Selection}{21}{subsubsection.3.3.2}\protected@file@percent }
+\newlabel{sec:span-scoring}{{3.3.2}{21}{Span Scoring and Selection}{subsubsection.3.3.2}{}}
+\newlabel{sec:span-scoring@cref}{{[subsubsection][2][3,3]3.3.2}{[1][21][]21}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Span Score Computation}{21}{section*.23}\protected@file@percent }
+\newlabel{eq:span-score}{{39}{21}{Span Score Computation}{equation.39}{}}
+\newlabel{eq:span-score@cref}{{[equation][39][]39}{[1][21][]21}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Top-K Span Selection}{22}{section*.24}\protected@file@percent }
+\newlabel{eq:topk-selection}{{40}{22}{Top-K Span Selection}{equation.40}{}}
+\newlabel{eq:topk-selection@cref}{{[equation][40][]40}{[1][21][]22}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.3}Theoretical Foundations and Optimality}{22}{subsubsection.3.3.3}\protected@file@percent }
+\newlabel{sec:span-optimality}{{3.3.3}{22}{Theoretical Foundations and Optimality}{subsubsection.3.3.3}{}}
+\newlabel{sec:span-optimality@cref}{{[subsubsection][3][3,3]3.3.3}{[1][22][]22}{}{}{}}
+\newlabel{prop:greedy-span-optimality}{{5}{22}{Greedy Span Selection Optimality}{proposition.5}{}}
+\newlabel{prop:greedy-span-optimality@cref}{{[proposition][5][]5}{[1][22][]22}{}{}{}}
+\newlabel{eq:span-probability}{{41}{22}{Greedy Span Selection Optimality}{equation.41}{}}
+\newlabel{eq:span-probability@cref}{{[equation][41][]41}{[1][22][]22}{}{}{}}
+\newlabel{eq:optimal-selection}{{42}{22}{Greedy Span Selection Optimality}{equation.42}{}}
+\newlabel{eq:optimal-selection@cref}{{[equation][42][]42}{[1][22][]22}{}{}{}}
+\newlabel{eq:optimization-objective}{{43}{22}{Theoretical Foundations and Optimality}{equation.43}{}}
+\newlabel{eq:optimization-objective@cref}{{[equation][43][]43}{[1][22][]22}{}{}{}}
+\newlabel{eq:non-negative-property}{{44}{22}{Theoretical Foundations and Optimality}{equation.44}{}}
+\newlabel{eq:non-negative-property@cref}{{[equation][44][]44}{[1][22][]22}{}{}{}}
+\newlabel{eq:greedy-selection}{{45}{22}{Theoretical Foundations and Optimality}{equation.45}{}}
+\newlabel{eq:greedy-selection@cref}{{[equation][45][]45}{[1][22][]22}{}{}{}}
+\newlabel{eq:final-optimality}{{46}{22}{Theoretical Foundations and Optimality}{equation.46}{}}
+\newlabel{eq:final-optimality@cref}{{[equation][46][]46}{[1][22][]22}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.4}Supervised Training Methodology}{22}{subsubsection.3.3.4}\protected@file@percent }
+\newlabel{sec:span-predictor-training}{{3.3.4}{22}{Supervised Training Methodology}{subsubsection.3.3.4}{}}
+\newlabel{sec:span-predictor-training@cref}{{[subsubsection][4][3,3]3.3.4}{[1][22][]22}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Ground Truth Representation}{23}{section*.25}\protected@file@percent }
+\newlabel{eq:start-targets}{{47}{23}{Ground Truth Representation}{equation.47}{}}
+\newlabel{eq:start-targets@cref}{{[equation][47][]47}{[1][22][]23}{}{}{}}
+\newlabel{eq:end-targets}{{48}{23}{Ground Truth Representation}{equation.48}{}}
+\newlabel{eq:end-targets@cref}{{[equation][48][]48}{[1][22][]23}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Cross-Entropy Training Objective}{23}{section*.26}\protected@file@percent }
+\newlabel{eq:boundary-loss}{{49}{23}{Cross-Entropy Training Objective}{equation.49}{}}
+\newlabel{eq:boundary-loss@cref}{{[equation][49][]49}{[1][23][]23}{}{}{}}
+\newlabel{eq:binary-cross-entropy}{{50}{23}{Cross-Entropy Training Objective}{equation.50}{}}
+\newlabel{eq:binary-cross-entropy@cref}{{[equation][50][]50}{[1][23][]23}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Multi-Label Boundary Prediction}{23}{section*.27}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Training Configuration and Weighting Strategies}{24}{section*.28}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Regularization and Numerical Stability}{24}{section*.29}\protected@file@percent }
+\newlabel{eq:total-loss}{{51}{24}{Regularization and Numerical Stability}{equation.51}{}}
+\newlabel{eq:total-loss@cref}{{[equation][51][]51}{[1][24][]24}{}{}{}}
+\newlabel{eq:l2-regularization}{{52}{24}{Regularization and Numerical Stability}{equation.52}{}}
+\newlabel{eq:l2-regularization@cref}{{[equation][52][]52}{[1][24][]24}{}{}{}}
+\newlabel{eq:smoothness-regularization}{{53}{24}{Regularization and Numerical Stability}{equation.53}{}}
+\newlabel{eq:smoothness-regularization@cref}{{[equation][53][]53}{[1][24][]24}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.5}Optimization Theory and Convergence Analysis}{24}{subsubsection.3.3.5}\protected@file@percent }
+\newlabel{sec:span-predictor-optimization}{{3.3.5}{24}{Optimization Theory and Convergence Analysis}{subsubsection.3.3.5}{}}
+\newlabel{sec:span-predictor-optimization@cref}{{[subsubsection][5][3,3]3.3.5}{[1][24][]24}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Gradient Factorization}{24}{section*.30}\protected@file@percent }
+\newlabel{eq:start-gradient}{{54}{24}{Gradient Factorization}{equation.54}{}}
+\newlabel{eq:start-gradient@cref}{{[equation][54][]54}{[1][24][]24}{}{}{}}
+\newlabel{eq:end-gradient}{{55}{24}{Gradient Factorization}{equation.55}{}}
+\newlabel{eq:end-gradient@cref}{{[equation][55][]55}{[1][24][]24}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Convergence Analysis}{24}{section*.31}\protected@file@percent }
+\newlabel{prop:boundary-convexity}{{6}{24}{Boundary Loss Convexity}{proposition.6}{}}
+\newlabel{prop:boundary-convexity@cref}{{[proposition][6][]6}{[1][24][]24}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Training Algorithm}{25}{section*.32}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {4}{\ignorespaces Factorized Pointer Network Boundary Training}}{25}{algorithm.4}\protected@file@percent }
+\newlabel{alg:boundary-training}{{4}{25}{Factorized Pointer Network Boundary Training}{algorithm.4}{}}
+\newlabel{alg:boundary-training@cref}{{[algorithm][4][]4}{[1][25][]25}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Computational Complexity}{25}{section*.33}\protected@file@percent }
+\newlabel{prop:training-complexity}{{7}{25}{Training Complexity}{proposition.7}{}}
+\newlabel{prop:training-complexity@cref}{{[proposition][7][]7}{[1][25][]25}{}{}{}}
 \abx@aux@cite{0}{tay2021charformer}
 \abx@aux@segm{0}{0}{tay2021charformer}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Length Estimator}{26}{subsection.3.4}\protected@file@percent }
+\newlabel{sec:length-estimator}{{3.4}{26}{Length Estimator}{subsection.3.4}{}}
+\newlabel{sec:length-estimator@cref}{{[subsection][4][3]3.4}{[1][26][]26}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{Span Length and Pooling}{26}{section*.34}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Length Prediction}{26}{section*.35}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Tolerance-Based Filtering}{26}{section*.36}\protected@file@percent }
+\newlabel{prop:span-length-bound}{{8}{26}{Span Count Upper Bound}{proposition.8}{}}
+\newlabel{prop:span-length-bound@cref}{{[proposition][8][]8}{[1][26][]26}{}{}{}}
 \abx@aux@cite{0}{jackendoff1977xbar}
 \abx@aux@segm{0}{0}{jackendoff1977xbar}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Length Estimator}{22}{subsection.3.4}\protected@file@percent }
-\newlabel{sec:length-estimator}{{3.4}{22}{Length Estimator}{subsection.3.4}{}}
-\newlabel{sec:length-estimator@cref}{{[subsection][4][3]3.4}{[1][21][]22}{}{}{}}
-\@writefile{toc}{\contentsline {paragraph}{Span Length and Pooling}{22}{section*.21}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Length Prediction}{22}{section*.22}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Tolerance-Based Filtering}{22}{section*.23}\protected@file@percent }
-\newlabel{prop:span-length-bound}{{6}{22}{Span Count Upper Bound}{proposition.6}{}}
-\newlabel{prop:span-length-bound@cref}{{[proposition][6][]6}{[1][22][]22}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Modality Typing}{27}{subsection.3.5}\protected@file@percent }
+\newlabel{sec:modality-typing}{{3.5}{27}{Modality Typing}{subsection.3.5}{}}
+\newlabel{sec:modality-typing@cref}{{[subsection][5][3]3.5}{[1][27][]27}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.1}Modality Classification}{27}{subsubsection.3.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.2}Modality Entropy and Ambiguity}{27}{subsubsection.3.5.2}\protected@file@percent }
 \abx@aux@cite{0}{khashabi2020unifiedqa}
 \abx@aux@segm{0}{0}{khashabi2020unifiedqa}
 \abx@aux@cite{0}{gupta2022molt}
@@ -214,67 +294,63 @@
 \abx@aux@segm{0}{0}{lin2021codemix}
 \abx@aux@cite{0}{tay2021charformer}
 \abx@aux@segm{0}{0}{tay2021charformer}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Modality Typing}{23}{subsection.3.5}\protected@file@percent }
-\newlabel{sec:modality-typing}{{3.5}{23}{Modality Typing}{subsection.3.5}{}}
-\newlabel{sec:modality-typing@cref}{{[subsection][5][3]3.5}{[1][23][]23}{}{}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.1}Modality Classification}{23}{subsubsection.3.5.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.2}Modality Entropy and Ambiguity}{23}{subsubsection.3.5.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.3}Auxiliary Supervision}{23}{subsubsection.3.5.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.4}Conditional Routing}{23}{subsubsection.3.5.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.5}Interpretability}{24}{subsubsection.3.5.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.6}Integration into Span Scoring}{24}{subsubsection.3.5.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.3}Auxiliary Supervision}{28}{subsubsection.3.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.4}Conditional Routing}{28}{subsubsection.3.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.5}Interpretability}{28}{subsubsection.3.5.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.6}Integration into Span Scoring}{28}{subsubsection.3.5.6}\protected@file@percent }
 \abx@aux@cite{0}{lee2017end}
 \abx@aux@segm{0}{0}{lee2017end}
 \abx@aux@cite{0}{joshi2020spanbert}
 \abx@aux@segm{0}{0}{joshi2020spanbert}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Span Embedding}{29}{subsection.3.6}\protected@file@percent }
+\newlabel{sec:span-embedding}{{3.6}{29}{Span Embedding}{subsection.3.6}{}}
+\newlabel{sec:span-embedding@cref}{{[subsection][6][3]3.6}{[1][29][]29}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.1}Mean-Pooling Encoder}{29}{subsubsection.3.6.1}\protected@file@percent }
 \abx@aux@cite{0}{lee2018higher}
 \abx@aux@segm{0}{0}{lee2018higher}
 \abx@aux@cite{0}{tay2021charformer}
 \abx@aux@segm{0}{0}{tay2021charformer}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Span Embedding}{25}{subsection.3.6}\protected@file@percent }
-\newlabel{sec:span-embedding}{{3.6}{25}{Span Embedding}{subsection.3.6}{}}
-\newlabel{sec:span-embedding@cref}{{[subsection][6][3]3.6}{[1][25][]25}{}{}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.1}Mean-Pooling Encoder}{25}{subsubsection.3.6.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.2}Local Self-Attention Encoder}{25}{subsubsection.3.6.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.3}Gated Fusion}{25}{subsubsection.3.6.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}Controller Fusion}{26}{subsection.3.7}\protected@file@percent }
-\newlabel{sec:controller-fusion}{{3.7}{26}{Controller Fusion}{subsection.3.7}{}}
-\newlabel{sec:controller-fusion@cref}{{[subsection][7][3]3.7}{[1][26][]26}{}{}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.7.1}Feature Construction and Scoring}{26}{subsubsection.3.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.2}Local Self-Attention Encoder}{30}{subsubsection.3.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.3}Gated Fusion}{30}{subsubsection.3.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.7}Controller Fusion}{30}{subsection.3.7}\protected@file@percent }
+\newlabel{sec:controller-fusion}{{3.7}{30}{Controller Fusion}{subsection.3.7}{}}
+\newlabel{sec:controller-fusion@cref}{{[subsection][7][3]3.7}{[1][30][]30}{}{}{}}
 \abx@aux@cite{0}{li2021prefix}
 \abx@aux@segm{0}{0}{li2021prefix}
 \abx@aux@cite{0}{hu2021lora}
 \abx@aux@segm{0}{0}{hu2021lora}
 \abx@aux@cite{0}{shazeer2017outrageously}
 \abx@aux@segm{0}{0}{shazeer2017outrageously}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.7.2}Transformer Injection Modes}{27}{subsubsection.3.7.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Prefix‐Token Injection}{27}{section*.24}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Attention‐Bias Injection}{27}{section*.25}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Gated‐FFN Injection}{27}{section*.26}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.7.3}Multi-Path Fusion}{27}{subsubsection.3.7.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.8}Span Interpolation for Overlap Resolution}{27}{subsection.3.8}\protected@file@percent }
-\newlabel{sec:span-interpolation}{{3.8}{27}{Span Interpolation for Overlap Resolution}{subsection.3.8}{}}
-\newlabel{sec:span-interpolation@cref}{{[subsection][8][3]3.8}{[1][27][]27}{}{}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.8.1}Soft Interpolation}{27}{subsubsection.3.8.1}\protected@file@percent }
-\newlabel{eq:relevance_score}{{35}{27}{Soft Interpolation}{equation.35}{}}
-\newlabel{eq:relevance_score@cref}{{[equation][35][]35}{[1][27][]27}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.7.1}Feature Construction and Scoring}{31}{subsubsection.3.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.7.2}Transformer Injection Modes}{31}{subsubsection.3.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Prefix‐Token Injection}{31}{section*.37}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Attention‐Bias Injection}{31}{section*.38}\protected@file@percent }
 \abx@aux@cite{0}{guu2020retrieval}
 \abx@aux@segm{0}{0}{guu2020retrieval}
 \abx@aux@cite{0}{izacard2020distilling}
 \abx@aux@segm{0}{0}{izacard2020distilling}
 \abx@aux@cite{0}{arora2022exsum}
 \abx@aux@segm{0}{0}{arora2022exsum}
-\newlabel{eq:span_interp}{{36}{28}{Soft Interpolation}{equation.36}{}}
-\newlabel{eq:span_interp@cref}{{[equation][36][]36}{[1][27][]28}{}{}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.8.2}Theoretical Properties}{28}{subsubsection.3.8.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.8.3}Computational Cost}{28}{subsubsection.3.8.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.8.4}Transformer Injection}{29}{subsubsection.3.8.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.9}Runtime Complexity}{29}{subsection.3.9}\protected@file@percent }
-\newlabel{sec:runtime-complexity}{{3.9}{29}{Runtime Complexity}{subsection.3.9}{}}
-\newlabel{sec:runtime-complexity@cref}{{[subsection][9][3]3.9}{[1][29][]29}{}{}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.9.1}Soft Segmentation and Seed Embedding}{29}{subsubsection.3.9.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.9.2}Contextual Encoder}{29}{subsubsection.3.9.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.9.3}Span Enumeration and Boundary Scoring}{29}{subsubsection.3.9.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Gated‐FFN Injection}{32}{section*.39}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.7.3}Multi-Path Fusion}{32}{subsubsection.3.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.8}Span Interpolation for Overlap Resolution}{32}{subsection.3.8}\protected@file@percent }
+\newlabel{sec:span-interpolation}{{3.8}{32}{Span Interpolation for Overlap Resolution}{subsection.3.8}{}}
+\newlabel{sec:span-interpolation@cref}{{[subsection][8][3]3.8}{[1][32][]32}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.8.1}Soft Interpolation}{32}{subsubsection.3.8.1}\protected@file@percent }
+\newlabel{eq:relevance_score}{{56}{32}{Soft Interpolation}{equation.56}{}}
+\newlabel{eq:relevance_score@cref}{{[equation][56][]56}{[1][32][]32}{}{}{}}
+\newlabel{eq:span_interp}{{57}{32}{Soft Interpolation}{equation.57}{}}
+\newlabel{eq:span_interp@cref}{{[equation][57][]57}{[1][32][]32}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.8.2}Theoretical Properties}{32}{subsubsection.3.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.8.3}Computational Cost}{33}{subsubsection.3.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.8.4}Transformer Injection}{33}{subsubsection.3.8.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.9}Runtime Complexity}{34}{subsection.3.9}\protected@file@percent }
+\newlabel{sec:runtime-complexity}{{3.9}{34}{Runtime Complexity}{subsection.3.9}{}}
+\newlabel{sec:runtime-complexity@cref}{{[subsection][9][3]3.9}{[1][33][]34}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.9.1}Soft Segmentation and Seed Embedding}{34}{subsubsection.3.9.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.9.2}Contextual Encoder}{34}{subsubsection.3.9.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.9.3}Span Enumeration and Boundary Scoring}{34}{subsubsection.3.9.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.9.4}Span Embedding and Scoring}{34}{subsubsection.3.9.4}\protected@file@percent }
 \abx@aux@cite{0}{beltagy2020longformer}
 \abx@aux@segm{0}{0}{beltagy2020longformer}
 \abx@aux@cite{0}{zaheer2020bigbird}
@@ -283,9 +359,9 @@
 \abx@aux@segm{0}{0}{shazeer2017outrageously}
 \abx@aux@cite{0}{ainslie2023transformers}
 \abx@aux@segm{0}{0}{ainslie2023transformers}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.9.4}Span Embedding and Scoring}{30}{subsubsection.3.9.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.9.5}Controller Injection}{30}{subsubsection.3.9.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.9.6}Joint Contextualization}{30}{subsubsection.3.9.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.9.5}Controller Injection}{35}{subsubsection.3.9.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.9.6}Joint Contextualization}{35}{subsubsection.3.9.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Training}{35}{section.4}\protected@file@percent }
 \abx@aux@cite{0}{grandvalet2005semi}
 \abx@aux@segm{0}{0}{grandvalet2005semi}
 \abx@aux@cite{0}{pereyra2017regularizing}
@@ -294,36 +370,30 @@
 \abx@aux@segm{0}{0}{bengio2009curriculum}
 \abx@aux@cite{0}{kreutzer2021distilling}
 \abx@aux@segm{0}{0}{kreutzer2021distilling}
-\@writefile{toc}{\contentsline {section}{\numberline {4}Training}{31}{section.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Span Induction with Entropic Regularization}{31}{subsection.4.1}\protected@file@percent }
-\newlabel{sec:span-induction}{{4.1}{31}{Span Induction with Entropic Regularization}{subsection.4.1}{}}
-\newlabel{sec:span-induction@cref}{{[subsection][1][4]4.1}{[1][31][]31}{}{}{}}
-\newlabel{eq:contiguous_span_set}{{37}{31}{Span Induction with Entropic Regularization}{equation.37}{}}
-\newlabel{eq:contiguous_span_set@cref}{{[equation][37][]37}{[1][31][]31}{}{}{}}
-\newlabel{eq:span_softmax}{{38}{31}{Span Induction with Entropic Regularization}{equation.38}{}}
-\newlabel{eq:span_softmax@cref}{{[equation][38][]38}{[1][31][]31}{}{}{}}
-\newlabel{eq:entropy_term}{{39}{31}{Span Induction with Entropic Regularization}{equation.39}{}}
-\newlabel{eq:entropy_term@cref}{{[equation][39][]39}{[1][31][]31}{}{}{}}
-\newlabel{eq:entropy_decay}{{40}{32}{Span Induction with Entropic Regularization}{equation.40}{}}
-\newlabel{eq:entropy_decay@cref}{{[equation][40][]40}{[1][31][]32}{}{}{}}
-\newlabel{prop:span_entropy_bound}{{12}{32}{Maximum Entropy of Uniform Span Distribution}{proposition.12}{}}
-\newlabel{prop:span_entropy_bound@cref}{{[proposition][12][]12}{[1][32][]32}{}{}{}}
-\newlabel{eq:uniform_P}{{41}{32}{Maximum Entropy of Uniform Span Distribution}{equation.41}{}}
-\newlabel{eq:uniform_P@cref}{{[equation][41][]41}{[1][32][]32}{}{}{}}
-\newlabel{eq:max_entropy}{{42}{32}{Maximum Entropy of Uniform Span Distribution}{equation.42}{}}
-\newlabel{eq:max_entropy@cref}{{[equation][42][]42}{[1][32][]32}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Span Induction with Entropic Regularization}{36}{subsection.4.1}\protected@file@percent }
+\newlabel{sec:span-induction}{{4.1}{36}{Span Induction with Entropic Regularization}{subsection.4.1}{}}
+\newlabel{sec:span-induction@cref}{{[subsection][1][4]4.1}{[1][36][]36}{}{}{}}
+\newlabel{eq:contiguous_span_set}{{58}{36}{Span Induction with Entropic Regularization}{equation.58}{}}
+\newlabel{eq:contiguous_span_set@cref}{{[equation][58][]58}{[1][36][]36}{}{}{}}
+\newlabel{eq:span_softmax}{{59}{36}{Span Induction with Entropic Regularization}{equation.59}{}}
+\newlabel{eq:span_softmax@cref}{{[equation][59][]59}{[1][36][]36}{}{}{}}
+\newlabel{eq:entropy_term}{{60}{36}{Span Induction with Entropic Regularization}{equation.60}{}}
+\newlabel{eq:entropy_term@cref}{{[equation][60][]60}{[1][36][]36}{}{}{}}
+\newlabel{eq:entropy_decay}{{61}{36}{Span Induction with Entropic Regularization}{equation.61}{}}
+\newlabel{eq:entropy_decay@cref}{{[equation][61][]61}{[1][36][]36}{}{}{}}
+\newlabel{prop:span_entropy_bound}{{14}{36}{Maximum Entropy of Uniform Span Distribution}{proposition.14}{}}
+\newlabel{prop:span_entropy_bound@cref}{{[proposition][14][]14}{[1][36][]36}{}{}{}}
+\newlabel{eq:uniform_P}{{62}{36}{Maximum Entropy of Uniform Span Distribution}{equation.62}{}}
+\newlabel{eq:uniform_P@cref}{{[equation][62][]62}{[1][36][]36}{}{}{}}
+\newlabel{eq:max_entropy}{{63}{36}{Maximum Entropy of Uniform Span Distribution}{equation.63}{}}
+\newlabel{eq:max_entropy@cref}{{[equation][63][]63}{[1][36][]36}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Controller-Aware Generation and Final Objective}{37}{subsection.4.2}\protected@file@percent }
+\newlabel{sec:controller-injection}{{4.2}{37}{Controller-Aware Generation and Final Objective}{subsection.4.2}{}}
+\newlabel{sec:controller-injection@cref}{{[subsection][2][4]4.2}{[1][37][]37}{}{}{}}
 \abx@aux@cite{0}{li2021prefix}
 \abx@aux@segm{0}{0}{li2021prefix}
 \abx@aux@cite{0}{hu2021lora}
 \abx@aux@segm{0}{0}{hu2021lora}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Controller-Aware Generation and Final Objective}{33}{subsection.4.2}\protected@file@percent }
-\newlabel{sec:controller-injection}{{4.2}{33}{Controller-Aware Generation and Final Objective}{subsection.4.2}{}}
-\newlabel{sec:controller-injection@cref}{{[subsection][2][4]4.2}{[1][33][]33}{}{}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Controller injection modes: prefix-token insertion, attention-bias adaptation, and gated FFN modulation.}}{33}{figure.caption.27}\protected@file@percent }
-\newlabel{fig:controller_injection_modes}{{1}{33}{Controller injection modes: prefix-token insertion, attention-bias adaptation, and gated FFN modulation}{figure.caption.27}{}}
-\newlabel{fig:controller_injection_modes@cref}{{[figure][1][]1}{[1][33][]33}{}{}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.1}Prefix-Token Injection}{33}{subsubsection.4.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.2}Attention-Bias Injection}{33}{subsubsection.4.2.2}\protected@file@percent }
 \abx@aux@cite{0}{shazeer2017outrageously}
 \abx@aux@segm{0}{0}{shazeer2017outrageously}
 \abx@aux@cite{0}{raffel2020exploring}
@@ -332,35 +402,43 @@
 \abx@aux@segm{0}{0}{liu2022pada}
 \abx@aux@cite{0}{gupta2022molt}
 \abx@aux@segm{0}{0}{gupta2022molt}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.3}Gated-FFN Injection}{34}{subsubsection.4.2.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.4}Semantic Routing Interpretation}{34}{subsubsection.4.2.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.5}End-to-End Differentiability}{34}{subsubsection.4.2.5}\protected@file@percent }
-\newlabel{prop:controller_diff}{{13}{34}{}{proposition.13}{}}
-\newlabel{prop:controller_diff@cref}{{[proposition][13][]13}{[1][34][]34}{}{}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.6}Final Objective}{35}{subsubsection.4.2.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}End-to-End Fine-Tuning}{35}{subsection.4.3}\protected@file@percent }
-\newlabel{sec:end-to-end-finetuning}{{4.3}{35}{End-to-End Fine-Tuning}{subsection.4.3}{}}
-\newlabel{sec:end-to-end-finetuning@cref}{{[subsection][3][4]4.3}{[1][35][]35}{}{}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.1}Joint Routing and Regularization}{35}{subsubsection.4.3.1}\protected@file@percent }
-\newlabel{sec:joint-routing-regularization}{{4.3.1}{35}{Joint Routing and Regularization}{subsubsection.4.3.1}{}}
-\newlabel{sec:joint-routing-regularization@cref}{{[subsubsection][1][4,3]4.3.1}{[1][35][]35}{}{}{}}
-\newlabel{eq:curriculum_total}{{43}{35}{Joint Routing and Regularization}{equation.43}{}}
-\newlabel{eq:curriculum_total@cref}{{[equation][43][]43}{[1][35][]35}{}{}{}}
-\newlabel{eq:entropy_schedule}{{44}{35}{Joint Routing and Regularization}{equation.44}{}}
-\newlabel{eq:entropy_schedule@cref}{{[equation][44][]44}{[1][35][]35}{}{}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Controller injection modes: prefix-token insertion, attention-bias adaptation, and gated FFN modulation.}}{38}{figure.caption.40}\protected@file@percent }
+\newlabel{fig:controller_injection_modes}{{1}{38}{Controller injection modes: prefix-token insertion, attention-bias adaptation, and gated FFN modulation}{figure.caption.40}{}}
+\newlabel{fig:controller_injection_modes@cref}{{[figure][1][]1}{[1][37][]38}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.1}Prefix-Token Injection}{38}{subsubsection.4.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.2}Attention-Bias Injection}{38}{subsubsection.4.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.3}Gated-FFN Injection}{38}{subsubsection.4.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.4}Semantic Routing Interpretation}{38}{subsubsection.4.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.5}End-to-End Differentiability}{39}{subsubsection.4.2.5}\protected@file@percent }
+\newlabel{prop:controller_diff}{{15}{39}{}{proposition.15}{}}
+\newlabel{prop:controller_diff@cref}{{[proposition][15][]15}{[1][38][]39}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.6}Final Objective}{40}{subsubsection.4.2.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}End-to-End Fine-Tuning}{40}{subsection.4.3}\protected@file@percent }
+\newlabel{sec:end-to-end-finetuning}{{4.3}{40}{End-to-End Fine-Tuning}{subsection.4.3}{}}
+\newlabel{sec:end-to-end-finetuning@cref}{{[subsection][3][4]4.3}{[1][40][]40}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.1}Joint Routing and Regularization}{40}{subsubsection.4.3.1}\protected@file@percent }
+\newlabel{sec:joint-routing-regularization}{{4.3.1}{40}{Joint Routing and Regularization}{subsubsection.4.3.1}{}}
+\newlabel{sec:joint-routing-regularization@cref}{{[subsubsection][1][4,3]4.3.1}{[1][40][]40}{}{}{}}
+\newlabel{eq:curriculum_total}{{64}{40}{Joint Routing and Regularization}{equation.64}{}}
+\newlabel{eq:curriculum_total@cref}{{[equation][64][]64}{[1][40][]40}{}{}{}}
+\newlabel{eq:entropy_schedule}{{65}{40}{Joint Routing and Regularization}{equation.65}{}}
+\newlabel{eq:entropy_schedule@cref}{{[equation][65][]65}{[1][40][]40}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.2}Training Algorithm}{40}{subsubsection.4.3.2}\protected@file@percent }
+\newlabel{sec:training-algorithm}{{4.3.2}{40}{Training Algorithm}{subsubsection.4.3.2}{}}
+\newlabel{sec:training-algorithm@cref}{{[subsubsection][2][4,3]4.3.2}{[1][40][]40}{}{}{}}
 \abx@aux@cite{0}{belinkov2022probing}
 \abx@aux@segm{0}{0}{belinkov2022probing}
 \abx@aux@cite{0}{loshchilov2019decoupled}
 \abx@aux@segm{0}{0}{loshchilov2019decoupled}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.2}Training Algorithm}{36}{subsubsection.4.3.2}\protected@file@percent }
-\newlabel{sec:training-algorithm}{{4.3.2}{36}{Training Algorithm}{subsubsection.4.3.2}{}}
-\newlabel{sec:training-algorithm@cref}{{[subsubsection][2][4,3]4.3.2}{[1][36][]36}{}{}{}}
-\@writefile{loa}{\contentsline {algorithm}{\numberline {4}{\ignorespaces End‐to‐End Fine‐Tuning}}{36}{algorithm.4}\protected@file@percent }
-\newlabel{alg:e2e_finetuning}{{4}{36}{End‐to‐End Fine‐Tuning}{algorithm.4}{}}
-\newlabel{alg:e2e_finetuning@cref}{{[algorithm][4][]4}{[1][36][]36}{}{}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.3}Optimization Details}{36}{subsubsection.4.3.3}\protected@file@percent }
-\newlabel{sec:optimization-details}{{4.3.3}{36}{Optimization Details}{subsubsection.4.3.3}{}}
-\newlabel{sec:optimization-details@cref}{{[subsubsection][3][4,3]4.3.3}{[1][36][]36}{}{}{}}
+\@writefile{loa}{\contentsline {algorithm}{\numberline {5}{\ignorespaces End‐to‐End Fine‐Tuning}}{41}{algorithm.5}\protected@file@percent }
+\newlabel{alg:e2e_finetuning}{{5}{41}{End‐to‐End Fine‐Tuning}{algorithm.5}{}}
+\newlabel{alg:e2e_finetuning@cref}{{[algorithm][5][]5}{[1][40][]41}{}{}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.3}Optimization Details}{41}{subsubsection.4.3.3}\protected@file@percent }
+\newlabel{sec:optimization-details}{{4.3.3}{41}{Optimization Details}{subsubsection.4.3.3}{}}
+\newlabel{sec:optimization-details@cref}{{[subsubsection][3][4,3]4.3.3}{[1][41][]41}{}{}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Experiments}{41}{section.5}\protected@file@percent }
+\newlabel{sec:experiments}{{5}{41}{Experiments}{section.5}{}}
+\newlabel{sec:experiments@cref}{{[section][5][]5}{[1][41][]41}{}{}{}}
 \abx@aux@cite{0}{kim2019unsupervised}
 \abx@aux@segm{0}{0}{kim2019unsupervised}
 \abx@aux@cite{0}{naradowsky2021structured}
@@ -375,11 +453,12 @@
 \abx@aux@segm{0}{0}{pereyra2017regularizing}
 \abx@aux@cite{0}{grandvalet2005semi}
 \abx@aux@segm{0}{0}{grandvalet2005semi}
-\@writefile{toc}{\contentsline {section}{\numberline {5}Experiments}{37}{section.5}\protected@file@percent }
-\newlabel{sec:experiments}{{5}{37}{Experiments}{section.5}{}}
-\newlabel{sec:experiments@cref}{{[section][5][]5}{[1][37][]37}{}{}{}}
-\newlabel{eq:attention_weights}{{46}{37}{Experiments}{equation.46}{}}
-\newlabel{eq:attention_weights@cref}{{[equation][46][]46}{[1][37][]37}{}{}{}}
+\newlabel{eq:attention_weights}{{67}{42}{Experiments}{equation.67}{}}
+\newlabel{eq:attention_weights@cref}{{[equation][67][]67}{[1][42][]42}{}{}{}}
+\newlabel{eq:controller_vector}{{68}{42}{Experiments}{equation.68}{}}
+\newlabel{eq:controller_vector@cref}{{[equation][68][]68}{[1][42][]42}{}{}{}}
+\newlabel{eq:exp_loss_summary}{{69}{42}{Experiments}{equation.69}{}}
+\newlabel{eq:exp_loss_summary@cref}{{[equation][69][]69}{[1][42][]42}{}{}{}}
 \abx@aux@cite{0}{gupta2022molt}
 \abx@aux@segm{0}{0}{gupta2022molt}
 \abx@aux@cite{0}{tay2020sparse}
@@ -392,21 +471,17 @@
 \abx@aux@segm{0}{0}{naradowsky2021structured}
 \abx@aux@cite{0}{liu2019hierarchical}
 \abx@aux@segm{0}{0}{liu2019hierarchical}
-\newlabel{eq:controller_vector}{{47}{38}{Experiments}{equation.47}{}}
-\newlabel{eq:controller_vector@cref}{{[equation][47][]47}{[1][37][]38}{}{}{}}
-\newlabel{eq:exp_loss_summary}{{48}{38}{Experiments}{equation.48}{}}
-\newlabel{eq:exp_loss_summary@cref}{{[equation][48][]48}{[1][38][]38}{}{}{}}
-\newlabel{eq:kl_span}{{49}{38}{Experiments}{equation.49}{}}
-\newlabel{eq:kl_span@cref}{{[equation][49][]49}{[1][38][]38}{}{}{}}
 \abx@aux@cite{0}{rawson2025streammix-inprep}
 \abx@aux@segm{0}{0}{rawson2025streammix-inprep}
 \abx@aux@cite{0}{merity2016pointer}
 \abx@aux@segm{0}{0}{merity2016pointer}
 \abx@aux@cite{0}{rush2015neural}
 \abx@aux@segm{0}{0}{rush2015neural}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Experimental Setup}{39}{subsection.5.1}\protected@file@percent }
-\newlabel{sec:experimental-setup}{{5.1}{39}{Experimental Setup}{subsection.5.1}{}}
-\newlabel{sec:experimental-setup@cref}{{[subsection][1][5]5.1}{[1][38][]39}{}{}{}}
+\newlabel{eq:kl_span}{{70}{43}{Experiments}{equation.70}{}}
+\newlabel{eq:kl_span@cref}{{[equation][70][]70}{[1][42][]43}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Experimental Setup}{43}{subsection.5.1}\protected@file@percent }
+\newlabel{sec:experimental-setup}{{5.1}{43}{Experimental Setup}{subsection.5.1}{}}
+\newlabel{sec:experimental-setup@cref}{{[subsection][1][5]5.1}{[1][43][]43}{}{}{}}
 \abx@aux@cite{0}{li2021prefix}
 \abx@aux@segm{0}{0}{li2021prefix}
 \abx@aux@cite{0}{kim2019unsupervised}
@@ -417,46 +492,46 @@
 \abx@aux@segm{0}{0}{kreutzer2021distilling}
 \abx@aux@cite{0}{naradowsky2021structured}
 \abx@aux@segm{0}{0}{naradowsky2021structured}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Span Routing Behavior}{40}{subsection.5.2}\protected@file@percent }
-\newlabel{sec:span-behavior}{{5.2}{40}{Span Routing Behavior}{subsection.5.2}{}}
-\newlabel{sec:span-behavior@cref}{{[subsection][2][5]5.2}{[1][40][]40}{}{}{}}
-\newlabel{eq:span_behavior_controller}{{52}{40}{Span Routing Behavior}{equation.52}{}}
-\newlabel{eq:span_behavior_controller@cref}{{[equation][52][]52}{[1][40][]40}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Span Routing Behavior}{45}{subsection.5.2}\protected@file@percent }
+\newlabel{sec:span-behavior}{{5.2}{45}{Span Routing Behavior}{subsection.5.2}{}}
+\newlabel{sec:span-behavior@cref}{{[subsection][2][5]5.2}{[1][44][]45}{}{}{}}
+\newlabel{eq:span_behavior_controller}{{73}{45}{Span Routing Behavior}{equation.73}{}}
+\newlabel{eq:span_behavior_controller@cref}{{[equation][73][]73}{[1][45][]45}{}{}{}}
 \abx@aux@cite{0}{shazeer2017outrageously}
 \abx@aux@segm{0}{0}{shazeer2017outrageously}
 \abx@aux@cite{0}{tay2020sparse}
 \abx@aux@segm{0}{0}{tay2020sparse}
 \abx@aux@cite{0}{gupta2022molt}
 \abx@aux@segm{0}{0}{gupta2022molt}
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Diagnostic evolution of span routing properties. Left: entropy decay across different \(\gamma \) schedules. Center: distribution of selected span widths over training. Right: routing sparsity (mean top-K concentration) over time.}}{41}{figure.caption.29}\protected@file@percent }
-\newlabel{fig:span_stats}{{2}{41}{Diagnostic evolution of span routing properties. Left: entropy decay across different \(\gamma \) schedules. Center: distribution of selected span widths over training. Right: routing sparsity (mean top-K concentration) over time}{figure.caption.29}{}}
-\newlabel{fig:span_stats@cref}{{[figure][2][]2}{[1][41][]41}{}{}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Entropy and average span width under various entropy decay rates \(\gamma \). Each value is averaged across final 5 epochs post-convergence. Lower \(\gamma \) values retain exploratory routing; higher values promote sparsity.}}{41}{table.caption.30}\protected@file@percent }
-\newlabel{tab:entropy_sweep}{{1}{41}{Entropy and average span width under various entropy decay rates \(\gamma \). Each value is averaged across final 5 epochs post-convergence. Lower \(\gamma \) values retain exploratory routing; higher values promote sparsity}{table.caption.30}{}}
-\newlabel{tab:entropy_sweep@cref}{{[table][1][]1}{[1][41][]41}{}{}{}}
-\newlabel{prop:routing_convergence}{{14}{42}{Routing Convergence Bound}{proposition.14}{}}
-\newlabel{prop:routing_convergence@cref}{{[proposition][14][]14}{[1][42][]42}{}{}{}}
-\newlabel{prop:entropy_decay}{{15}{43}{Exponential Entropy Decay under Annealed Regularization}{proposition.15}{}}
-\newlabel{prop:entropy_decay@cref}{{[proposition][15][]15}{[1][43][]43}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Controller Fusion Diagnostics}{44}{subsection.5.3}\protected@file@percent }
-\newlabel{sec:controller-diagnostics}{{5.3}{44}{Controller Fusion Diagnostics}{subsection.5.3}{}}
-\newlabel{sec:controller-diagnostics@cref}{{[subsection][3][5]5.3}{[1][44][]44}{}{}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Diagnostic evolution of span routing properties. Left: entropy decay across different \(\gamma \) schedules. Center: distribution of selected span widths over training. Right: routing sparsity (mean top-K concentration) over time.}}{46}{figure.caption.42}\protected@file@percent }
+\newlabel{fig:span_stats}{{2}{46}{Diagnostic evolution of span routing properties. Left: entropy decay across different \(\gamma \) schedules. Center: distribution of selected span widths over training. Right: routing sparsity (mean top-K concentration) over time}{figure.caption.42}{}}
+\newlabel{fig:span_stats@cref}{{[figure][2][]2}{[1][45][]46}{}{}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Entropy and average span width under various entropy decay rates \(\gamma \). Each value is averaged across final 5 epochs post-convergence. Lower \(\gamma \) values retain exploratory routing; higher values promote sparsity.}}{46}{table.caption.43}\protected@file@percent }
+\newlabel{tab:entropy_sweep}{{1}{46}{Entropy and average span width under various entropy decay rates \(\gamma \). Each value is averaged across final 5 epochs post-convergence. Lower \(\gamma \) values retain exploratory routing; higher values promote sparsity}{table.caption.43}{}}
+\newlabel{tab:entropy_sweep@cref}{{[table][1][]1}{[1][46][]46}{}{}{}}
+\newlabel{prop:routing_convergence}{{16}{46}{Routing Convergence Bound}{proposition.16}{}}
+\newlabel{prop:routing_convergence@cref}{{[proposition][16][]16}{[1][46][]46}{}{}{}}
+\newlabel{prop:entropy_decay}{{17}{48}{Exponential Entropy Decay under Annealed Regularization}{proposition.17}{}}
+\newlabel{prop:entropy_decay@cref}{{[proposition][17][]17}{[1][47][]48}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Controller Fusion Diagnostics}{49}{subsection.5.3}\protected@file@percent }
+\newlabel{sec:controller-diagnostics}{{5.3}{49}{Controller Fusion Diagnostics}{subsection.5.3}{}}
+\newlabel{sec:controller-diagnostics@cref}{{[subsection][3][5]5.3}{[1][49][]49}{}{}{}}
 \abx@aux@cite{0}{vig2020investigating}
 \abx@aux@segm{0}{0}{vig2020investigating}
-\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Layerwise controller influence heatmap across injection modes. Prefix tuning shifts early logits; gating modulates mid-depth; attention bias generates scattered low-intensity changes.}}{45}{figure.caption.32}\protected@file@percent }
-\newlabel{fig:controller_comparison}{{3}{45}{Layerwise controller influence heatmap across injection modes. Prefix tuning shifts early logits; gating modulates mid-depth; attention bias generates scattered low-intensity changes}{figure.caption.32}{}}
-\newlabel{fig:controller_comparison@cref}{{[figure][3][]3}{[1][44][]45}{}{}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Layerwise controller influence heatmap across injection modes. Prefix tuning shifts early logits; gating modulates mid-depth; attention bias generates scattered low-intensity changes.}}{50}{figure.caption.45}\protected@file@percent }
+\newlabel{fig:controller_comparison}{{3}{50}{Layerwise controller influence heatmap across injection modes. Prefix tuning shifts early logits; gating modulates mid-depth; attention bias generates scattered low-intensity changes}{figure.caption.45}{}}
+\newlabel{fig:controller_comparison@cref}{{[figure][3][]3}{[1][49][]50}{}{}{}}
 \abx@aux@cite{0}{kitaev2018constituency}
 \abx@aux@segm{0}{0}{kitaev2018constituency}
 \abx@aux@cite{0}{honnibal2017spacy}
 \abx@aux@segm{0}{0}{honnibal2017spacy}
 \abx@aux@cite{0}{weischedel2013ontonotes}
 \abx@aux@segm{0}{0}{weischedel2013ontonotes}
-\newlabel{prop:orthogonal_fusion}{{16}{46}{Disentanglement under Orthogonal Controllers}{proposition.16}{}}
-\newlabel{prop:orthogonal_fusion@cref}{{[proposition][16][]16}{[1][45][]46}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Qualitative Span Interpretability}{46}{subsection.5.4}\protected@file@percent }
-\newlabel{sec:qualitative-spans}{{5.4}{46}{Qualitative Span Interpretability}{subsection.5.4}{}}
-\newlabel{sec:qualitative-spans@cref}{{[subsection][4][5]5.4}{[1][46][]46}{}{}{}}
+\newlabel{prop:orthogonal_fusion}{{18}{51}{Disentanglement under Orthogonal Controllers}{proposition.18}{}}
+\newlabel{prop:orthogonal_fusion@cref}{{[proposition][18][]18}{[1][50][]51}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Qualitative Span Interpretability}{51}{subsection.5.4}\protected@file@percent }
+\newlabel{sec:qualitative-spans}{{5.4}{51}{Qualitative Span Interpretability}{subsection.5.4}{}}
+\newlabel{sec:qualitative-spans@cref}{{[subsection][4][5]5.4}{[1][51][]51}{}{}{}}
 \abx@aux@cite{0}{kitaev2018constituency}
 \abx@aux@segm{0}{0}{kitaev2018constituency}
 \abx@aux@cite{0}{weischedel2013ontonotes}
@@ -467,9 +542,9 @@
 \abx@aux@segm{0}{0}{pereyra2017regularizing}
 \abx@aux@cite{0}{gupta2022molt}
 \abx@aux@segm{0}{0}{gupta2022molt}
-\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Left: Top-3 induced spans at layers 2, 4, and 6 (Stream-Mix prompt). Right: Overlay of gold syntactic constituents and named entities. Colored bars represent span offsets; heatmap reflects span confidence \(\alpha _k\).}}{47}{figure.caption.36}\protected@file@percent }
-\newlabel{fig:span_alignment_viz}{{4}{47}{Left: Top-3 induced spans at layers 2, 4, and 6 (Stream-Mix prompt). Right: Overlay of gold syntactic constituents and named entities. Colored bars represent span offsets; heatmap reflects span confidence \(\alpha _k\)}{figure.caption.36}{}}
-\newlabel{fig:span_alignment_viz@cref}{{[figure][4][]4}{[1][47][]47}{}{}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Left: Top-3 induced spans at layers 2, 4, and 6 (Stream-Mix prompt). Right: Overlay of gold syntactic constituents and named entities. Colored bars represent span offsets; heatmap reflects span confidence \(\alpha _k\).}}{52}{figure.caption.49}\protected@file@percent }
+\newlabel{fig:span_alignment_viz}{{4}{52}{Left: Top-3 induced spans at layers 2, 4, and 6 (Stream-Mix prompt). Right: Overlay of gold syntactic constituents and named entities. Colored bars represent span offsets; heatmap reflects span confidence \(\alpha _k\)}{figure.caption.49}{}}
+\newlabel{fig:span_alignment_viz@cref}{{[figure][4][]4}{[1][52][]52}{}{}{}}
 \abx@aux@cite{0}{kim2019unsupervised}
 \abx@aux@segm{0}{0}{kim2019unsupervised}
 \abx@aux@cite{0}{naradowsky2021structured}
@@ -488,30 +563,30 @@
 \abx@aux@segm{0}{0}{zilliz2023pooling}
 \abx@aux@cite{0}{liu2024structured}
 \abx@aux@segm{0}{0}{liu2024structured}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}Ablation: Entropy, Pooling, and $\beta _1$}{48}{subsection.5.5}\protected@file@percent }
-\newlabel{sec:ablation}{{5.5}{48}{Ablation: Entropy, Pooling, and \texorpdfstring {$\beta _1$}{β₁}}{subsection.5.5}{}}
-\newlabel{sec:ablation@cref}{{[subsection][5][5]5.5}{[1][48][]48}{}{}{}}
-\newlabel{eq:entropy_decay_exp}{{54}{48}{Ablation: Entropy, Pooling, and \texorpdfstring {$\beta _1$}{β₁}}{equation.54}{}}
-\newlabel{eq:entropy_decay_exp@cref}{{[equation][54][]54}{[1][48][]48}{}{}{}}
-\newlabel{eq:gated_pooling}{{55}{48}{Ablation: Entropy, Pooling, and \texorpdfstring {$\beta _1$}{β₁}}{equation.55}{}}
-\newlabel{eq:gated_pooling@cref}{{[equation][55][]55}{[1][48][]48}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}Ablation: Entropy, Pooling, and $\beta _1$}{53}{subsection.5.5}\protected@file@percent }
+\newlabel{sec:ablation}{{5.5}{53}{Ablation: Entropy, Pooling, and \texorpdfstring {$\beta _1$}{β₁}}{subsection.5.5}{}}
+\newlabel{sec:ablation@cref}{{[subsection][5][5]5.5}{[1][53][]53}{}{}{}}
+\newlabel{eq:entropy_decay_exp}{{75}{53}{Ablation: Entropy, Pooling, and \texorpdfstring {$\beta _1$}{β₁}}{equation.75}{}}
+\newlabel{eq:entropy_decay_exp@cref}{{[equation][75][]75}{[1][53][]53}{}{}{}}
+\newlabel{eq:gated_pooling}{{76}{53}{Ablation: Entropy, Pooling, and \texorpdfstring {$\beta _1$}{β₁}}{equation.76}{}}
+\newlabel{eq:gated_pooling@cref}{{[equation][76][]76}{[1][53][]53}{}{}{}}
 \abx@aux@cite{0}{pereyra2017regularizing}
 \abx@aux@segm{0}{0}{pereyra2017regularizing}
 \abx@aux@cite{0}{liu2024structured}
 \abx@aux@segm{0}{0}{liu2024structured}
 \abx@aux@cite{0}{grandvalet2006entropy}
 \abx@aux@segm{0}{0}{grandvalet2006entropy}
-\@writefile{loa}{\contentsline {algorithm}{\numberline {5}{\ignorespaces Span Routing with Entropy Annealing and Alignment}}{49}{algorithm.5}\protected@file@percent }
-\newlabel{alg:span_routing}{{5}{49}{Span Routing with Entropy Annealing and Alignment}{algorithm.5}{}}
-\newlabel{alg:span_routing@cref}{{[algorithm][5][]5}{[1][48][]49}{}{}{}}
-\newlabel{eq:final_loss}{{56}{49}{Span Routing with Entropy Annealing and Alignment}{equation.56}{}}
-\newlabel{eq:final_loss@cref}{{[equation][56][]56}{[1][48][]49}{}{}{}}
-\newlabel{eq:gradient_flow}{{57}{49}{Gradient Interactions and Entropy Control}{equation.57}{}}
-\newlabel{eq:gradient_flow@cref}{{[equation][57][]57}{[1][49][]49}{}{}{}}
-\newlabel{prop:annealing}{{17}{49}{Span Entropy Convergence Under Annealing}{proposition.17}{}}
-\newlabel{prop:annealing@cref}{{[proposition][17][]17}{[1][49][]49}{}{}{}}
-\newlabel{eq:entropy_bound}{{58}{49}{Span Entropy Convergence Under Annealing}{equation.58}{}}
-\newlabel{eq:entropy_bound@cref}{{[equation][58][]58}{[1][49][]49}{}{}{}}
+\@writefile{loa}{\contentsline {algorithm}{\numberline {6}{\ignorespaces Span Routing with Entropy Annealing and Alignment}}{54}{algorithm.6}\protected@file@percent }
+\newlabel{alg:span_routing}{{6}{54}{Span Routing with Entropy Annealing and Alignment}{algorithm.6}{}}
+\newlabel{alg:span_routing@cref}{{[algorithm][6][]6}{[1][53][]54}{}{}{}}
+\newlabel{eq:final_loss}{{77}{54}{Span Routing with Entropy Annealing and Alignment}{equation.77}{}}
+\newlabel{eq:final_loss@cref}{{[equation][77][]77}{[1][53][]54}{}{}{}}
+\newlabel{eq:gradient_flow}{{78}{54}{Gradient Interactions and Entropy Control}{equation.78}{}}
+\newlabel{eq:gradient_flow@cref}{{[equation][78][]78}{[1][54][]54}{}{}{}}
+\newlabel{prop:annealing}{{19}{54}{Span Entropy Convergence Under Annealing}{proposition.19}{}}
+\newlabel{prop:annealing@cref}{{[proposition][19][]19}{[1][54][]54}{}{}{}}
+\newlabel{eq:entropy_bound}{{79}{54}{Span Entropy Convergence Under Annealing}{equation.79}{}}
+\newlabel{eq:entropy_bound@cref}{{[equation][79][]79}{[1][54][]54}{}{}{}}
 \abx@aux@cite{0}{li2020unified}
 \abx@aux@segm{0}{0}{li2020unified}
 \abx@aux@cite{0}{bajaj2021long}
@@ -540,15 +615,15 @@
 \abx@aux@segm{0}{0}{linzen2016assessing}
 \abx@aux@cite{0}{kim2019unsupervised}
 \abx@aux@segm{0}{0}{kim2019unsupervised}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.6}Future Benchmarks and Tasks}{50}{subsection.5.6}\protected@file@percent }
-\newlabel{sec:future-tasks}{{5.6}{50}{Future Benchmarks and Tasks}{subsection.5.6}{}}
-\newlabel{sec:future-tasks@cref}{{[subsection][6][5]5.6}{[1][50][]50}{}{}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {6}Visualization Framework and Interpretability Interfaces}{50}{section.6}\protected@file@percent }
-\newlabel{sec:visualizations}{{6}{50}{Visualization Framework and Interpretability Interfaces}{section.6}{}}
-\newlabel{sec:visualizations@cref}{{[section][6][]6}{[1][50][]50}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Span Trajectory Viewer (\texttt  {trajectory\_overlay})}{50}{subsection.6.1}\protected@file@percent }
-\newlabel{sec:vis-traj}{{6.1}{50}{Span Trajectory Viewer (\texttt {trajectory\_overlay})}{subsection.6.1}{}}
-\newlabel{sec:vis-traj@cref}{{[subsection][1][6]6.1}{[1][50][]50}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.6}Future Benchmarks and Tasks}{55}{subsection.5.6}\protected@file@percent }
+\newlabel{sec:future-tasks}{{5.6}{55}{Future Benchmarks and Tasks}{subsection.5.6}{}}
+\newlabel{sec:future-tasks@cref}{{[subsection][6][5]5.6}{[1][55][]55}{}{}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Visualization Framework and Interpretability Interfaces}{55}{section.6}\protected@file@percent }
+\newlabel{sec:visualizations}{{6}{55}{Visualization Framework and Interpretability Interfaces}{section.6}{}}
+\newlabel{sec:visualizations@cref}{{[section][6][]6}{[1][55][]55}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Span Trajectory Viewer (\texttt  {trajectory\_overlay})}{55}{subsection.6.1}\protected@file@percent }
+\newlabel{sec:vis-traj}{{6.1}{55}{Span Trajectory Viewer (\texttt {trajectory\_overlay})}{subsection.6.1}{}}
+\newlabel{sec:vis-traj@cref}{{[subsection][1][6]6.1}{[1][55][]55}{}{}{}}
 \abx@aux@cite{0}{tay2020sparse}
 \abx@aux@segm{0}{0}{tay2020sparse}
 \abx@aux@cite{0}{shazeer2017outrageously}
@@ -561,13 +636,13 @@
 \abx@aux@segm{0}{0}{weischedel2013ontonotes}
 \abx@aux@cite{0}{kim2019unsupervised}
 \abx@aux@segm{0}{0}{kim2019unsupervised}
-\newlabel{eq:entropy_viz}{{59}{51}{Method}{equation.59}{}}
-\newlabel{eq:entropy_viz@cref}{{[equation][59][]59}{[1][51][]51}{}{}{}}
-\newlabel{eq:jsdiv}{{60}{51}{Method}{equation.60}{}}
-\newlabel{eq:jsdiv@cref}{{[equation][60][]60}{[1][51][]51}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Span Alignment Grid (\texttt  {span\_grid\_align})}{51}{subsection.6.2}\protected@file@percent }
-\newlabel{sec:vis-align}{{6.2}{51}{Span Alignment Grid (\texttt {span\_grid\_align})}{subsection.6.2}{}}
-\newlabel{sec:vis-align@cref}{{[subsection][2][6]6.2}{[1][51][]51}{}{}{}}
+\newlabel{eq:entropy_viz}{{80}{56}{Method}{equation.80}{}}
+\newlabel{eq:entropy_viz@cref}{{[equation][80][]80}{[1][56][]56}{}{}{}}
+\newlabel{eq:jsdiv}{{81}{56}{Method}{equation.81}{}}
+\newlabel{eq:jsdiv@cref}{{[equation][81][]81}{[1][56][]56}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Span Alignment Grid (\texttt  {span\_grid\_align})}{56}{subsection.6.2}\protected@file@percent }
+\newlabel{sec:vis-align}{{6.2}{56}{Span Alignment Grid (\texttt {span\_grid\_align})}{subsection.6.2}{}}
+\newlabel{sec:vis-align@cref}{{[subsection][2][6]6.2}{[1][56][]56}{}{}{}}
 \abx@aux@cite{0}{vig2020investigating}
 \abx@aux@segm{0}{0}{vig2020investigating}
 \abx@aux@cite{0}{belinkov2019analyzing}
@@ -580,67 +655,66 @@
 \abx@aux@segm{0}{0}{liu2024structured}
 \abx@aux@cite{0}{wang2022structured}
 \abx@aux@segm{0}{0}{wang2022structured}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Controller Influence Map (\texttt  {influence\_heatmap})}{52}{subsection.6.3}\protected@file@percent }
-\newlabel{sec:vis-influence}{{6.3}{52}{Controller Influence Map (\texttt {influence\_heatmap})}{subsection.6.3}{}}
-\newlabel{sec:vis-influence@cref}{{[subsection][3][6]6.3}{[1][52][]52}{}{}{}}
-\newlabel{eq:controller_effect}{{61}{52}{Method}{equation.61}{}}
-\newlabel{eq:controller_effect@cref}{{[equation][61][]61}{[1][52][]52}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Entropy Field Morphometry (\texttt  {entropy\_map})}{52}{subsection.6.4}\protected@file@percent }
-\newlabel{sec:vis-entropy}{{6.4}{52}{Entropy Field Morphometry (\texttt {entropy\_map})}{subsection.6.4}{}}
-\newlabel{sec:vis-entropy@cref}{{[subsection][4][6]6.4}{[1][52][]52}{}{}{}}
-\newlabel{eq:entropy_local}{{62}{52}{Method}{equation.62}{}}
-\newlabel{eq:entropy_local@cref}{{[equation][62][]62}{[1][52][]52}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Controller Influence Map (\texttt  {influence\_heatmap})}{57}{subsection.6.3}\protected@file@percent }
+\newlabel{sec:vis-influence}{{6.3}{57}{Controller Influence Map (\texttt {influence\_heatmap})}{subsection.6.3}{}}
+\newlabel{sec:vis-influence@cref}{{[subsection][3][6]6.3}{[1][57][]57}{}{}{}}
+\newlabel{eq:controller_effect}{{82}{57}{Method}{equation.82}{}}
+\newlabel{eq:controller_effect@cref}{{[equation][82][]82}{[1][57][]57}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Entropy Field Morphometry (\texttt  {entropy\_map})}{57}{subsection.6.4}\protected@file@percent }
+\newlabel{sec:vis-entropy}{{6.4}{57}{Entropy Field Morphometry (\texttt {entropy\_map})}{subsection.6.4}{}}
+\newlabel{sec:vis-entropy@cref}{{[subsection][4][6]6.4}{[1][57][]57}{}{}{}}
+\newlabel{eq:entropy_local}{{83}{57}{Method}{equation.83}{}}
+\newlabel{eq:entropy_local@cref}{{[equation][83][]83}{[1][57][]57}{}{}{}}
 \abx@aux@cite{0}{zilliz2023pooling}
 \abx@aux@segm{0}{0}{zilliz2023pooling}
 \abx@aux@cite{0}{zilliz2023pooling}
 \abx@aux@segm{0}{0}{zilliz2023pooling}
-\@writefile{toc}{\contentsline {section}{\numberline {7}Ablation Studies}{53}{section.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Effect of Span Injection Strategies}{53}{subsection.7.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Span Selection without Confidence Routing}{53}{subsection.7.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Span Pooling Alternatives}{53}{subsection.7.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}Disabling Span-Scoped Attention}{54}{subsection.7.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{54}{section.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{Appendix}{55}{section*.50}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {.1}Training Hyperparameters}{55}{subsection.Alph0.1}\protected@file@percent }
-\newlabel{sec:hyperparams}{{.1}{55}{Training Hyperparameters}{subsection.Alph0.1}{}}
-\newlabel{sec:hyperparams@cref}{{[subsection][1][0].1}{[1][54][]55}{}{}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Hyper-parameters used in all experiments. Span embeddings are pooled using \texttt  {Pool}$(x_{i:j})$, which may implement mean, max, or gated self-attention over the selected token embeddings.}}{55}{table.caption.51}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {.2}Additional Experimental Details}{55}{subsection.Alph0.2}\protected@file@percent }
-\newlabel{sec:extra-exp}{{.2}{55}{Additional Experimental Details}{subsection.Alph0.2}{}}
-\newlabel{sec:extra-exp@cref}{{[subsection][2][0].2}{[1][55][]55}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {.3}Extended Ablation Settings}{55}{subsection.Alph0.3}\protected@file@percent }
-\newlabel{sec:ablation-settings}{{.3}{55}{Extended Ablation Settings}{subsection.Alph0.3}{}}
-\newlabel{sec:ablation-settings@cref}{{[subsection][3][0].3}{[1][55][]55}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {.4}Vocabulary Induction Pseudocode}{56}{subsection.Alph0.4}\protected@file@percent }
-\newlabel{sec:induction-pseudocode}{{.4}{56}{Vocabulary Induction Pseudocode}{subsection.Alph0.4}{}}
-\newlabel{sec:induction-pseudocode@cref}{{[subsection][4][0].4}{[1][55][]56}{}{}{}}
-\@writefile{loa}{\contentsline {algorithm}{\numberline {6}{\ignorespaces Hybrid Unigram‐LM Vocabulary Induction (detailed)}}{56}{algorithm.6}\protected@file@percent }
-\newlabel{alg:induction-detailed}{{6}{56}{Hybrid Unigram‐LM Vocabulary Induction (detailed)}{algorithm.6}{}}
-\newlabel{alg:induction-detailed@cref}{{[algorithm][6][]6}{[1][55][]56}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {.5}Formal Proofs}{56}{subsection.Alph0.5}\protected@file@percent }
-\newlabel{sec:proofs}{{.5}{56}{Formal Proofs}{subsection.Alph0.5}{}}
-\newlabel{sec:proofs@cref}{{[subsection][5][0].5}{[1][56][]56}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {.6}Dataset Construction and Statistics}{56}{subsection.Alph0.6}\protected@file@percent }
-\newlabel{sec:dataset}{{.6}{56}{Dataset Construction and Statistics}{subsection.Alph0.6}{}}
-\newlabel{sec:dataset@cref}{{[subsection][6][0].6}{[1][56][]56}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {.7}ONNX Operator Implementation}{57}{subsection.Alph0.7}\protected@file@percent }
-\newlabel{sec:onnx-op}{{.7}{57}{ONNX Operator Implementation}{subsection.Alph0.7}{}}
-\newlabel{sec:onnx-op@cref}{{[subsection][7][0].7}{[1][56][]57}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {.8}Qualitative Segmentation Examples}{57}{subsection.Alph0.8}\protected@file@percent }
-\newlabel{sec:qual-examples}{{.8}{57}{Qualitative Segmentation Examples}{subsection.Alph0.8}{}}
-\newlabel{sec:qual-examples@cref}{{[subsection][8][0].8}{[1][57][]57}{}{}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Example segments with overlapping, variable-length spans and modality typing (code vs.\ punctuation vs.\ word).}}{57}{table.caption.52}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {.9}Extended Evaluation Metrics}{57}{subsection.Alph0.9}\protected@file@percent }
-\newlabel{sec:extended-metrics}{{.9}{57}{Extended Evaluation Metrics}{subsection.Alph0.9}{}}
-\newlabel{sec:extended-metrics@cref}{{[subsection][9][0].9}{[1][57][]57}{}{}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {.10}Judge Agent Prompt and Configuration}{57}{subsection.Alph0.10}\protected@file@percent }
-\newlabel{sec:judge-agent-config}{{.10}{57}{Judge Agent Prompt and Configuration}{subsection.Alph0.10}{}}
-\newlabel{sec:judge-agent-config@cref}{{[subsection][10][0].10}{[1][57][]57}{}{}{}}
-\@writefile{toc}{\contentsline {paragraph}{System Prompt}{58}{section*.53}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{User Prompt}{58}{section*.54}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Judge Configuration (YAML)}{59}{section*.55}\protected@file@percent }
-\abx@aux@read@bbl@mdfivesum{661F10C22F78A8CA26C036903DB615C9}
-\abx@aux@read@bblrerun
+\@writefile{toc}{\contentsline {section}{\numberline {7}Ablation Studies}{58}{section.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Effect of Span Injection Strategies}{58}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Span Selection without Confidence Routing}{58}{subsection.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Span Pooling Alternatives}{58}{subsection.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}Disabling Span-Scoped Attention}{59}{subsection.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{59}{section.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{Appendix}{60}{section*.63}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {.1}Training Hyperparameters}{60}{subsection.Alph0.1}\protected@file@percent }
+\newlabel{sec:hyperparams}{{.1}{60}{Training Hyperparameters}{subsection.Alph0.1}{}}
+\newlabel{sec:hyperparams@cref}{{[subsection][1][0].1}{[1][59][]60}{}{}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Hyper-parameters used in all experiments. Span embeddings are pooled using \texttt  {Pool}$(x_{i:j})$, which may implement mean, max, or gated self-attention over the selected token embeddings.}}{60}{table.caption.64}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {.2}Additional Experimental Details}{60}{subsection.Alph0.2}\protected@file@percent }
+\newlabel{sec:extra-exp}{{.2}{60}{Additional Experimental Details}{subsection.Alph0.2}{}}
+\newlabel{sec:extra-exp@cref}{{[subsection][2][0].2}{[1][60][]60}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {.3}Extended Ablation Settings}{60}{subsection.Alph0.3}\protected@file@percent }
+\newlabel{sec:ablation-settings}{{.3}{60}{Extended Ablation Settings}{subsection.Alph0.3}{}}
+\newlabel{sec:ablation-settings@cref}{{[subsection][3][0].3}{[1][60][]60}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {.4}Vocabulary Induction Pseudocode}{61}{subsection.Alph0.4}\protected@file@percent }
+\newlabel{sec:induction-pseudocode}{{.4}{61}{Vocabulary Induction Pseudocode}{subsection.Alph0.4}{}}
+\newlabel{sec:induction-pseudocode@cref}{{[subsection][4][0].4}{[1][60][]61}{}{}{}}
+\@writefile{loa}{\contentsline {algorithm}{\numberline {7}{\ignorespaces Hybrid Unigram‐LM Vocabulary Induction (detailed)}}{61}{algorithm.7}\protected@file@percent }
+\newlabel{alg:induction-detailed}{{7}{61}{Hybrid Unigram‐LM Vocabulary Induction (detailed)}{algorithm.7}{}}
+\newlabel{alg:induction-detailed@cref}{{[algorithm][7][]7}{[1][60][]61}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {.5}Formal Proofs}{61}{subsection.Alph0.5}\protected@file@percent }
+\newlabel{sec:proofs}{{.5}{61}{Formal Proofs}{subsection.Alph0.5}{}}
+\newlabel{sec:proofs@cref}{{[subsection][5][0].5}{[1][61][]61}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {.6}Dataset Construction and Statistics}{61}{subsection.Alph0.6}\protected@file@percent }
+\newlabel{sec:dataset}{{.6}{61}{Dataset Construction and Statistics}{subsection.Alph0.6}{}}
+\newlabel{sec:dataset@cref}{{[subsection][6][0].6}{[1][61][]61}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {.7}ONNX Operator Implementation}{62}{subsection.Alph0.7}\protected@file@percent }
+\newlabel{sec:onnx-op}{{.7}{62}{ONNX Operator Implementation}{subsection.Alph0.7}{}}
+\newlabel{sec:onnx-op@cref}{{[subsection][7][0].7}{[1][61][]62}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {.8}Qualitative Segmentation Examples}{62}{subsection.Alph0.8}\protected@file@percent }
+\newlabel{sec:qual-examples}{{.8}{62}{Qualitative Segmentation Examples}{subsection.Alph0.8}{}}
+\newlabel{sec:qual-examples@cref}{{[subsection][8][0].8}{[1][62][]62}{}{}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Example segments with overlapping, variable-length spans and modality typing (code vs.\ punctuation vs.\ word).}}{62}{table.caption.65}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {.9}Extended Evaluation Metrics}{62}{subsection.Alph0.9}\protected@file@percent }
+\newlabel{sec:extended-metrics}{{.9}{62}{Extended Evaluation Metrics}{subsection.Alph0.9}{}}
+\newlabel{sec:extended-metrics@cref}{{[subsection][9][0].9}{[1][62][]62}{}{}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {.10}Judge Agent Prompt and Configuration}{62}{subsection.Alph0.10}\protected@file@percent }
+\newlabel{sec:judge-agent-config}{{.10}{62}{Judge Agent Prompt and Configuration}{subsection.Alph0.10}{}}
+\newlabel{sec:judge-agent-config@cref}{{[subsection][10][0].10}{[1][62][]62}{}{}{}}
+\@writefile{toc}{\contentsline {paragraph}{System Prompt}{63}{section*.66}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{User Prompt}{63}{section*.67}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Judge Configuration (YAML)}{64}{section*.68}\protected@file@percent }
+\abx@aux@read@bbl@mdfivesum{973FF076B97174F0B84F9D1C92AB7703}
 \abx@aux@defaultrefcontext{0}{vaswani2017attention}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{devlin2019bert}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{radford2019gpt2}{none/global//global/global/global}
@@ -661,7 +735,6 @@
 \abx@aux@defaultrefcontext{0}{lin2021codemix}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{li2021prefix}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{cheng2021masked}{none/global//global/global/global}
-\abx@aux@defaultrefcontext{0}{rawson2025streammix}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{lee2016learning}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{xu2022faster}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{jackendoff1977xbar}{none/global//global/global/global}
@@ -677,10 +750,10 @@
 \abx@aux@defaultrefcontext{0}{beltagy2020longformer}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{zaheer2020bigbird}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{ainslie2023transformers}{none/global//global/global/global}
-\abx@aux@defaultrefcontext{0}{kreutzer2021distilling}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{grandvalet2005semi}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{pereyra2017regularizing}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{bengio2009curriculum}{none/global//global/global/global}
+\abx@aux@defaultrefcontext{0}{kreutzer2021distilling}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{raffel2020exploring}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{liu2022pada}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{belinkov2022probing}{none/global//global/global/global}
@@ -712,4 +785,4 @@
 \abx@aux@defaultrefcontext{0}{belinkov2019analyzing}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{olah2018building}{none/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{wang2022structured}{none/global//global/global/global}
-\gdef \@abspage@last{65}
+\gdef \@abspage@last{70}
