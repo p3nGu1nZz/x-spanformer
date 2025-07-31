@@ -1,15 +1,17 @@
 [0] Config.pm:308> INFO - This is Biber 2.20
 [0] Config.pm:311> INFO - Logfile is 'main.blg'
-[376] biber-MSWIN64:340> INFO - === 
-[561] Biber.pm:420> INFO - Reading 'main.bcf'
-[835] Biber.pm:994> INFO - Found 71 citekeys in bib section 0
-[864] Biber.pm:4463> INFO - Processing section 0
-[917] Biber.pm:4654> INFO - Looking for bibtex file 'references.bib' for section 0
-[1016] bibtex.pm:1713> INFO - LaTeX decoding ...
-[1213] bibtex.pm:1519> INFO - Found BibTeX data source 'references.bib'
-[2467] UCollate.pm:68> INFO - Overriding locale 'en-US' defaults 'variable = shifted' with 'variable = non-ignorable'
-[2468] UCollate.pm:68> INFO - Overriding locale 'en-US' defaults 'normalization = NFD' with 'normalization = prenormalized'
-[2468] Biber.pm:4283> INFO - Sorting list 'none/global//global/global/global' of type 'entry' with template 'none' and locale 'en-US'
-[2468] Biber.pm:4289> INFO - No sort tailoring available for locale 'en-US'
-[2657] bbl.pm:676> INFO - Writing 'main.bbl' with encoding 'UTF-8'
-[2779] bbl.pm:779> INFO - Output to main.bbl
+[99] biber-MSWIN64:340> INFO - === 
+[131] Biber.pm:420> INFO - Reading 'main.bcf'
+[238] Biber.pm:994> INFO - Found 71 citekeys in bib section 0
+[253] Biber.pm:4463> INFO - Processing section 0
+[264] Biber.pm:4654> INFO - Looking for bibtex file 'references.bib' for section 0
+[320] bibtex.pm:1713> INFO - LaTeX decoding ...
+[402] bibtex.pm:1519> INFO - Found BibTeX data source 'references.bib'
+[822] UCollate.pm:68> INFO - Overriding locale 'en-US' defaults 'normalization = NFD' with 'normalization = prenormalized'
+[822] UCollate.pm:68> INFO - Overriding locale 'en-US' defaults 'variable = shifted' with 'variable = non-ignorable'
+[822] Biber.pm:4283> INFO - Sorting list 'none/global//global/global/global' of type 'entry' with template 'none' and locale 'en-US'
+[822] Biber.pm:4289> INFO - No sort tailoring available for locale 'en-US'
+[864] bbl.pm:676> INFO - Writing 'main.bbl' with encoding 'UTF-8'
+[912] bbl.pm:779> INFO - Output to main.bbl
+[912] Biber.pm:131> WARN - I didn't find a database entry for 'rawson2025streammix-inprep' (section 0)
+[913] Biber.pm:133> INFO - WARNINGS: 1

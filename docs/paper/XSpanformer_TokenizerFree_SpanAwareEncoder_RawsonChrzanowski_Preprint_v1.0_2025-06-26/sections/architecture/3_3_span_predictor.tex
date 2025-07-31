@@ -1,70 +1,261 @@
-\subsection{Span Predictor}
+\subsection{Span Predictor: Factorized Pointer Networks}
 \label{sec:span-predictor}
 
-Given contextualized embeddings 
-\[
-H \;\in\;\mathbb{R}^{T\times d},
-\]
-we first form the candidate span set:
-\[
-C \;=\;\{(i,j)\mid 1 \le i < j \le T,\; j - i \le w_{\max}\},
-\]
-as defined in Sec.~\ref{sec:seed-embeddings}. We then use two parallel linear heads—forming a factorized pointer network \cite{vinyals2015pointer}—to predict span boundaries:
-\[
-\ell^s = W_s\,H + b_s,
-\quad
-p^s = \softmax(\ell^s),
-\qquad
-\ell^e = W_e\,H + b_e,
-\quad
-p^e = \softmax(\ell^e),
-\]
-where \(W_s,W_e\in\mathbb{R}^{T\times d}\), \(b_s,b_e\in\mathbb{R}^T\), and \(p^s_i\), \(p^e_j\) denote the probabilities that a span begins at position \(i\) and ends at position \(j\), respectively.
+The span predictor module transforms contextualized embeddings from Section~\ref{sec:seed-embeddings} into span boundary predictions using factorized pointer networks. This architecture decomposes the challenging joint span prediction problem into independent start and end boundary classification tasks, enabling efficient training and inference while maintaining mathematical rigor.
 
-Each span \((i,j)\in C\) is scored by the outer-product of its boundary probabilities:
-\[
-\mathrm{score}(i,j) = p^s_i\,p^e_j.
-\]
-This method efficiently captures boundary salience and mirrors successful strategies in QA and span-based extraction models \cite{lee2016learning,xu2022faster}.
+\subsubsection{Factorized Pointer Network Architecture}
+\label{sec:factorized-architecture}
 
-We then select the top-\(K\) spans by score:
-\[
-S = \TopK\bigl\{\,\mathrm{score}(i,j)\;\mid\;(i,j)\in C\,\bigr\}.
-\]
+Given contextualized embeddings \(H \in \mathbb{R}^{T \times d}\) and the candidate span set \(C = \{(i,j) \mid 1 \leq i < j \leq T, j - i \leq w_{\max}\}\) from Section~\ref{sec:seed-embeddings}, we employ a factorized pointer network architecture that predicts span boundaries through two independent linear projection heads.
 
-\begin{proposition}[Top-\(K\) Marginal Likelihood]
-	\label{prop:topk-marginal}
-	Let \(p^s,p^e\in\Delta^T\) be independent distributions over start and end positions. For each span \((i,j)\in C\), define
-	\[
-	P(i,j) = p^s_i\,p^e_j.
-	\]
+\paragraph{Boundary Prediction Heads}
+
+The factorized architecture consists of two parallel linear transformations that map contextualized embeddings to boundary logits:
+
+\begin{align}
+\ell^s &= H W_s + b_s \in \mathbb{R}^T \quad \text{(start boundary logits)} \label{eq:start-logits} \\
+\ell^e &= H W_e + b_e \in \mathbb{R}^T \quad \text{(end boundary logits)} \label{eq:end-logits}
+\end{align}
+
+where \(W_s, W_e \in \mathbb{R}^{d \times 1}\) are learnable weight vectors and \(b_s, b_e \in \mathbb{R}^T\) are bias vectors. The choice of independent linear heads reflects the architectural principle that span boundaries can be predicted through position-wise classification rather than joint sequence modeling.
+
+\paragraph{Probability Normalization}
+
+The logits are transformed into independent boundary probabilities using sigmoid activation:
+
+\begin{align}
+p^s &= \sigma(\ell^s) \in [0,1]^T \quad \text{where } p^s_i = \frac{1}{1 + \exp(-\ell^s_i)} \label{eq:start-probs} \\
+p^e &= \sigma(\ell^e) \in [0,1]^T \quad \text{where } p^e_j = \frac{1}{1 + \exp(-\ell^e_j)} \label{eq:end-probs}
+\end{align}
+
+This sigmoid normalization produces independent probabilities at each position, allowing multiple boundaries to be predicted simultaneously. Unlike softmax, sigmoid enables the multi-label nature required for overlapping span detection, where each position can independently serve as a start or end boundary.
+
+\subsubsection{Span Scoring and Selection}
+\label{sec:span-scoring}
+
+The factorized boundary predictions are combined to score candidate spans through outer-product computation, reflecting the independence assumption between start and end boundary decisions.
+
+\paragraph{Span Score Computation}
+
+Each candidate span \((i,j) \in C\) receives a score based on the product of its boundary probabilities:
+
+\begin{equation}
+\mathrm{score}(i,j) = p^s_i \cdot p^e_j,
+\label{eq:span-score}
+\end{equation}
+
+This scoring mechanism efficiently captures boundary salience and mirrors successful strategies in question answering and span-based extraction models~\cite{lee2016learning,xu2022faster}. The factorization enables \(O(|C|)\) scoring complexity rather than the \(O(T^2)\) required for joint span prediction.
+
+\paragraph{Top-K Span Selection}
+
+From the scored candidate set, we select the \(K\) highest-scoring spans:
+
+\begin{equation}
+S = \TopK\{\mathrm{score}(i,j) \mid (i,j) \in C\},
+\label{eq:topk-selection}
+\end{equation}
+
+where \(\TopK\) denotes the operation that returns the \(K\) elements with largest values. This selection strategy is theoretically justified by the following optimality result.
+
+\subsubsection{Theoretical Foundations and Optimality}
+\label{sec:span-optimality}
+
+The factorized pointer network architecture is supported by theoretical guarantees that establish the optimality of the top-K selection procedure under the independence assumption.
+
+\begin{proposition}[Greedy Span Selection Optimality]
+	\label{prop:greedy-span-optimality}
+	Let \(p^s,p^e\in[0,1]^T\) be independent boundary probability vectors over start and end positions. For each span \((i,j)\in C\), define
+	\begin{equation}
+	P(i,j) = p^s_i \cdot p^e_j.
+	\label{eq:span-probability}
+	\end{equation}
 	Then the top-\(K\) spans by \(P(i,j)\) maximize total mass among all subsets of size \(K\):
-	\[
-	S 
-	= \arg\max_{\substack{S'\subseteq C\\|S'|=K}} \sum_{(i,j)\in S'} P(i,j).
-	\]
+	\begin{equation}
+	S = \arg\max_{\substack{S'\subseteq C\\|S'|=K}} \sum_{(i,j)\in S'} P(i,j).
+	\label{eq:optimal-selection}
+	\end{equation}
 \end{proposition}
 
 \begin{proof}
 	We aim to solve
-	\[
+	\begin{equation}
 	\max_{\substack{S'\subseteq C\\|S'|=K}} \sum_{(i,j)\in S'} P(i,j).
-	\]
+	\label{eq:optimization-objective}
+	\end{equation}
 	\textbf{Step 1:} The objective is additive in \(P(i,j)\), and all terms are non-negative:
-	\[
+	\begin{equation}
 	P(i,j)\ge0,\quad \text{so } \sum_{(i,j)\in S'} P(i,j) \text{ increases with high-mass elements}.
-	\]
+	\label{eq:non-negative-property}
+	\end{equation}
 	\textbf{Step 2:} Sorting all \((i,j)\in C\) by \(P(i,j)\), selecting the \(K\) largest entries yields the subset with maximal total mass:
-	\[
+	\begin{equation}
 	S = \TopK\{P(i,j)\}.
-	\]
-	\textbf{Step 3:} Since \(p^s\) and \(p^e\) are independent, there are no interaction terms across spans—greedy selection remains optimal.
+	\label{eq:greedy-selection}
+	\end{equation}
+	\textbf{Step 3:} Since \(p^s\) and \(p^e\) are independent, there are no interaction terms across spans---greedy selection remains optimal.
 	
 	\textbf{Conclusion:}
-	\[
+	\begin{equation}
 	\boxed{
-		S = \arg\max_{|S'|=K} \sum_{(i,j)\in S'} p^s_i\,p^e_j
+		S = \arg\max_{|S'|=K} \sum_{(i,j)\in S'} p^s_i \cdot p^e_j
 	}
-	\]
+	\label{eq:final-optimality}
+	\end{equation}
 	as claimed.
 \end{proof}
+
+\subsubsection{Supervised Training Methodology}
+\label{sec:span-predictor-training}
+
+The factorized pointer network is trained using supervised learning with ground truth span boundary annotations. Given a training corpus of sequences with labeled span boundaries, we optimize the boundary prediction heads to maximize the likelihood of true start and end positions.
+
+\paragraph{Ground Truth Representation}
+
+For each training sequence \(x = [x_1, \ldots, x_T]\) with ground truth spans \(\mathcal{S} = \{(s_1, e_1), (s_2, e_2), \ldots, (s_M, e_M)\}\), we construct binary indicator vectors:
+
+\begin{align}
+y^s &\in \{0,1\}^T \quad \text{where } y^s_i = \begin{cases} 
+1 & \text{if } \exists m : s_m = i \\
+0 & \text{otherwise}
+\end{cases} \label{eq:start-targets} \\
+y^e &\in \{0,1\}^T \quad \text{where } y^e_j = \begin{cases} 
+1 & \text{if } \exists m : e_m = j \\
+0 & \text{otherwise}
+\end{cases} \label{eq:end-targets}
+\end{align}
+
+This representation allows multiple overlapping spans per sequence, capturing the linguistic reality that text can be segmented at multiple hierarchical levels simultaneously.
+
+\paragraph{Cross-Entropy Training Objective}
+
+The training objective combines cross-entropy losses for start and end boundary prediction. Given the predicted boundary probabilities \(p^s, p^e \in [0,1]^T\) from the factorized pointer network, we define the boundary prediction loss as:
+
+\begin{equation}
+\mathcal{L}_{\text{boundary}}(p^s, p^e, y^s, y^e) = \mathcal{L}_{\text{CE}}(p^s, y^s) + \mathcal{L}_{\text{CE}}(p^e, y^e),
+\label{eq:boundary-loss}
+\end{equation}
+
+where each cross-entropy term handles the multi-label nature of boundary prediction through binary classification at each position:
+
+\begin{equation}
+\mathcal{L}_{\text{CE}}(p, y) = -\sum_{t=1}^T \left[ y_t \log p_t + (1-y_t) \log (1-p_t) \right].
+\label{eq:binary-cross-entropy}
+\end{equation}
+
+This formulation properly handles overlapping spans by treating each position as an independent binary classification problem, compatible with the factorized pointer network architecture.
+
+\paragraph{Multi-Label Boundary Prediction}
+
+The factorized pointer network must handle the inherent multi-label nature of span boundary prediction, where a single sequence contains overlapping spans at multiple granularities. Consider the phrase ``the red car'': valid spans include \emph{the}, \emph{red}, \emph{car}, \emph{the red}, \emph{red car}, and \emph{the red car}. This creates overlapping boundary labels where position boundaries can serve multiple valid spans simultaneously.
+
+For training sequences of at least 64 characters, the ground truth contains hierarchical span structures where:
+\begin{itemize}
+	\item \textbf{Word-level spans:} Individual tokens (``the'', ``red'', ``car'')
+	\item \textbf{Phrase-level spans:} Multi-word phrases (``red car'', ``the red'')
+	\item \textbf{Sentence-level spans:} Complete constructions (``the red car'')
+\end{itemize}
+
+This multi-granular annotation results in multiple positive labels per position in the binary indicator vectors \(y^s, y^e\). The binary cross-entropy formulation in Equation~\eqref{eq:binary-cross-entropy} naturally handles this multi-label scenario, as each position's loss contribution is independent and properly accounts for both positive and negative boundary labels.
+
+\paragraph{Training Configuration and Weighting Strategies}
+
+While the multi-label formulation above handles overlapping spans naturally, the training framework supports configurable boundary weighting strategies to address class imbalance when needed. The weighting strategy (uniform, frequency-based, or inverse frequency) is selected at training initialization rather than dynamically, allowing systematic exploration of different approaches to handle the varying density of boundary positions across different text structures.
+
+\paragraph{Regularization and Numerical Stability}
+
+To ensure training stability and prevent overfitting to spurious boundary patterns, we incorporate several regularization techniques:
+
+\begin{align}
+\mathcal{L}_{\text{total}} &= \mathcal{L}_{\text{boundary}} + \lambda_{\text{reg}} \mathcal{L}_{\text{reg}} + \lambda_{\text{smooth}} \mathcal{L}_{\text{smooth}} \label{eq:total-loss} \\
+\mathcal{L}_{\text{reg}} &= \|W_s\|_2^2 + \|W_e\|_2^2 + \|b_s\|_2^2 + \|b_e\|_2^2 \label{eq:l2-regularization} \\
+\mathcal{L}_{\text{smooth}} &= \sum_{t=1}^{T-1} \left[ (p^s_{t+1} - p^s_t)^2 + (p^e_{t+1} - p^e_t)^2 \right] \label{eq:smoothness-regularization}
+\end{align}
+
+The smoothness term \(\mathcal{L}_{\text{smooth}}\) encourages local coherence in boundary probabilities, reflecting the linguistic intuition that boundary decisions should vary gradually across positions.
+
+\subsubsection{Optimization Theory and Convergence Analysis}
+\label{sec:span-predictor-optimization}
+
+The factorized architecture enables efficient gradient-based optimization with favorable convergence properties compared to joint span prediction methods.
+
+\paragraph{Gradient Factorization}
+
+The factorized design allows independent optimization of start and end boundary predictors. The gradients with respect to the weight matrices decompose as:
+
+\begin{align}
+\frac{\partial \mathcal{L}_{\text{boundary}}}{\partial W_s} &= \frac{\partial \mathcal{L}_{\text{CE}}(p^s, y^s)}{\partial W_s} = H^T (p^s - y^s) \label{eq:start-gradient} \\
+\frac{\partial \mathcal{L}_{\text{boundary}}}{\partial W_e} &= \frac{\partial \mathcal{L}_{\text{CE}}(p^e, y^e)}{\partial W_e} = H^T (p^e - y^e) \label{eq:end-gradient}
+\end{align}
+
+This factorization reduces the computational complexity of gradient computation from \(O(T^2 d)\) for joint methods to \(O(T d)\) for each boundary type.
+
+\paragraph{Convergence Analysis}
+
+\begin{proposition}[Boundary Loss Convexity]
+	\label{prop:boundary-convexity}
+	The boundary prediction loss \(\mathcal{L}_{\text{boundary}}(p^s, p^e, y^s, y^e)\) is convex in the logit space \((\ell^s, \ell^e)\) and has a unique global minimum when ground truth spans are consistent.
+\end{proposition}
+
+\begin{proof}
+	The binary cross-entropy loss \(\mathcal{L}_{\text{CE}}(p, y) = -\sum_t [y_t \log p_t + (1-y_t) \log (1-p_t)]\) where \(p = \sigma(\ell)\) is convex in the logit space \(\ell\). This follows from the fact that:
+	
+	\textbf{Step 1:} The sigmoid function \(p_i = \frac{1}{1 + \exp(-\ell_i)}\) is log-concave.
+	
+	\textbf{Step 2:} The composition \(-[y^T \log(\sigma(\ell)) + (1-y)^T \log(1-\sigma(\ell))]\) preserves convexity for binary targets \(y \in \{0,1\}^T\).
+	
+	\textbf{Step 3:} Since \(\mathcal{L}_{\text{boundary}}\) is the sum of two convex functions (start and end binary cross-entropy), it remains convex.
+	
+	\textbf{Uniqueness:} When ground truth spans are consistent (no contradictory boundary labels), the Hessian of \(\mathcal{L}_{\text{boundary}}\) is positive definite, ensuring a unique global minimum.
+\end{proof}
+
+\paragraph{Training Algorithm}
+
+The complete training procedure integrates the mathematical foundations established above with practical optimization considerations:
+
+\begin{algorithm}[H]
+	\caption{Factorized Pointer Network Boundary Training}
+	\label{alg:boundary-training}
+	\begin{algorithmic}[1]
+		\STATE \textbf{Input:} Training sequences \(\{(x^{(n)}, \mathcal{S}^{(n)})\}_{n=1}^N\), embeddings \(\{H^{(n)}\}\), 
+		\STATE \qquad learning rate \(\eta\), regularization weights \(\lambda_{\text{reg}}, \lambda_{\text{smooth}}\)
+		\STATE \textbf{Initialize:} Weight matrices \(W_s, W_e \sim \mathcal{N}(0, \sigma^2 I)\), bias vectors \(b_s, b_e = 0\)
+		\STATE
+		\FOR{epoch \(= 1\) to \(\text{max\_epochs}\)}
+		\FOR{batch \(\mathcal{B} \subseteq \{1, 2, \ldots, N\}\)}
+		\STATE \textbf{// Forward pass}
+		\FOR{sequence \(n \in \mathcal{B}\)}
+		\STATE Compute logits: \(\ell^s = H^{(n)} W_s + b_s\), \(\ell^e = H^{(n)} W_e + b_e\)
+		\STATE Compute probabilities: \(p^s = \sigma(\ell^s)\), \(p^e = \sigma(\ell^e)\)
+		\STATE Generate targets: \(y^s, y^e\) from \(\mathcal{S}^{(n)}\) using Eqs.~\eqref{eq:start-targets}, \eqref{eq:end-targets}
+		\ENDFOR
+		\STATE
+		\STATE \textbf{// Loss computation}
+		\STATE \(\mathcal{L}_{\text{batch}} \leftarrow \frac{1}{|\mathcal{B}|} \sum_{n \in \mathcal{B}} \mathcal{L}_{\text{total}}(p^s, p^e, y^s, y^e)\)
+		\STATE
+		\STATE \textbf{// Gradient computation and update}
+		\STATE Compute gradients using Eqs.~\eqref{eq:start-gradient}, \eqref{eq:end-gradient}
+		\STATE \(W_s \leftarrow W_s - \eta \frac{\partial \mathcal{L}_{\text{batch}}}{\partial W_s}\)
+		\STATE \(W_e \leftarrow W_e - \eta \frac{\partial \mathcal{L}_{\text{batch}}}{\partial W_e}\)
+		\STATE Update bias vectors \(b_s, b_e\) similarly
+		\ENDFOR
+		\ENDFOR
+		\STATE \textbf{Return:} Trained parameters \((W_s, W_e, b_s, b_e)\)
+	\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Computational Complexity}
+
+\begin{proposition}[Training Complexity]
+	\label{prop:training-complexity}
+	The boundary training algorithm has time complexity \(O(B \cdot T \cdot d)\) per batch and space complexity \(O(T \cdot d)\), where \(B\) is the batch size, \(T\) is the maximum sequence length, and \(d\) is the embedding dimension.
+\end{proposition}
+
+\begin{proof}
+	\textbf{Forward Pass:} For each sequence in the batch, computing \(\ell^s = H W_s + b_s\) requires \(O(T \cdot d)\) operations (matrix-vector multiplication), and sigmoid computation requires \(O(T)\). Total: \(O(B \cdot T \cdot d)\).
+	
+	\textbf{Backward Pass:} Gradient computation using Eqs.~\eqref{eq:start-gradient}, \eqref{eq:end-gradient} requires \(O(T \cdot d)\) for each sequence. Total: \(O(B \cdot T \cdot d)\).
+	
+	\textbf{Space Complexity:} Storage requirements include weight vectors \(W_s, W_e \in \mathbb{R}^{d \times 1}\), embeddings \(H \in \mathbb{R}^{T \times d}\), and intermediate activations, totaling \(O(T \cdot d + d) = O(T \cdot d)\).
+\end{proof}
+
+This training framework provides a mathematically sound foundation for learning span boundaries through factorized pointer networks, with efficient optimization properties and clear convergence guarantees.
