@@ -191,3 +191,9 @@ data/embedding/
 
 # Span
 data/span/
+
+# Annotations
+data/annotations
+
+# test data
+test

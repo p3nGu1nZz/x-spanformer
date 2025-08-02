@@ -8,27 +8,50 @@ Please analyze the following {{ domain_type }} text using X-bar theory and ident
 **Analysis Requirements:**
 1. Identify spans at EVERY level: {{ levels | join(", ") }}
 2. Use the {{ domain_type }} domain classifiers provided in the system prompt
-3. Provide comprehensive coverage - don't miss any significant spans
+3. Provide comprehensive coverage: 
+   - Analyze EVERY word (nouns, verbs, adjectives, adverbs, determiners, prepositions, etc.)
+   - Identify ALL phrases (noun phrases, verb phrases, prepositional phrases, etc.)  
+   - Mark clause and sentence boundaries
+   - Don't skip any linguistic elements
 4. Include confidence scores based on how certain you are about each classification
-5. Ensure spans are hierarchically consistent
+5. Ensure spans are hierarchically consistent (larger spans contain smaller spans)
 
 **Expected classifier types for this domain:**
 {{ expected_classifiers | join(", ") }}
 
+{% set word_count = text.split() | length %}
+{% if domain_type == "natural" %}
+**Target span generation**: For {{ word_count }} words, generate as many valid spans as possible (typical range: {{ (word_count * 1.8) | round | int }}-{{ (word_count * 2.5) | round | int }} spans)
+{% elif domain_type == "code" %}
+**Target span generation**: For {{ word_count }} words, generate as many valid spans as possible (typical range: {{ (word_count * 2.0) | round | int }}-{{ (word_count * 3.0) | round | int }} spans)
+{% else %}
+**Target span generation**: For {{ word_count }} words, generate as many valid spans as possible (typical range: {{ (word_count * 1.5) | round | int }}-{{ (word_count * 2.2) | round | int }} spans)
+{% endif %}
+
+**Critical Instructions:**
+- **Goal: Maximum valid spans** - Generate as many linguistically valid spans as possible
+- Analyze the text systematically from left to right
+- Mark EVERY single word with its grammatical category
+- Identify ALL meaningful phrases and their boundaries
+- Don't miss functional words like articles, prepositions, conjunctions
+- Use precise character positions (count carefully!)
+- **Quality over completeness** - Focus on generating many valid spans rather than perfect coverage
+
 Return your analysis as a JSON array with each span containing:
-- `text`: The actual text of the span
-- `start_char`: Start character position (0-based, inclusive)
-- `end_char`: End character position (0-based, exclusive) 
-- `xbar_class`: The X-bar classifier name
+- `text`: The exact text of the span (I will calculate positions automatically)
+- `xbar_class`: The X-bar classifier name (use full names like "determiner", "noun", "verb_phrase")  
 - `confidence`: Confidence score (0.0-1.0)
+
+**IMPORTANT**: Do NOT provide start_char/end_char positions. Just provide the exact text snippets and I will find their positions automatically. This ensures accurate boundary detection.
 
 {% if turn_number > 1 %}
 **Follow-up Analysis:**
 This is turn {{ turn_number }} of {{ max_turns }}. Please review your previous analysis and:
-- Add any spans you may have missed
+- Add any spans you may have missed (check every word!)
 - Refine confidence scores
 - Ensure complete hierarchical coverage
 - Focus on {{ focus_area }} if specified
+- Make sure you haven't missed any verbs, prepositions, or function words
 {% endif %}
 
 Begin your comprehensive X-bar analysis now:

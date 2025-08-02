@@ -23,9 +23,51 @@ logger = logging.getLogger(__name__)
 class AnnotationProcessor:
     """Shared utilities for annotation pipelines."""
     
+    def extract_text_boundaries(self, text: str, target_text: str) -> List[Tuple[int, int]]:
+        """
+        Find all occurrences of target_text in the source text and return their boundaries.
+        
+        Args:
+            text: Source text to search in
+            target_text: Text snippet to find
+            
+        Returns:
+            List of (start_pos, end_pos) tuples for all occurrences
+        """
+        boundaries = []
+        if not target_text or not target_text.strip():
+            return boundaries
+            
+        # Clean target text
+        target_clean = target_text.strip()
+        
+        # Find all occurrences using regex with proper escaping
+        escaped_target = re.escape(target_clean)
+        
+        # Use finditer to get all matches with positions
+        for match in re.finditer(escaped_target, text):
+            start_pos = match.start()
+            end_pos = match.end()
+            boundaries.append((start_pos, end_pos))
+            
+        # If no exact matches found, try fuzzy matching for partial text
+        if not boundaries and len(target_clean) > 2:
+            # Try finding the target as a substring (case insensitive)
+            text_lower = text.lower()
+            target_lower = target_clean.lower()
+            start = 0
+            while True:
+                pos = text_lower.find(target_lower, start)
+                if pos == -1:
+                    break
+                boundaries.append((pos, pos + len(target_clean)))
+                start = pos + 1
+                
+        return boundaries
+    
     def parse_json_response(self, response: str) -> List[Dict[str, Any]]:
         """
-        Parse and validate JSON response from LLM.
+        Parse and validate JSON response from LLM with enhanced error recovery.
         
         Args:
             response: Raw response string from LLM
@@ -35,27 +77,106 @@ class AnnotationProcessor:
         """
         annotations = []
         
-        # Try to extract JSON from response
+        # Try to extract JSON from response with more comprehensive patterns
         json_patterns = [
-            r'```json\s*(\[.*?\])\s*```',  # JSON code block
-            r'```\s*(\[.*?\])\s*```',      # Generic code block
-            r'(\[.*?\])',                   # Direct JSON array
-            r'(\{.*?\})',                   # Single JSON object
+            r'```json\s*(\[.*?\])\s*```',       # JSON code block with array
+            r'```json\s*(\{.*?\})\s*```',       # JSON code block with object
+            r'```\s*(\[.*?\])\s*```',           # Generic code block with array
+            r'```\s*(\{.*?\})\s*```',           # Generic code block with object
+            r'(\[(?:\s*\{[^}]*\},?\s*)*\])',    # JSON arrays with objects
+            r'(\{[^{}]*"text"[^{}]*\})',        # Objects containing "text" field
+            r'(\{[^{}]*"start_char"[^{}]*\})',  # Objects containing position fields
         ]
         
         for pattern in json_patterns:
-            matches = re.findall(pattern, response, re.DOTALL)
+            matches = re.findall(pattern, response, re.DOTALL | re.MULTILINE)
             for match in matches:
                 try:
-                    data = json.loads(match)
+                    # Clean up match before parsing
+                    cleaned_match = match.strip()
+                    if not cleaned_match:
+                        continue
+                    
+                    # Try to fix common JSON issues
+                    cleaned_match = self._fix_malformed_json(cleaned_match)
+                        
+                    data = json.loads(cleaned_match)
                     if isinstance(data, list):
                         annotations.extend(data)
                     elif isinstance(data, dict):
                         annotations.append(data)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
+                    logger.debug(f"Failed to parse JSON: {e} for match: {match[:100]}...")
+                    # Try alternative parsing strategies
+                    recovered = self._recover_malformed_json(match)
+                    annotations.extend(recovered)
+                    continue
+                except Exception as e:
+                    logger.debug(f"Unexpected error parsing JSON: {e}")
                     continue
         
-        return annotations
+        # Deduplicate annotations based on key fields
+        seen_annotations = set()
+        unique_annotations = []
+        
+        for annotation in annotations:
+            if isinstance(annotation, dict):
+                # Create key for deduplication
+                key_fields = (
+                    annotation.get("text", ""),
+                    annotation.get("start_char", annotation.get("start", -1)),
+                    annotation.get("end_char", annotation.get("end", -1)),
+                    annotation.get("xbar_class", annotation.get("type", ""))
+                )
+                
+                if key_fields not in seen_annotations:
+                    unique_annotations.append(annotation)
+                    seen_annotations.add(key_fields)
+        
+        logger.debug(f"Parsed {len(unique_annotations)} unique annotations from {len(annotations)} total found")
+        return unique_annotations
+    
+    def _fix_malformed_json(self, json_str: str) -> str:
+        """Fix common JSON formatting issues."""
+        # Remove trailing commas before closing brackets
+        json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
+        
+        # Fix missing quotes around keys
+        json_str = re.sub(r'(\w+)(?=\s*:)', r'"\1"', json_str)
+        
+        # Fix missing commas between objects in arrays
+        json_str = re.sub(r'}\s*{', '}, {', json_str)
+        
+        return json_str
+    
+    def _recover_malformed_json(self, malformed_str: str) -> List[Dict[str, Any]]:
+        """Attempt to recover data from malformed JSON using pattern matching."""
+        recovered = []
+        
+        try:
+            # Look for text/class pairs using regex
+            text_pattern = r'"text":\s*"([^"]*)"'
+            class_pattern = r'"xbar_class":\s*"([^"]*)"'
+            conf_pattern = r'"confidence":\s*([0-9.]+)'
+            
+            text_matches = re.findall(text_pattern, malformed_str)
+            class_matches = re.findall(class_pattern, malformed_str)
+            conf_matches = re.findall(conf_pattern, malformed_str)
+            
+            # Try to pair them up
+            for i, text in enumerate(text_matches):
+                if i < len(class_matches):
+                    annotation = {
+                        "text": text,
+                        "xbar_class": class_matches[i],
+                        "confidence": float(conf_matches[i]) if i < len(conf_matches) else 1.0
+                    }
+                    recovered.append(annotation)
+                    
+        except Exception as e:
+            logger.debug(f"Recovery attempt failed: {e}")
+            
+        return recovered
     
     def validate_span_boundaries(
         self, 
@@ -64,7 +185,7 @@ class AnnotationProcessor:
         end: int
     ) -> Tuple[bool, List[str]]:
         """
-        Validate span boundaries are within sequence bounds.
+        Validate span boundaries are within sequence bounds with automatic correction.
         
         Args:
             sequence: Original text sequence
@@ -75,20 +196,35 @@ class AnnotationProcessor:
             Tuple of (is_valid, list_of_issues)
         """
         issues = []
+        original_start, original_end = start, end
         
+        # Fix negative start positions
         if start < 0:
-            issues.append(f"Start position {start} is negative")
+            issues.append(f"Start position {start} was negative, correcting to 0")
+            start = 0
         
+        # Fix end positions beyond sequence length
         if end > len(sequence):
-            issues.append(f"End position {end} exceeds sequence length {len(sequence)}")
+            issues.append(f"End position {end} exceeded sequence length {len(sequence)}, correcting to {len(sequence)}")
+            end = len(sequence)
         
+        # Fix inverted positions
         if start >= end:
-            issues.append(f"Start position {start} >= end position {end}")
+            if original_start < len(sequence):
+                # Try to fix by extending end position slightly
+                end = min(start + 1, len(sequence))
+                issues.append(f"Start position {start} >= end position {original_end}, correcting end to {end}")
+            else:
+                issues.append(f"Start position {start} >= end position {end} and cannot be corrected")
+                return False, issues
         
-        if end - start > len(sequence):
-            issues.append(f"Span length {end - start} exceeds sequence length {len(sequence)}")
+        # Check for reasonable span length (not entire text unless it's a sentence-level span)
+        span_length = end - start
+        if span_length > len(sequence) * 0.8 and span_length < len(sequence):
+            issues.append(f"Large span length {span_length} (likely sentence/clause level)")
         
-        return len(issues) == 0, issues
+        # Return corrected positions are valid
+        return True, issues
     
     def normalize_xbar_class(self, xbar_class: str) -> str:
         """
@@ -103,14 +239,49 @@ class AnnotationProcessor:
         # Remove extra whitespace and convert to standard case
         normalized = xbar_class.strip()
         
-        # Common normalizations
-        normalization_map = {
+        # Preserve detailed classifier names first, only fall back to abbreviations if needed
+        detailed_map = {
+            # Keep full names for better interpretability
+            "determiner": "determiner",
+            "noun": "noun", 
+            "verb": "verb",
+            "adjective": "adjective",
+            "adverb": "adverb",
+            "preposition": "preposition",
+            "pronoun": "pronoun",
+            "conjunction": "conjunction",
+            "punctuation": "punctuation",
+            "noun_phrase": "noun_phrase",
+            "verb_phrase": "verb_phrase",
+            "adjective_phrase": "adjective_phrase",
+            "adverb_phrase": "adverb_phrase", 
+            "prepositional_phrase": "prepositional_phrase",
+            "main_clause": "main_clause",
+            "subordinate_clause": "subordinate_clause",
+            "relative_clause": "relative_clause",
+            "simple_sentence": "simple_sentence",
+            "compound_sentence": "compound_sentence",
+            "complex_sentence": "complex_sentence",
+            "head": "head",
+            "specifier": "specifier",
+            "modifier": "modifier", 
+            "complement": "complement",
+            "adjunct": "adjunct",
+        }
+        
+        # Try exact match first (case insensitive)
+        for key, value in detailed_map.items():
+            if normalized.lower() == key.lower():
+                return value
+        
+        # Legacy abbreviation fallbacks (only if no detailed match)
+        abbreviation_map = {
             "noun phrase": "NP",
             "verb phrase": "VP", 
             "adjective phrase": "AP",
             "prepositional phrase": "PP",
             "determiner phrase": "DP",
-            "complementizer phrase": "CP",
+            "complementizer phrase": "CP",  
             "noun": "N",
             "verb": "V",
             "adjective": "A",
@@ -121,15 +292,12 @@ class AnnotationProcessor:
             "conjunction": "Conj",
         }
         
-        # Try exact match first
-        if normalized.lower() in normalization_map:
-            return normalization_map[normalized.lower()]
-        
-        # Try partial matches
-        for key, value in normalization_map.items():
+        # Try partial matches for abbreviations
+        for key, value in abbreviation_map.items():
             if key in normalized.lower():
                 return value
         
+        # Return original if no mapping found
         return normalized
     
     def consolidate_working_files(self, working_dir: Path, output_file: Path):
@@ -210,6 +378,7 @@ class AnnotationProcessor:
     ) -> List[CharacterSpan]:
         """
         Extract spans from comprehensive LLM response covering multiple classifiers.
+        Uses text-based boundary extraction for accurate positioning.
         
         Args:
             response: LLM response containing comprehensive annotations
@@ -220,42 +389,64 @@ class AnnotationProcessor:
             List of extracted character spans
         """
         spans = []
+        seen_spans = set()  # Track duplicates
         
-        # First try standard character span parsing
-        standard_spans = parse_character_spans_from_agent_response(response, text)
-        spans.extend(standard_spans)
-        
-        # Try JSON parsing for structured responses
+        # Parse JSON annotations (now text-based, no position data)
         json_annotations = self.parse_json_response(response)
         
         for annotation in json_annotations:
             try:
-                # Extract span information
+                # Extract span information (no position fields needed)
                 span_text = annotation.get("text", "")
-                start_char = annotation.get("start", annotation.get("char_start", annotation.get("start_char")))
-                end_char = annotation.get("end", annotation.get("char_end", annotation.get("end_char")))
-                xbar_class = annotation.get("label", annotation.get("xbar_class", annotation.get("type")))
+                xbar_class = annotation.get("xbar_class", 
+                    annotation.get("label", 
+                        annotation.get("type", 
+                            annotation.get("class", 
+                                annotation.get("category", "")))))
                 confidence = annotation.get("confidence", 1.0)
                 
-                if start_char is not None and end_char is not None and xbar_class:
-                    # Validate span
-                    is_valid, issues = self.validate_span_boundaries(text, start_char, end_char)
+                if span_text and xbar_class:
+                    # Find all occurrences of this text in the source
+                    boundaries = self.extract_text_boundaries(text, span_text)
                     
-                    if is_valid:
-                        spans.append(CharacterSpan(
-                            start_char=start_char,
-                            end_char=end_char,
-                            xbar_class=self.normalize_xbar_class(xbar_class),
-                            confidence=float(confidence),
-                            text=span_text or text[start_char:end_char]
-                        ))
-                    else:
-                        logger.warning(f"Invalid span boundaries: {issues}")
+                    for start_char, end_char in boundaries:
+                        # Validate and correct boundaries if needed
+                        is_valid, issues = self.validate_span_boundaries(text, start_char, end_char)
                         
+                        if is_valid:
+                            # Use corrected boundaries
+                            corrected_start = max(0, start_char)
+                            corrected_end = min(len(text), end_char)
+                            
+                            # Extract actual text from corrected boundaries
+                            actual_text = text[corrected_start:corrected_end]
+                            
+                            # Preserve original classifier name
+                            normalized_class = xbar_class.strip()
+                            
+                            # Create span key for deduplication
+                            span_key = (corrected_start, corrected_end, normalized_class)
+                            
+                            if span_key not in seen_spans:
+                                spans.append(CharacterSpan(
+                                    start_char=corrected_start,
+                                    end_char=corrected_end,
+                                    xbar_class=normalized_class,
+                                    confidence=float(confidence),
+                                    text=actual_text  # Use actual extracted text
+                                ))
+                                seen_spans.add(span_key)
+                                
+                            if issues:  # Log corrections, not errors
+                                logger.info(f"Corrected span boundaries: {issues}")
+                        else:
+                            logger.warning(f"Invalid span boundaries for '{span_text}': {issues}")
+                            
             except Exception as e:
                 logger.warning(f"Failed to parse annotation: {e}")
                 continue
         
+        logger.info(f"Extracted {len(spans)} unique spans from text-based response")
         return spans
     
     def align_with_position_embeddings(

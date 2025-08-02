@@ -1,6 +1,6 @@
 from pathlib import Path
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from rich.console import Console
 from jinja2 import Environment, FileSystemLoader, TemplateNotFound
@@ -138,3 +138,50 @@ def render_span_annotation_request(
     }
     
     return render_prompt("span_annotation_request", **template_vars)
+
+def render_span_annotation_followup(
+    text: str,
+    domain_type: str = "natural", 
+    turn_number: int = 2,
+    previous_spans: Optional[List[str]] = None,
+    missing_words: Optional[List[str]] = None,
+    **kwargs
+) -> str:
+    """
+    Render follow-up request for finding missing spans.
+    
+    Args:
+        text: Original text sequence
+        domain_type: Domain type (natural, code, mixed)
+        turn_number: Current turn number
+        previous_spans: List of span texts already found
+        missing_words: List of missing words to focus on
+        **kwargs: Additional template variables
+        
+    Returns:
+        Rendered follow-up request
+    """
+    if previous_spans is None:
+        previous_spans = []
+    if missing_words is None:
+        missing_words = []
+    
+    # Create focus instruction based on missing elements
+    if missing_words:
+        sample_missing = missing_words[:5]  # Show first 5 missing
+        focus_instruction = f"Specifically annotate these missing words: {', '.join(sample_missing)}"
+    else:
+        focus_instruction = "Look for any remaining word-level or phrase-level spans"
+    
+    template_vars = {
+        "text": text,
+        "domain_type": domain_type,
+        "turn_number": turn_number,
+        "span_count": len(previous_spans),
+        "focus_instruction": focus_instruction,
+        "missing_words": missing_words,
+        "previous_spans": previous_spans,
+        **kwargs
+    }
+    
+    return render_prompt("span_annotation_followup", **template_vars)

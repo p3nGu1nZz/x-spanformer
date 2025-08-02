@@ -202,26 +202,18 @@ class TestSpanAnnotatorSession(unittest.TestCase):
         self.assertIn("noun", natural_prompt.lower())
         self.assertIn("keyword", code_prompt.lower())
     
-    def test_get_multi_turn_prompts(self):
-        """Test multi-turn prompt generation."""
+    def test_get_initial_annotation_request(self):
+        """Test initial annotation request generation."""
         text = "The quick brown fox jumps over the lazy dog."
-        prompts = self.agent.get_multi_turn_prompts(text)
+        request = self.agent.get_initial_annotation_request(text, "natural")
         
-        self.assertIsInstance(prompts, list)
-        self.assertGreater(len(prompts), 0)
+        self.assertIsInstance(request, str)
+        self.assertIn(text, request)
+        self.assertIn("X-bar", request)
         
-        # Each prompt should be a dictionary with appropriate keys
-        for prompt in prompts:
-            self.assertIsInstance(prompt, dict)
-            self.assertIn("role", prompt)
-            self.assertIn("content", prompt)
-        
-        # The first prompt should contain the text
-        self.assertIn(text, prompts[0]["content"])
-        
-        # Test domain-specific prompts
-        code_prompts = self.agent.get_multi_turn_prompts("def hello(): pass", "code")
-        self.assertIn("code", code_prompts[0]["content"].lower())
+        # Test domain-specific requests
+        code_request = self.agent.get_initial_annotation_request("def hello(): pass", "code")
+        self.assertIn("code", code_request.lower())
 
 
 class TestSpanAnnotationProcess(unittest.TestCase):
@@ -265,8 +257,10 @@ class TestSpanAnnotationProcess(unittest.TestCase):
                 system_prompt = self.agent.get_xbar_system_prompt("natural")
                 self.assertIsInstance(system_prompt, str)
                 
-                multi_turn_prompts = self.agent.get_multi_turn_prompts(self.test_record.raw, "natural")
-                self.assertGreater(len(multi_turn_prompts), 0)
+                # Test initial annotation request instead
+                initial_request = self.agent.get_initial_annotation_request(self.test_record.raw, "natural")
+                self.assertIsInstance(initial_request, str)
+                self.assertIn(self.test_record.raw, initial_request)
         
         # Run async test
         asyncio.run(run_test())
@@ -396,9 +390,10 @@ class TestIntegration(unittest.TestCase):
         self.assertIsInstance(system_prompt, str)
         self.assertIn("X-bar", system_prompt)
         
-        # Test multi-turn prompt generation
-        prompts = self.agent.get_multi_turn_prompts(self.test_sequence.raw)
-        self.assertGreater(len(prompts), 0)
+        # Test initial annotation request generation
+        initial_request = self.agent.get_initial_annotation_request(self.test_sequence.raw)
+        self.assertIsInstance(initial_request, str)
+        self.assertIn(self.test_sequence.raw, initial_request)
         
         # Test position mapping
         mapper = PositionMapper(text=self.test_sequence.raw)

@@ -15,7 +15,8 @@ from x_spanformer.agents.dialogue import DialogueManager
 from x_spanformer.agents.ollama_client import chat
 from x_spanformer.agents.prompts import (
     render_span_annotator_system_prompt,
-    render_span_annotation_request
+    render_span_annotation_request,
+    render_span_annotation_followup
 )
 from x_spanformer.xbar.position_mapper import (
     PositionMapper, 
@@ -42,13 +43,14 @@ class DialogueAgent:
     Provides async interface for multi-turn conversations with session management.
     """
     
-    def __init__(self, model_name: str = "gpt-4o"):
+    def __init__(self, model_name: str = "gpt-4o", max_turns: int = 16):
         self.model_name = model_name
+        self.max_turns = max_turns
         self.sessions: Dict[str, DialogueManager] = {}
     
     async def start_session(self, session_id: str, system_prompt: str):
         """Start a new dialogue session."""
-        self.sessions[session_id] = DialogueManager(system_prompt=system_prompt)
+        self.sessions[session_id] = DialogueManager(system_prompt=system_prompt, max_turns=self.max_turns)
     
     async def send_message(self, session_id: str, message: str) -> str:
         """Send message and get response using Ollama client."""
@@ -151,7 +153,9 @@ class SpanAnnotatorSession:
         model_name: str = "gpt-4o",
         max_concurrent: int = 5,
         max_retries: int = 3,
-        conversation_timeout: float = 30.0
+        conversation_timeout: float = 30.0,
+        max_turns: int = 16,
+        early_termination_config: Optional[Dict[str, Any]] = None
     ):
         """
         Initialize span annotator agent.
@@ -161,14 +165,24 @@ class SpanAnnotatorSession:
             max_concurrent: Maximum concurrent annotation requests
             max_retries: Maximum retry attempts per sequence
             conversation_timeout: Timeout for single conversation (seconds)
+            max_turns: Maximum conversation turns per sequence
+            early_termination_config: Early termination settings
         """
         self.model_name = model_name
         self.max_concurrent = max_concurrent
         self.max_retries = max_retries
         self.conversation_timeout = conversation_timeout
+        self.max_turns = max_turns
+        
+        # Early termination settings
+        self.early_termination = early_termination_config or {
+            "enable": True,
+            "no_improvement_threshold": 2,
+            "failed_extraction_threshold": 2
+        }
         
         # Initialize dialogue agent
-        self.dialogue_agent = DialogueAgent(model_name=model_name)
+        self.dialogue_agent = DialogueAgent(model_name=model_name, max_turns=max_turns)
         
         # Async processing controls
         self.semaphore = asyncio.Semaphore(max_concurrent)
@@ -185,6 +199,65 @@ class SpanAnnotatorSession:
             "total_time": 0.0
         }
     
+    def _detect_response_repetition(self, current_response: str, recent_responses: List[str]) -> bool:
+        """
+        Detect if the agent is repeating the same response.
+        
+        Args:
+            current_response: Current agent response
+            recent_responses: List of recent responses to compare against
+            
+        Returns:
+            True if repetition detected, False otherwise
+        """
+        if not recent_responses:
+            return False
+            
+        # Simple repetition check - exact match
+        if current_response in recent_responses:
+            return True
+            
+        # More sophisticated check - similar JSON structure
+        try:
+            import json
+            import re
+            
+            # Extract JSON from responses
+            json_pattern = r'```json\s*(.*?)\s*```'
+            
+            current_json_match = re.search(json_pattern, current_response, re.DOTALL)
+            if not current_json_match:
+                return False
+                
+            current_json_str = current_json_match.group(1).strip()
+            
+            for recent_response in recent_responses[-2:]:  # Check last 2 responses
+                recent_json_match = re.search(json_pattern, recent_response, re.DOTALL)
+                if not recent_json_match:
+                    continue
+                    
+                recent_json_str = recent_json_match.group(1).strip()
+                
+                # Compare JSON structures (ignoring whitespace)
+                if current_json_str == recent_json_str:
+                    return True
+                    
+                # Try parsing and comparing as actual JSON
+                try:
+                    current_data = json.loads(current_json_str)
+                    recent_data = json.loads(recent_json_str)
+                    
+                    if current_data == recent_data:
+                        return True
+                        
+                except json.JSONDecodeError:
+                    continue
+                    
+        except Exception:
+            pass
+            
+        return False
+    
     def get_xbar_system_prompt(self, domain_type: str = "natural") -> str:
         """
         Get the system prompt for X-bar syntactic analysis.
@@ -197,48 +270,60 @@ class SpanAnnotatorSession:
         """
         return render_span_annotator_system_prompt(domain_type=domain_type)
 
-    def get_multi_turn_prompts(self, text: str, domain_type: str = "natural") -> List[Dict[str, str]]:
+    def get_initial_annotation_request(self, text: str, domain_type: str = "natural") -> str:
         """
-        Generate multi-turn conversation prompts for comprehensive analysis.
+        Generate initial annotation request.
         
         Args:
             text: Text sequence to analyze
             domain_type: Content domain type ("natural", "code", "mixed")
             
         Returns:
-            List of conversation turns for priming
+            Initial annotation request
         """
-        # First turn: Initial analysis request
-        first_turn = render_span_annotation_request(
+        return render_span_annotation_request(
             text=text,
             domain_type=domain_type,
             turn_number=1,
-            max_turns=8
+            max_turns=self.max_turns
         )
+
+    def generate_followup_request(self, text: str, domain_type: str, turn_number: int, previous_spans: List[str]) -> str:
+        """
+        Generate follow-up request to find missing spans.
         
-        # Second turn: Request for detailed annotations
-        second_turn = render_span_annotation_request(
+        Args:
+            text: Original text sequence
+            domain_type: Content domain type
+            turn_number: Current turn number
+            previous_spans: List of span texts already found
+            
+        Returns:
+            Follow-up request focusing on missing elements
+        """
+        # Analyze what types of spans might be missing
+        words = text.split()
+        found_span_texts = set(span.lower().strip() for span in previous_spans)
+        
+        # Check for missing individual words
+        missing_words = []
+        for word in words:
+            clean_word = word.strip('.,!?;:').lower()
+            if clean_word not in found_span_texts:
+                missing_words.append(word)
+        
+        return render_span_annotation_followup(
             text=text,
             domain_type=domain_type,
-            turn_number=2,
-            max_turns=8,
-            focus_area="comprehensive span annotations with precise boundaries"
+            turn_number=turn_number,
+            previous_spans=previous_spans,
+            missing_words=missing_words
         )
-        
-        return [
-            {
-                "role": "user",
-                "content": first_turn
-            },
-            {
-                "role": "user", 
-                "content": second_turn
-            }
-        ]
     
     async def annotate_single_sequence(
         self, 
-        task: AnnotationTask
+        task: AnnotationTask,
+        progress_callback: Optional[Any] = None
     ) -> AnnotationResult:
         """
         Annotate a single text sequence with X-bar spans.
@@ -259,9 +344,6 @@ class SpanAnnotatorSession:
                 # Determine domain type from pretrain record
                 domain_type = task.pretrain_record.type or "natural"
                 
-                # Setup multi-turn conversation
-                conversation_turns = self.get_multi_turn_prompts(task.text, domain_type)
-                
                 # Start dialogue session
                 session_id = f"annotation-{task.sequence_id}-{datetime.now().isoformat()}"
                 
@@ -270,55 +352,180 @@ class SpanAnnotatorSession:
                     system_prompt=self.get_xbar_system_prompt(domain_type)
                 )
                 
-                # Multi-turn conversation for comprehensive analysis
+                # Iterative multi-turn conversation for comprehensive analysis
                 all_responses = []
+                all_spans = []
                 turns_used = 0
+                max_turns = self.max_turns
                 
-                for turn in conversation_turns:
-                    try:
-                        response = await asyncio.wait_for(
-                            self.dialogue_agent.send_message(
-                                session_id=session_id,
-                                message=turn["content"]
-                            ),
-                            timeout=self.conversation_timeout
-                        )
-                        all_responses.append({
-                            "role": "assistant",
-                            "content": response
+                # Initial annotation request
+                initial_request = self.get_initial_annotation_request(task.text, domain_type)
+                
+                try:
+                    response = await asyncio.wait_for(
+                        self.dialogue_agent.send_message(
+                            session_id=session_id,
+                            message=initial_request
+                        ),
+                        timeout=self.conversation_timeout
+                    )
+                    all_responses.append({
+                        "role": "user",
+                        "content": initial_request
+                    })
+                    all_responses.append({
+                        "role": "assistant",
+                        "content": response
+                    })
+                    turns_used += 1
+                    
+                    # Call progress callback after initial turn
+                    if progress_callback:
+                        await progress_callback({
+                            "sequence_id": task.sequence_id,
+                            "turn": turns_used,
+                            "total_spans": 0,  # Will be updated after extraction
+                            "phase": "initial_request"
                         })
-                        turns_used += 1
+                    
+                    # Extract spans from initial response
+                    from x_spanformer.pipelines.shared.annotation_processor import AnnotationProcessor
+                    processor = AnnotationProcessor()
+                    domain_enum = {
+                        "natural": DomainType.NATURAL,
+                        "code": DomainType.CODE,
+                        "mixed": DomainType.MIXED
+                    }.get(domain_type, DomainType.NATURAL)
+                    
+                    initial_spans = processor.extract_spans_from_comprehensive_response(
+                        response,
+                        task.text,
+                        XBarClassifierMap.get_classifier_names(domain_enum)
+                    )
+                    all_spans.extend(initial_spans)
+                    
+                    # Update progress after initial extraction
+                    if progress_callback:
+                        await progress_callback({
+                            "sequence_id": task.sequence_id,
+                            "turn": turns_used,
+                            "total_spans": len(all_spans),
+                            "new_spans": len(initial_spans),
+                            "phase": "initial_extraction"
+                        })
+                    
+                    # Continue with follow-up turns to find missing spans
+                    previous_span_count = len(all_spans)
+                    no_improvement_count = 0
+                    consecutive_failed_extractions = 0
+                    
+                    no_improvement_threshold = self.early_termination.get("no_improvement_threshold", 2)
+                    failed_extraction_threshold = self.early_termination.get("failed_extraction_threshold", 2)
+                    early_termination_enabled = self.early_termination.get("enable", True)
+                    
+                    while (turns_used < max_turns and 
+                           no_improvement_count < no_improvement_threshold and 
+                           consecutive_failed_extractions < failed_extraction_threshold):
+                        # Generate follow-up request
+                        span_texts = [span.text for span in all_spans]
+                        followup_request = self.generate_followup_request(
+                            task.text, domain_type, turns_used + 1, span_texts
+                        )
                         
-                        # Small delay between turns
-                        await asyncio.sleep(0.1)
-                        
-                    except asyncio.TimeoutError:
-                        logger.warning(f"Timeout on turn {turns_used + 1} for sequence {task.sequence_id}")
-                        break
-                    except Exception as e:
-                        logger.error(f"Error in turn {turns_used + 1} for sequence {task.sequence_id}: {e}")
-                        break
+                        try:
+                            followup_response = await asyncio.wait_for(
+                                self.dialogue_agent.send_message(
+                                    session_id=session_id,
+                                    message=followup_request
+                                ),
+                                timeout=self.conversation_timeout
+                            )
+                            
+                            all_responses.append({
+                                "role": "user",
+                                "content": followup_request
+                            })
+                            all_responses.append({
+                                "role": "assistant",
+                                "content": followup_response
+                            })
+                            turns_used += 1
+                            
+                            # Progress callback for followup turn
+                            if progress_callback:
+                                await progress_callback({
+                                    "sequence_id": task.sequence_id,
+                                    "turn": turns_used,
+                                    "total_spans": len(all_spans),  # Will be updated after extraction
+                                    "phase": "followup_request"
+                                })
+                            
+                            # Extract new spans
+                            new_spans = processor.extract_spans_from_comprehensive_response(
+                                followup_response,
+                                task.text,
+                                XBarClassifierMap.get_classifier_names(domain_enum)
+                            )
+                            
+                            # Track extraction success
+                            if not new_spans:
+                                consecutive_failed_extractions += 1
+                                logger.warning(f"No spans extracted from follow-up turn {turns_used} for sequence {task.sequence_id}")
+                            else:
+                                consecutive_failed_extractions = 0
+                            
+                            # Add only truly new spans (avoid duplicates)
+                            initial_span_count = len(all_spans)
+                            for new_span in new_spans:
+                                span_key = (new_span.start_char, new_span.end_char, new_span.xbar_class)
+                                existing_keys = {(s.start_char, s.end_char, s.xbar_class) for s in all_spans}
+                                if span_key not in existing_keys:
+                                    all_spans.append(new_span)
+                            
+                            # Check for improvement
+                            if len(all_spans) == initial_span_count:
+                                no_improvement_count += 1
+                                logger.info(f"No new spans found in turn {turns_used} (no improvement count: {no_improvement_count})")
+                            else:
+                                no_improvement_count = 0
+                                logger.info(f"Found {len(all_spans) - initial_span_count} new spans in turn {turns_used}")
+                            
+                            # Progress callback after extraction
+                            if progress_callback:
+                                await progress_callback({
+                                    "sequence_id": task.sequence_id,
+                                    "turn": turns_used,
+                                    "total_spans": len(all_spans),
+                                    "new_spans": len(all_spans) - initial_span_count,
+                                    "phase": "followup_extraction",
+                                    "no_improvement_count": no_improvement_count,
+                                    "consecutive_failed": consecutive_failed_extractions
+                                })
+                            
+                            # Early termination if LLM is clearly not improving
+                            if early_termination_enabled and consecutive_failed_extractions >= failed_extraction_threshold:
+                                logger.info(f"Terminating early due to consecutive failed extractions for sequence {task.sequence_id}")
+                                break
+                            
+                            # Small delay between turns
+                            await asyncio.sleep(0.1)
+                            
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Timeout on turn {turns_used + 1} for sequence {task.sequence_id}")
+                            break
+                        except Exception as e:
+                            logger.error(f"Error in turn {turns_used + 1} for sequence {task.sequence_id}: {e}")
+                            break
+                    
+                    logger.info(f"Completed annotation for sequence {task.sequence_id}: {len(all_spans)} spans in {turns_used} turns")
+                    
+                except Exception as e:
+                    logger.error(f"Failed initial annotation for sequence {task.sequence_id}: {e}")
+                    all_spans = []
                 
-                # Parse spans from final response using improved processor
-                final_response = all_responses[-1]["content"] if all_responses else ""
-                
-                # Use annotation processor for comprehensive span extraction
-                from x_spanformer.pipelines.shared.annotation_processor import AnnotationProcessor
-                processor = AnnotationProcessor()
-                
-                # Convert domain type to enum
-                domain_map = {
-                    "natural": DomainType.NATURAL,
-                    "code": DomainType.CODE,
-                    "mixed": DomainType.MIXED
-                }
-                domain_enum = domain_map.get(domain_type, DomainType.NATURAL)
-                
-                char_spans = processor.extract_spans_from_comprehensive_response(
-                    final_response, 
-                    task.text,
-                    XBarClassifierMap.get_classifier_names(domain_enum)
-                )
+                # Convert to position spans using collected spans
+                char_spans = all_spans
+                logger.info(f"Total character spans collected: {len(char_spans)}")
                 
                 # Convert to position spans
                 position_spans = mapper.batch_char_to_position(char_spans)
@@ -331,7 +538,7 @@ class SpanAnnotatorSession:
                             start_pos=pos_span.start_pos,
                             end_pos=pos_span.end_pos,
                             xbar_class=pos_span.xbar_class,
-                            confidence=pos_span.confidence,
+                            confidence=1.0,  # Always 1.0 since we trust the LLM output
                             linguistic_features={
                                 "text": mapper.get_position_text(pos_span.start_pos, pos_span.end_pos),
                                 "length": pos_span.end_pos - pos_span.start_pos
@@ -347,20 +554,18 @@ class SpanAnnotatorSession:
                     embedding_chunk_id=task.embedding_chunk_id,
                     span_annotations=validated_spans,
                     total_positions=len(task.text),
-                    conversation_turns=[
-                        {"role": "user", "content": turn["content"]} 
-                        for turn in conversation_turns
-                    ] + all_responses,
+                    conversation_turns=all_responses,  # Use the actual conversation
                     agent_metadata={
                         "model": self.model_name,
                         "processing_time": asyncio.get_event_loop().time() - start_time,
                         "turns_required": turns_used,
                         "annotation_strategy": "multi_turn_xbar",
                         "spans_extracted": len(validated_spans),
-                        "validation_issues": sum(len(issues) for _, issues in mapper.validate_position_spans(position_spans))
+                        "validation_issues": sum(len(issues) for _, issues in mapper.validate_position_spans(position_spans)),
+                        "domain_type": domain_type
                     },
                     meta=RecordMeta(
-                        tags=["annotation", "xbar", task.pretrain_record.type or "unknown"],
+                        tags=["annotation", "xbar", domain_type],  # Use domain_type directly instead of task.pretrain_record.type
                         doc_language=task.pretrain_record.meta.doc_language or "unknown",
                         extracted_by="span_annotator_agent",
                         confidence=sum(span.confidence for span in validated_spans) / len(validated_spans) if validated_spans else 0.0,
@@ -376,10 +581,22 @@ class SpanAnnotatorSession:
                 
                 # Update statistics
                 self.stats["total_processed"] += 1
-                self.stats["successful"] += 1
                 self.stats["total_spans"] += len(validated_spans)
                 self.stats["total_turns"] += turns_used
                 self.stats["total_time"] += processing_time
+                
+                logger.info(f"Completed annotation for sequence {task.sequence_id}: {len(validated_spans)} spans in {turns_used} turns")
+                
+                # Final completion callback
+                if progress_callback:
+                    await progress_callback({
+                        "sequence_id": task.sequence_id,
+                        "turn": turns_used,
+                        "total_spans": len(validated_spans),
+                        "phase": "completed",
+                        "annotation_record": annotation_record,
+                        "processing_time": processing_time
+                    })
                 
                 return AnnotationResult(
                     sequence_id=task.sequence_id,
@@ -410,7 +627,8 @@ class SpanAnnotatorSession:
     async def annotate_batch(
         self,
         pretrain_records: List[PretrainRecord],
-        batch_id: Optional[str] = None
+        batch_id: Optional[str] = None,
+        progress_callback: Optional[Any] = None
     ) -> AnnotationBatch:
         """
         Annotate a batch of pretrain records asynchronously.
@@ -440,8 +658,12 @@ class SpanAnnotatorSession:
             tasks.append(task)
         
         # Process tasks concurrently
+        async def process_with_progress(task: AnnotationTask) -> AnnotationResult:
+            """Wrapper to pass progress callback to individual sequence processing."""
+            return await self.annotate_single_sequence(task, progress_callback)
+        
         results = await asyncio.gather(
-            *[self.annotate_single_sequence(task) for task in tasks],
+            *[process_with_progress(task) for task in tasks],
             return_exceptions=True
         )
         
