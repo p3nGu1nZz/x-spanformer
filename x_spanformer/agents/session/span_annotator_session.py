@@ -43,9 +43,10 @@ class DialogueAgent:
     Provides async interface for multi-turn conversations with session management.
     """
     
-    def __init__(self, model_name: str = "gpt-4o", max_turns: int = 16):
+    def __init__(self, model_name: str = "gpt-4o", max_turns: int = 16, temperature: float = 0.1):
         self.model_name = model_name
         self.max_turns = max_turns
+        self.temperature = temperature
         self.sessions: Dict[str, DialogueManager] = {}
     
     async def start_session(self, session_id: str, system_prompt: str):
@@ -67,7 +68,7 @@ class DialogueAgent:
                 model=self.model_name,
                 conversation=[{"role": msg["role"], "content": msg["content"]} for msg in messages[1:]],  # Skip system
                 system=messages[0]["content"],  # System prompt
-                temperature=0.1
+                temperature=self.temperature
             )
         except Exception as e:
             # Fallback to mock for testing when Ollama not available
@@ -155,6 +156,7 @@ class SpanAnnotatorSession:
         max_retries: int = 3,
         conversation_timeout: float = 30.0,
         max_turns: int = 16,
+        temperature: float = 0.1,
         early_termination_config: Optional[Dict[str, Any]] = None
     ):
         """
@@ -166,6 +168,7 @@ class SpanAnnotatorSession:
             max_retries: Maximum retry attempts per sequence
             conversation_timeout: Timeout for single conversation (seconds)
             max_turns: Maximum conversation turns per sequence
+            temperature: Temperature parameter for model inference
             early_termination_config: Early termination settings
         """
         self.model_name = model_name
@@ -173,6 +176,7 @@ class SpanAnnotatorSession:
         self.max_retries = max_retries
         self.conversation_timeout = conversation_timeout
         self.max_turns = max_turns
+        self.temperature = temperature
         
         # Early termination settings
         self.early_termination = early_termination_config or {
@@ -182,7 +186,7 @@ class SpanAnnotatorSession:
         }
         
         # Initialize dialogue agent
-        self.dialogue_agent = DialogueAgent(model_name=model_name, max_turns=max_turns)
+        self.dialogue_agent = DialogueAgent(model_name=model_name, max_turns=max_turns, temperature=temperature)
         
         # Async processing controls
         self.semaphore = asyncio.Semaphore(max_concurrent)

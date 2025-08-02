@@ -50,31 +50,28 @@ class SpanAnnotatorPipeline:
         self.annotation_processor = AnnotationProcessor()
         
         # Load agent configuration if provided
-        if agent_config_path:
+        agent_config_path = agent_config_path or "config/agents/span_annotator_agent.yaml"
+        agent_config_file = Path(agent_config_path)
+        
+        if agent_config_file.exists():
             # For now, we'll pass individual parameters to the agent
             # TODO: Create agent config loader if needed
-            agent_config_file = Path(agent_config_path)
-            if agent_config_file.exists():
-                import yaml
-                with open(agent_config_file, 'r', encoding='utf-8') as f:
-                    agent_config = yaml.safe_load(f)
-                
-                model_config = agent_config.get("model", {})
-                model_name = model_config.get("name", "phi4-mini")
-                temperature = model_config.get("temperature", 0.1)
-                
-                # Extract dialogue configuration
-                dialogue_config = agent_config.get("dialogue", {})
-                max_turns = dialogue_config.get("max_turns", 16)
-                
-                # Extract early termination config
-                early_termination_config = agent_config.get("agent", {}).get("early_termination")
-            else:
-                model_name = "phi4-mini"
-                temperature = 0.1
-                max_turns = 16
-                early_termination_config = None
+            import yaml
+            with open(agent_config_file, 'r', encoding='utf-8') as f:
+                agent_config = yaml.safe_load(f)
+            
+            model_config = agent_config.get("model", {})
+            model_name = model_config.get("name", "phi4-mini")
+            temperature = model_config.get("temperature", 0.1)
+            
+            # Extract dialogue configuration
+            dialogue_config = agent_config.get("dialogue", {})
+            max_turns = dialogue_config.get("max_turns", 16)
+            
+            # Extract early termination config
+            early_termination_config = agent_config.get("agent", {}).get("early_termination")
         else:
+            # Fallback to hardcoded defaults if agent config file not found
             model_name = "phi4-mini"
             temperature = 0.1
             max_turns = 16
@@ -87,6 +84,7 @@ class SpanAnnotatorPipeline:
             max_retries=self.config.processing.max_retries,
             conversation_timeout=self.config.processing.conversation_timeout,
             max_turns=max_turns,
+            temperature=temperature,
             early_termination_config=early_termination_config
         )
         
@@ -992,9 +990,14 @@ def main():
     logger.info(f"Corpus: {args.corpus}")
     logger.info(f"Output: {args.output}")
     logger.info(f"Range: {args.range if args.range else 'ALL SEQUENCES'}")
-    
-    # Initialize pipeline
-    pipeline = SpanAnnotatorPipeline(args.config, args.agent)
+    logger.info(f"Config path: {args.config if args.config else 'default (config/pipelines/span_annotator.yaml)'}")
+    logger.info(f"Agent config path: {args.agent if args.agent else 'default (config/agents/span_annotator_agent.yaml)'}")
+    logger.info(f"Loaded batch_size: {pipeline.config.processing.batch_size}")
+    logger.info(f"Loaded model: {pipeline.agent.model_name}")
+    logger.info(f"Loaded max_turns: {pipeline.agent.max_turns}")
+    logger.info(f"Loaded temperature: {pipeline.agent.temperature}")
+    logger.info(f"Loaded timeout: {pipeline.config.processing.conversation_timeout}")
+    logger.info(f"Loaded max_retries: {pipeline.config.processing.max_retries}")
     
     # Check Ollama connection with retry logic before starting processing
     async def check_ollama_with_retry():
