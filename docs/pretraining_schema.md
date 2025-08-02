@@ -203,22 +203,30 @@ To ensure practical annotation success, we use a simplified subset of the full X
 
 ```bash
 # Single sequence annotation - extracts all possible xbar.py classifiers
-python -m x_spanformer.pipelines.span_annotator \
+uv run -m x_spanformer.pipelines.span_annotator \
   --corpus data/vocab/corpus.jsonl \
   --output data/annotations \
   --range 1
 
 # Multiple sequences annotation
-python -m x_spanformer.pipelines.span_annotator \
+uv run -m x_spanformer.pipelines.span_annotator \
   --corpus data/vocab/corpus.jsonl \
   --output data/annotations \
   --range 1,5,10
 
 # Range of sequences annotation  
-python -m x_spanformer.pipelines.span_annotator \
+uv run -m x_spanformer.pipelines.span_annotator \
   --corpus data/vocab/corpus.jsonl \
   --output data/annotations \
   --range 1-100
+
+# With custom configuration files
+uv run -m x_spanformer.pipelines.span_annotator \
+  --corpus data/vocab/corpus.jsonl \
+  --output data/annotations \
+  --range 1-100 \
+  --config config/pipelines/span_annotator.yaml \
+  --agent config/agents/span_annotator_agent.yaml
 ```
 
 ### Processing Strategy

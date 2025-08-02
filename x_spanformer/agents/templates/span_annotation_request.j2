@@ -1,0 +1,34 @@
+Please analyze the following {{ domain_type }} text using X-bar theory and identify ALL applicable spans at every hierarchical level.
+
+**Text to analyze:**
+```
+{{ text }}
+```
+
+**Analysis Requirements:**
+1. Identify spans at EVERY level: {{ levels | join(", ") }}
+2. Use the {{ domain_type }} domain classifiers provided in the system prompt
+3. Provide comprehensive coverage - don't miss any significant spans
+4. Include confidence scores based on how certain you are about each classification
+5. Ensure spans are hierarchically consistent
+
+**Expected classifier types for this domain:**
+{{ expected_classifiers | join(", ") }}
+
+Return your analysis as a JSON array with each span containing:
+- `text`: The actual text of the span
+- `start_char`: Start character position (0-based, inclusive)
+- `end_char`: End character position (0-based, exclusive) 
+- `xbar_class`: The X-bar classifier name
+- `confidence`: Confidence score (0.0-1.0)
+
+{% if turn_number > 1 %}
+**Follow-up Analysis:**
+This is turn {{ turn_number }} of {{ max_turns }}. Please review your previous analysis and:
+- Add any spans you may have missed
+- Refine confidence scores
+- Ensure complete hierarchical coverage
+- Focus on {{ focus_area }} if specified
+{% endif %}
+
+Begin your comprehensive X-bar analysis now:

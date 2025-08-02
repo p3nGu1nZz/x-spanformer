@@ -6,7 +6,7 @@ from rich.table import Table
 
 c = Console()
 
-def load_judge_config(name: str = "judge.yaml", quiet: bool = False) -> dict:
+def load_judge_config(name: str = "judge_agent.yaml", quiet: bool = False) -> dict:
 	"""
 	Load the agent configuration file and render a summary table.
 	
@@ -14,7 +14,7 @@ def load_judge_config(name: str = "judge.yaml", quiet: bool = False) -> dict:
 		config_name: The name of the config file to load.
 		quiet: If True, suppresses printing the config table.
 	"""
-	p = Path(__file__).parent / "config" / name
+	p = Path(__file__).parent.parent.parent / "config" / "agents" / name
 	c.rule(f"[bold cyan]Loading Judge Agent Config")
 
 	if not p.exists():

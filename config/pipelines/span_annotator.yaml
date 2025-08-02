@@ -1,0 +1,21 @@
+# X-Spanformer Span Annotator Pipeline Configuration
+# Pipeline orchestration settings (not agent-specific)
+
+# Pipeline processing settings
+processing:
+  max_retries: 3
+  conversation_timeout: 30.0
+  batch_size: 64
+
+# Output management
+output:
+  save_working_files: true
+  save_failed_requests: true
+  consolidate_on_completion: true
+  include_metadata: true
+
+# Logging configuration
+logging:
+  level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  log_to_file: true

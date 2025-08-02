@@ -11,13 +11,13 @@ import asyncio
 from typing import List, Dict, Any
 import json
 
-from x_spanformer.agents.span_annotator import (
+from x_spanformer.agents.session.span_annotator_session import (
     DialogueAgent,
-    SpanAnnotatorAgent,
+    SpanAnnotatorSession,
     AnnotationTask,
     AnnotationResult
 )
-from x_spanformer.agents.position_mapper import (
+from x_spanformer.xbar.position_mapper import (
     PositionMapper,
     CharacterSpan,
     PositionSpan
@@ -161,12 +161,12 @@ class TestAnnotationResult(unittest.TestCase):
         self.assertIsNone(result.annotation_record)
 
 
-class TestSpanAnnotatorAgent(unittest.TestCase):
-    """Test the main SpanAnnotatorAgent class."""
+class TestSpanAnnotatorSession(unittest.TestCase):
+    """Test the main SpanAnnotatorSession class."""
     
     def setUp(self):
-        """Set up test agent."""
-        self.agent = SpanAnnotatorAgent(
+        """Set up test session."""
+        self.agent = SpanAnnotatorSession(
             model_name="test-model",
             max_concurrent=2,
             max_retries=1,
@@ -194,6 +194,13 @@ class TestSpanAnnotatorAgent(unittest.TestCase):
         self.assertIn("linguistic", prompt.lower())
         self.assertIn("syntactic", prompt.lower())
         self.assertIn("confidence", prompt.lower())
+        
+        # Test domain-specific prompts
+        natural_prompt = self.agent.get_xbar_system_prompt("natural")
+        code_prompt = self.agent.get_xbar_system_prompt("code")
+        
+        self.assertIn("noun", natural_prompt.lower())
+        self.assertIn("keyword", code_prompt.lower())
     
     def test_get_multi_turn_prompts(self):
         """Test multi-turn prompt generation."""
@@ -211,6 +218,10 @@ class TestSpanAnnotatorAgent(unittest.TestCase):
         
         # The first prompt should contain the text
         self.assertIn(text, prompts[0]["content"])
+        
+        # Test domain-specific prompts
+        code_prompts = self.agent.get_multi_turn_prompts("def hello(): pass", "code")
+        self.assertIn("code", code_prompts[0]["content"].lower())
 
 
 class TestSpanAnnotationProcess(unittest.TestCase):
@@ -218,7 +229,7 @@ class TestSpanAnnotationProcess(unittest.TestCase):
     
     def setUp(self):
         """Set up test environment."""
-        self.agent = SpanAnnotatorAgent(model_name="test-model")
+        self.agent = SpanAnnotatorSession(model_name="test-model")
         self.position_mapper = PositionMapper(text="The quick brown fox")
         
         self.test_record = PretrainRecord(
@@ -251,10 +262,10 @@ class TestSpanAnnotationProcess(unittest.TestCase):
                 # Process (this would normally be an internal method)
                 # For now we test the components that exist
                 
-                system_prompt = self.agent.get_xbar_system_prompt()
+                system_prompt = self.agent.get_xbar_system_prompt("natural")
                 self.assertIsInstance(system_prompt, str)
                 
-                multi_turn_prompts = self.agent.get_multi_turn_prompts(self.test_record.raw)
+                multi_turn_prompts = self.agent.get_multi_turn_prompts(self.test_record.raw, "natural")
                 self.assertGreater(len(multi_turn_prompts), 0)
         
         # Run async test
@@ -337,7 +348,7 @@ class TestErrorHandling(unittest.TestCase):
     
     def setUp(self):
         """Set up test agent."""
-        self.agent = SpanAnnotatorAgent(model_name="test-model")
+        self.agent = SpanAnnotatorSession(model_name="test-model")
     
     def test_agent_statistics_tracking(self):
         """Test that agent tracks statistics correctly."""
@@ -353,12 +364,12 @@ class TestErrorHandling(unittest.TestCase):
     
     def test_conversation_timeout_setting(self):
         """Test conversation timeout configuration."""
-        agent = SpanAnnotatorAgent(conversation_timeout=15.0)
+        agent = SpanAnnotatorSession(conversation_timeout=15.0)
         self.assertEqual(agent.conversation_timeout, 15.0)
     
     def test_max_concurrent_setting(self):
         """Test max concurrent requests configuration."""
-        agent = SpanAnnotatorAgent(max_concurrent=10)
+        agent = SpanAnnotatorSession(max_concurrent=10)
         self.assertEqual(agent.max_concurrent, 10)
         self.assertEqual(agent.semaphore._value, 10)  # Check semaphore limit
 
@@ -368,7 +379,7 @@ class TestIntegration(unittest.TestCase):
     
     def setUp(self):
         """Set up integration test environment."""
-        self.agent = SpanAnnotatorAgent(model_name="test-model")
+        self.agent = SpanAnnotatorSession(model_name="test-model")
         
         self.test_sequence = PretrainRecord(
             raw="The cat sat on the mat.",

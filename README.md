@@ -171,6 +171,55 @@ Use the output as either raw training strings (for unsupervised Phase I) or comp
 
 This enables X-Spanformer to bootstrap span boundaries from real-world documents with high structural signal, without relying on brittle tokenization.
 
+### Stage 4: Span Annotation for Supervised Training
+
+Generate X-bar span annotations for supervised training of the factorized pointer network boundary predictor (Section 3.3):
+
+```bash
+# Annotate sequences for span boundary training
+uv run -m x_spanformer.pipelines.span_annotator \
+  --corpus data/vocab/corpus.jsonl \
+  --output data/annotations \
+  --range 1-100 \
+  --config config/pipelines/span_annotator.yaml
+
+# Parallel processing for large-scale annotation
+uv run -m x_spanformer.pipelines.span_annotator \
+  --corpus data/vocab/corpus.jsonl \
+  --output data/annotations \
+  --range 1-1000 &
+uv run -m x_spanformer.pipelines.span_annotator \
+  --corpus data/vocab/corpus.jsonl \
+  --output data/annotations \
+  --range 1001-2000 &
+```
+
+This implements **agentic X-bar span annotation** using LLM conversations to generate training data, featuring:
+
+- **Comprehensive Classifier Extraction**: Processes each sequence for ALL applicable X-bar classifiers from domain-specific taxonomy
+- **Domain-Aware Processing**: Automatic domain detection (natural/code/mixed) with tailored prompts
+- **Position-wise Alignment**: Character-level spans map directly to embedding positions (1:1 correspondence)
+- **Resumable Processing**: Individual working files enable inspection and continuation from any point
+- **Configuration-Based Logging**: Centralized logging configuration with file output support
+- **Multi-Process Support**: Parallel processing on different sequence ranges for scalability
+
+**Output Structure (Individual Working Files):**
+```
+data/annotations/
+├── working/                      # Individual sequence annotations
+│   ├── corpus-seq-00000001.json # Working file for sequence 1
+│   └── corpus-seq-00000100.json # Working file for sequence 100
+├── consolidated/                 # Final training data
+│   └── annotations.jsonl        # All successful annotations
+├── metadata.json                 # Global progress and statistics
+└── span_annotator.log           # Processing log
+```
+
+**Key Features:**
+- **Bidirectional Context**: Built on X-Spanformer's position-wise embedding architecture where each H[t] contains bidirectional contextual information
+- **Boundary Detection Training**: Generates binary targets for start/end position prediction (not span-level embeddings)
+- **Multi-label Support**: BCE loss handles overlapping spans at different hierarchical levels
+
 ---
 
 ## � Testing Framework
@@ -197,8 +246,11 @@ X-Spanformer includes comprehensive test coverage organized into focused categor
 
 - **`tests/agents/`** - AI agent and content processing
   - `test_agents.py` - Base agent functionality
-  - `test_comprehensive_judge.py` - Content judging tests
+  - `test_span_annotator.py` - Span annotation pipeline tests
   - `test_e2e_ollama_client.py` - Ollama client integration
+
+- **`tests/config/`** - Configuration system tests
+  - `test_span_annotator_config.py` - Configuration loading with logging support
 
 - **`tests/core/`** - Core utilities and configuration
   - `test_config_loader.py` - Configuration loading

@@ -59,7 +59,7 @@ class PretrainRecord(BaseModel):
 The `PositionMapper` class handles conversions between character and position spans:
 
 ```python
-from x_spanformer.agents.position_mapper import PositionMapper
+from x_spanformer.xbar.position_mapper import PositionMapper
 
 mapper = PositionMapper("The quick brown fox")
 

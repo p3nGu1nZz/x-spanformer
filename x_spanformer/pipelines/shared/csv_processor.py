@@ -13,7 +13,7 @@ from collections import Counter
 import pandas as pd
 from pydantic import ValidationError
 
-from x_spanformer.agents.config_loader import load_judge_config
+from x_spanformer.config.judge_config_loader import load_judge_config
 from x_spanformer.agents.rich_utils import (
     console,
     display_summary_panel,

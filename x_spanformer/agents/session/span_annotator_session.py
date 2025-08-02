@@ -6,19 +6,23 @@ span annotation using X-bar theory with position-wise embedding alignment.
 """
 
 import asyncio
-import json
-from typing import List, Dict, Any, Optional, Tuple, AsyncGenerator
-from dataclasses import dataclass, asdict
-from datetime import datetime
 import logging
+from typing import List, Dict, Any, Optional, Tuple, AsyncGenerator
+from dataclasses import dataclass
+from datetime import datetime
 
 from x_spanformer.agents.dialogue import DialogueManager
-from x_spanformer.agents.position_mapper import (
+from x_spanformer.agents.ollama_client import chat
+from x_spanformer.agents.prompts import (
+    render_span_annotator_system_prompt,
+    render_span_annotation_request
+)
+from x_spanformer.xbar.position_mapper import (
     PositionMapper, 
     CharacterSpan, 
-    PositionSpan,
-    parse_character_spans_from_agent_response
+    PositionSpan
 )
+from x_spanformer.xbar.xbar_map import XBarClassifierMap, DomainType
 from x_spanformer.schema.annotation_record import (
     AnnotationRecord, 
     SpanAnnotation, 
@@ -47,17 +51,30 @@ class DialogueAgent:
         self.sessions[session_id] = DialogueManager(system_prompt=system_prompt)
     
     async def send_message(self, session_id: str, message: str) -> str:
-        """Send message and get response (mock implementation)."""
+        """Send message and get response using Ollama client."""
         if session_id not in self.sessions:
             raise ValueError(f"Session {session_id} not found")
         
         dialogue = self.sessions[session_id]
         dialogue.add("user", message)
         
-        # Mock response for now - in real implementation would call LLM API
-        response = self._generate_mock_response(message)
-        dialogue.add("assistant", response)
+        # Use real LLM via ollama_client, with fallback for testing
+        messages = dialogue.as_messages()
+        try:
+            response = await chat(
+                model=self.model_name,
+                conversation=[{"role": msg["role"], "content": msg["content"]} for msg in messages[1:]],  # Skip system
+                system=messages[0]["content"],  # System prompt
+                temperature=0.1
+            )
+        except Exception as e:
+            # Fallback to mock for testing when Ollama not available
+            if "test-model" in self.model_name or "ConnectionError" in str(e):
+                response = self._generate_mock_response(message)
+            else:
+                raise e
         
+        dialogue.add("assistant", response)
         return response
     
     async def end_session(self, session_id: str):
@@ -98,17 +115,17 @@ class AnnotationResult:
     turns_used: int = 0
 
 
-class SpanAnnotatorAgent:
+class SpanAnnotatorSession:
     """
-    Asynchronous span annotator using X-bar theory.
+    Asynchronous span annotator session using X-bar theory.
     
     Implements multi-turn conversation priming strategy for comprehensive
     linguistic analysis with position-wise embedding alignment.
     
     ARCHITECTURE ALIGNMENT - Two-Stage Process:
     
-    STAGE 1 (This Agent): Boundary Detection Training Data
-    The annotations produced by this agent feed into boundary detection training
+    STAGE 1 (This Session): Boundary Detection Training Data
+    The annotations produced by this session feed into boundary detection training
     (Section 3.3). Each SpanAnnotation creates training targets for boundary heads:
     
     y_start[span.start_pos] = 1.0  # Train start boundary detection
@@ -126,7 +143,7 @@ class SpanAnnotatorAgent:
     detected boundaries to create actual span embeddings through gated
     fusion, span interpolation, and hierarchical multi-label classification.
     
-    This agent provides the foundation for Stage 1 boundary detection.
+    This session provides the foundation for Stage 1 boundary detection.
     """
     
     def __init__(
@@ -168,52 +185,54 @@ class SpanAnnotatorAgent:
             "total_time": 0.0
         }
     
-    def get_xbar_system_prompt(self) -> str:
+    def get_xbar_system_prompt(self, domain_type: str = "natural") -> str:
         """
         Get the system prompt for X-bar syntactic analysis.
+        
+        Args:
+            domain_type: Content domain type ("natural", "code", "mixed")
         
         Returns:
             System prompt for linguistic span annotation
         """
-        return """You are a linguistic analysis expert specializing in X-bar theory and syntactic constituency parsing.
+        return render_span_annotator_system_prompt(domain_type=domain_type)
 
-Your task is to analyze text sequences and identify syntactic spans using X-bar theoretical framework. 
-
-KEY REQUIREMENTS:
-1. Use position-based indexing (character positions in the original text)
-2. Identify major syntactic constituents: DP, NP, VP, PP, CP, etc.
-3. Apply X-bar theory levels: X (head), X' (intermediate), XP (maximal projection)
-4. Provide confidence scores for each annotation
-5. Use precise character-level span boundaries
-
-OUTPUT FORMAT:
-For each span, provide:
-"span_text" (start_char-end_char) -> XBar_Class [confidence: 0.XX]
-
-EXAMPLE:
-"The quick brown fox" (0-19) -> NP [confidence: 0.88]
-"jumps over the lazy dog" (20-43) -> VP [confidence: 0.92]
-
-Focus on major constituents that would be useful for span-aware language modeling. Avoid over-segmentation but capture important syntactic boundaries."""
-
-    def get_multi_turn_prompts(self, text: str) -> List[Dict[str, str]]:
+    def get_multi_turn_prompts(self, text: str, domain_type: str = "natural") -> List[Dict[str, str]]:
         """
         Generate multi-turn conversation prompts for comprehensive analysis.
         
         Args:
             text: Text sequence to analyze
+            domain_type: Content domain type ("natural", "code", "mixed")
             
         Returns:
             List of conversation turns for priming
         """
+        # First turn: Initial analysis request
+        first_turn = render_span_annotation_request(
+            text=text,
+            domain_type=domain_type,
+            turn_number=1,
+            max_turns=8
+        )
+        
+        # Second turn: Request for detailed annotations
+        second_turn = render_span_annotation_request(
+            text=text,
+            domain_type=domain_type,
+            turn_number=2,
+            max_turns=8,
+            focus_area="comprehensive span annotations with precise boundaries"
+        )
+        
         return [
             {
                 "role": "user",
-                "content": f"Please analyze this text sequence for major syntactic constituents using X-bar theory:\n\n\"{text}\"\n\nStart with identifying the main clause structure and major phrases."
+                "content": first_turn
             },
             {
                 "role": "user", 
-                "content": "Now provide detailed span annotations with precise character positions and confidence scores. Use the format: \"span_text\" (start_char-end_char) -> XBar_Class [confidence: 0.XX]"
+                "content": second_turn
             }
         ]
     
@@ -237,15 +256,18 @@ Focus on major constituents that would be useful for span-aware language modelin
                 # Initialize position mapper
                 mapper = PositionMapper(task.text)
                 
+                # Determine domain type from pretrain record
+                domain_type = task.pretrain_record.type or "natural"
+                
                 # Setup multi-turn conversation
-                conversation_turns = self.get_multi_turn_prompts(task.text)
+                conversation_turns = self.get_multi_turn_prompts(task.text, domain_type)
                 
                 # Start dialogue session
                 session_id = f"annotation-{task.sequence_id}-{datetime.now().isoformat()}"
                 
                 await self.dialogue_agent.start_session(
                     session_id=session_id,
-                    system_prompt=self.get_xbar_system_prompt()
+                    system_prompt=self.get_xbar_system_prompt(domain_type)
                 )
                 
                 # Multi-turn conversation for comprehensive analysis
@@ -277,9 +299,26 @@ Focus on major constituents that would be useful for span-aware language modelin
                         logger.error(f"Error in turn {turns_used + 1} for sequence {task.sequence_id}: {e}")
                         break
                 
-                # Parse spans from final response
+                # Parse spans from final response using improved processor
                 final_response = all_responses[-1]["content"] if all_responses else ""
-                char_spans = parse_character_spans_from_agent_response(final_response, task.text)
+                
+                # Use annotation processor for comprehensive span extraction
+                from x_spanformer.pipelines.shared.annotation_processor import AnnotationProcessor
+                processor = AnnotationProcessor()
+                
+                # Convert domain type to enum
+                domain_map = {
+                    "natural": DomainType.NATURAL,
+                    "code": DomainType.CODE,
+                    "mixed": DomainType.MIXED
+                }
+                domain_enum = domain_map.get(domain_type, DomainType.NATURAL)
+                
+                char_spans = processor.extract_spans_from_comprehensive_response(
+                    final_response, 
+                    task.text,
+                    XBarClassifierMap.get_classifier_names(domain_enum)
+                )
                 
                 # Convert to position spans
                 position_spans = mapper.batch_char_to_position(char_spans)

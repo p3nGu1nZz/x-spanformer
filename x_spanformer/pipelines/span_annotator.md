@@ -2,98 +2,144 @@
 
 ## Overview
 
-The `span_annotator` pipeline implements **agentic X-bar span annotation** for generating supervised training data for the factorized pointer network span predictor. This pipeline processes raw Unicode sequences from corpus.jsonl through multi-turn conversations with phi4-mini to generate hierarchical X-bar span boundary annotations.
+The X-Spanformer span annotator pipeline implements **agentic X-bar span annotation** for generating supervised training data for the factorized pointer network span predictor. This pipeline processes raw Unicode sequences from corpus.jsonl through multi-turn conversations with phi4-mini to generate hierarchical X-bar span boundary annotations.
 
 ### Key Features
 
-- **Comprehensive Classifier Extraction**: Processes each sequence for ALL applicable xbar.py classifiers
-- **Domain-Aware Processing**: Automatic domain detection (natural/code/mixed) with tailored prompts
-- **Agent Pattern Integration**: Uses judge_session.py, ollama_client.py, and dialogue.py patterns
+- **Comprehensive Classifier Extraction**: Processes each sequence for ALL applicable XBar classifiers
+- **Domain-Aware Processing**: Automatic domain detection (natural/code/mixed) with tailored prompts  
+- **Agent Pattern Integration**: Uses session-based agents, ollama_client.py, and dialogue.py patterns
 - **Scalable Architecture**: Designed for 50k+ LLM requests with statistical tracking
 - **Resumable Processing**: Individual working files enable inspection and continuation
 - **Multi-Process Support**: Parallel processing on different sequence ranges
+- **Bidirectional Contextual Foundation**: Built on X-Spanformer's position-wise embedding architecture
 
 ## Architecture
 
-### SpanAnnotatorSession Class
+### Bidirectional Contextual Foundation
 
-The core annotation engine follows async conversation patterns from the agents package:
+The annotation system is built on X-Spanformer's bidirectional contextual embedding architecture:
 
-```python
-class SpanAnnotatorSession:
-    """Async X-bar span annotation session using comprehensive conversation approach."""
-    
-    def __init__(self, config_file="span_annotator.yaml"):
-        self.cfg = load_config(config_file)
-        self.jinja_env = setup_jinja_templates()
-        self.ollama_client = AsyncOllamaClient(self.cfg.model)
-        self.dialogue = Dialogue()  # Multi-turn conversation management
-        
-    async def extract_all_classifiers(self, raw_sequence: str, corpus_id: str, domain_type: str) -> dict:
-        """Extract all applicable classifiers through single comprehensive conversation."""
-        
-        # Create comprehensive system prompt with ALL classifier info
-        system_prompt = self._build_comprehensive_system_prompt(domain_type)
-        classifier_map = self._get_xbar_classifier_map(domain_type)
-        
-        # Single conversation covering all classifiers
-        conversation_result = await self._conduct_comprehensive_annotation(
-            raw_sequence, system_prompt, classifier_map
-        )
-        
-        return self._parse_comprehensive_response(conversation_result, classifier_map)
-        
-    def _build_comprehensive_system_prompt(self, domain_type: str) -> str:
-        """Build system prompt containing ALL xbar classifier definitions for domain."""
-        
-    def _get_xbar_classifier_map(self, domain_type: str) -> Dict[str, str]:
-        """Return mapping of all applicable xbar classifiers to their descriptions."""
-        
-    async def _conduct_comprehensive_annotation(self, sequence: str, system_prompt: str, classifiers: Dict) -> dict:
-        """Conduct single multi-turn conversation covering all classifiers."""
-```
-```
+- **Position Embeddings**: Each H[t] ∈ R^512 represents bidirectional contextual character information
+- **Multi-scale Context**: Dilated convolutions capture patterns at multiple scales with full sequence awareness
+- **Boundary Detection**: Start and end positions access both preceding and following contextual information
+- **No Span Averaging**: Spans detected through boundary prediction, not embedding aggregation
 
-### Agent Pattern Integration
+### SpanAnnotatorSession
 
-Following the established async patterns from the agents package:
-
-1. **AsyncOllamaClient Integration**: Async integration with `ollama_client.py` for model requests
-2. **Comprehensive System Prompts**: Single conversation with complete xbar classifier mapping
-3. **Dialogue Management**: Multi-turn conversation handling via `dialogue.py` patterns
-4. **Configuration Management**: YAML-based configuration following pipeline conventions
-
-### XBar Classifier Mapping Integration
-
-Instead of individual template files, the pipeline uses comprehensive classifier mapping:
+The core annotation engine follows async conversation patterns from the agents session package:
 
 ```python
-# x_spanformer/agents/xbar_map.py - comprehensive classifier definitions
+from x_spanformer.agents.session.span_annotator_session import SpanAnnotatorSession
+from x_spanformer.agents.dialogue import DialogueManager
+from x_spanformer.xbar.position_mapper import PositionMapper
 
-NATURAL_CLASSIFIERS = {
-    "noun": "Identify all nouns including proper nouns, common nouns, and collective nouns",
-    "verb": "Identify all verbs including action verbs, linking verbs, and auxiliary verbs",
-    "adjective": "Identify all adjectives including descriptive, comparative, and superlative forms",
-    "noun_phrase": "Identify noun phrases including determiners, modifiers, and head nouns",
-    "verb_phrase": "Identify verb phrases including auxiliary verbs, main verbs, and complements",
-    # ... comprehensive mapping for all natural language classifiers
-}
+# Initialize session with dialogue management
+agent = SpanAnnotatorSession(
+    model_name="phi4-mini",
+    max_concurrent=5,
+    max_retries=3,
+    conversation_timeout=30.0
+)
 
-CODE_CLASSIFIERS = {
-    "keyword": "Identify programming language keywords (if, for, class, def, etc.)",
-    "identifier": "Identify variable names, function names, and class names",
-    "function_call": "Identify function call expressions with arguments",
-    "assignment": "Identify variable assignment statements",
-    # ... comprehensive mapping for all code classifiers
-}
-
-MIXED_CLASSIFIERS = {
-    "inline_code": "Identify inline code snippets within natural language text",
-    "code_block": "Identify code blocks or examples within documentation",
-    "natural_instruction": "Identify natural language instructions about code",
-    # ... comprehensive mapping for mixed domain classifiers
-}
+# Process sequences asynchronously
+async for result in agent.annotate_batch(sequences):
+    # Handle span annotations with position alignment
+    for annotation in result.span_annotations:
+        print(f"Span: {annotation.start_pos}-{annotation.end_pos}")
 ```
+
+### Pipeline Architecture
+
+The main pipeline class orchestrates the entire annotation process:
+
+```python
+from x_spanformer.pipelines.span_annotator import SpanAnnotatorPipeline
+
+# Initialize pipeline
+pipeline = SpanAnnotatorPipeline("config/pipelines/span_annotator.yaml")
+
+# Process sequence range
+results = await pipeline.process_sequence_range(
+    corpus_file=Path("data/vocab/corpus.jsonl"),
+    output_dir=Path("data/annotations"),
+    range_spec="1-100"
+)
+```
+
+## Position-wise Alignment
+
+### Character-to-Position Mapping
+
+The system uses the `PositionMapper` to convert character-level spans to position-wise indices:
+
+```python
+from x_spanformer.xbar.position_mapper import PositionMapper
+
+mapper = PositionMapper(text=original_text)
+
+# Character-level span from LLM agent
+char_span = CharacterSpan(
+    start_char=4,
+    end_char=18,
+    xbar_class="NP",
+    text="quick brown fox"
+)
+
+# Convert to position-wise for training
+pos_span = mapper.char_to_position(char_span)
+# Result: PositionSpan(start_pos=4, end_pos=19, xbar_class="NP")
+```
+
+### Training Target Generation
+
+Position spans are converted to binary boundary targets for training:
+
+```python
+# Position span becomes training targets
+y_start = torch.zeros(sequence_length)
+y_end = torch.zeros(sequence_length)
+
+y_start[pos_span.start_pos] = 1.0      # Start boundary
+y_end[pos_span.end_pos - 1] = 1.0      # End boundary (inclusive)
+
+# Loss computation
+loss_start = BCE(model.predict_start(H), y_start)
+loss_end = BCE(model.predict_end(H), y_end)
+```
+
+## XBar Classifier Integration
+
+### Comprehensive Classifier Mapping
+
+The pipeline uses comprehensive classifier definitions from `x_spanformer.agents.xbar_map`:
+
+```python
+from x_spanformer.xbar.xbar_map import XBarClassifierMap, DomainType
+
+# Get classifiers for domain
+classifiers = XBarClassifierMap.get_classifiers_for_domain(DomainType.NATURAL)
+
+# Build system prompt
+system_prompt = XBarClassifierMap.build_system_prompt(DomainType.NATURAL)
+```
+
+#### Natural Language Classifiers
+
+- **Word Level**: noun, verb, adjective, adverb, determiner, preposition, pronoun, conjunction, punctuation
+- **Phrase Level**: noun_phrase, verb_phrase, adjective_phrase, adverb_phrase, prepositional_phrase
+- **Clause Level**: main_clause, subordinate_clause, relative_clause
+- **Sentence Level**: simple_sentence, compound_sentence, complex_sentence
+
+#### Code Classifiers
+
+- **Word Level**: keyword, identifier, operator, literal, delimiter, type_name, comment
+- **Phrase Level**: expression, function_call, assignment, parameter_list, argument_list
+- **Statement Level**: if_statement, loop_statement, function_definition, class_definition, import_statement, return_statement
+
+#### Mixed Domain Classifiers
+
+- **Mixed Content**: inline_code, code_block, natural_instruction, documentation_comment, api_reference, error_message
 
 ## Processing Strategy
 
@@ -102,11 +148,12 @@ MIXED_CLASSIFIERS = {
 Each sequence undergoes systematic processing through a single comprehensive conversation:
 
 1. **Domain Detection**: Automatic detection from corpus.jsonl type field
-2. **Classifier Map Building**: Build complete xbar classifier mapping for domain
+2. **Classifier Map Building**: Build complete XBar classifier mapping for domain
 3. **System Prompt Construction**: Create comprehensive prompt with ALL classifier definitions
 4. **Single Async Conversation**: One multi-turn conversation covering all applicable classifiers
 5. **Response Parsing**: Parse comprehensive JSON response and validate span boundaries
-6. **Statistics Tracking**: Track success/failure rates per classifier type
+6. **Position Alignment**: Convert character spans to position-wise spans for training
+7. **Statistics Tracking**: Track success/failure rates per classifier type
 
 **Efficiency Benefits**:
 - **Single Request**: One conversation per sequence instead of 10-30 individual requests
@@ -121,39 +168,6 @@ The pipeline supports parallel processing through range-based sequence assignmen
 ```python
 def process_sequence_range(corpus_file: Path, output_dir: Path, sequence_range: str):
     """Process a specific range of sequences with comprehensive classifier extraction."""
-    
-    # Parse range specification (e.g., "1-100", "1,5,10", "42")
-    sequence_ids = parse_range_specification(sequence_range)
-    
-    # Load and filter corpus to target sequences
-    target_sequences = load_target_sequences(corpus_file, sequence_ids)
-    
-    # Process each sequence comprehensively
-    session = SpanAnnotatorSession()
-    for record in target_sequences:
-        working_file = output_dir / "working" / f"{record.corpus_id}.json"
-        
-        if working_file.exists():
-            # Resume from existing working file
-            sequence_data = json.load(working_file.open())
-            if sequence_data.get("annotation_status") == "completed":
-                continue  # Skip completed sequences
-        
-        # Single comprehensive annotation conversation
-        try:
-            annotation_result = await session.extract_all_classifiers(
-                record.raw, record.corpus_id, record.domain_type
-            )
-            
-            # Save comprehensive results to working file
-            save_annotation_result(working_file, record, annotation_result)
-            
-            # Update global metadata
-            update_global_metadata(output_dir / "metadata.json", record.corpus_id, annotation_result)
-            
-        except Exception as e:
-            # Log failed annotation and continue
-            log_annotation_failure(working_file, record, str(e))
 ```
 
 ## Input/Output
@@ -194,179 +208,42 @@ Each working file contains comprehensive annotation results from a single conver
   "raw_sequence": "The quick brown fox jumps over the lazy dog.",
   "domain_type": "natural",
   "source_meta": {
-    "status": "keep",
-    "source": "consolidated_corpus"
+    "status": "corpus",
+    "source": "data/vocab/corpus.jsonl"
   },
   "annotation_session": {
-    "started_at": "2025-08-01T15:30:00Z",
-    "completed_at": "2025-08-01T15:31:45Z",
+    "started_at": "2025-08-01T10:30:00.000Z",
+    "completed_at": "2025-08-01T10:30:05.123Z", 
     "annotation_status": "completed",
     "model": "phi4-mini",
-    "conversation_turns": 3,
-    "total_processing_time": 105.2,
-    "classifiers_attempted": 23,
-    "successful_extractions": 21,
-    "failed_extractions": 2
+    "error_message": null
   },
-  "comprehensive_annotations": {
-    "all_spans": [
+  "annotation_result": {
+    "span_annotations": [
       {
-        "text": "The",
-        "char_start": 0,
-        "char_end": 2,
-        "xbar_label": "determiner",
-        "xbar_role": "specifier",
-        "hierarchical_level": "word",
-        "confidence": 0.95
+        "start_pos": 0,
+        "end_pos": 3,
+        "xbar_class": "determiner",
+        "confidence": 0.95,
+        "text": "The"
       },
       {
-        "text": "quick brown fox",
-        "char_start": 4,
-        "char_end": 18,
-        "xbar_label": "noun_phrase", 
-        "xbar_role": "subject",
-        "hierarchical_level": "phrase",
-        "confidence": 0.88
+        "start_pos": 4,
+        "end_pos": 19,
+        "xbar_class": "noun_phrase", 
+        "confidence": 0.92,
+        "text": "quick brown fox"
       }
     ],
-    "classifier_coverage": {
-      "noun": {"attempted": true, "success": true, "spans_found": 3},
-      "verb": {"attempted": true, "success": true, "spans_found": 1},
-      "determiner": {"attempted": true, "success": true, "spans_found": 2},
-      "noun_phrase": {"attempted": true, "success": true, "spans_found": 2},
-      "verb_phrase": {"attempted": true, "success": true, "spans_found": 1},
-      "adjective": {"attempted": true, "success": false, "error": "No clear adjective spans identified"}
-    }
-  },
-  "conversation_log": [
-    {
-      "role": "system",
-      "content": "You are an expert linguistic annotator specializing in X-bar theory span identification..."
-    },
-    {
-      "role": "user", 
-      "content": "Analyze this sequence for ALL applicable natural language X-bar spans: 'The quick brown fox jumps over the lazy dog.'"
-    },
-    {
-      "role": "assistant",
-      "content": "I'll provide comprehensive X-bar span annotations for this sentence. Let me identify spans at all hierarchical levels..."
-    }
-  ]
-}
-    },
-    "natural_roles": {
-      "subject": {
-        "status": "success",
-        "attempted_at": "2025-08-01T15:33:00Z",
-        "spans_extracted": 1,
-        "template_used": "natural/roles/subject.j2",
-        "model_response": "{\"spans\": [{\"text\": \"The quick brown fox\", \"start\": 0, \"end\": 18, \"role\": \"subject\"}]}"
-      }
-    },
-    "xbar_roles": {
-      "head": {
-        "status": "failed",
-        "attempted_at": "2025-08-01T15:34:00Z",
-        "error": "Invalid JSON response",
-        "template_used": "xbar/roles/head.j2",
-        "model_response": "I found several head elements: fox (core noun), jumps (main verb)"
-      }
-    }
-  },
-  "annotations": [
-    {
-      "char_start": 16,
-      "char_end": 18,
-      "span_text": "fox",
-      "xbar_label": "noun",
-      "xbar_role": "head",
-      "hierarchical_level": "word",
-      "extraction_metadata": {
-        "classifier": "natural_labels.noun",
-        "confidence": 0.95,
-        "template": "natural/labels/noun.j2"
-      }
-    },
-    {
-      "char_start": 20,
-      "char_end": 24,
-      "span_text": "jumps",
-      "xbar_label": "verb",
-      "xbar_role": "predicate",
-      "hierarchical_level": "word",
-      "extraction_metadata": {
-        "classifier": "natural_labels.verb",
-        "confidence": 0.98,
-        "template": "natural/labels/verb.j2"
-      }
-    }
-  ],
-  "failed_requests": [
-    {
-      "classifier": "xbar_roles.head",
-      "error": "Invalid JSON response",
-      "template": "xbar/roles/head.j2",
-      "model_response": "I found several head elements: fox (core noun), jumps (main verb)",
-      "attempted_at": "2025-08-01T15:34:00Z"
-    }
-  ]
-}
-```
-
-### Global Metadata Format
-
-```json
-{
-  "pipeline_version": "1.0",
-  "started_at": "2025-08-01T15:00:00Z",
-  "last_updated": "2025-08-01T16:45:00Z",
-  "corpus_file": "data/vocab/corpus.jsonl",
-  "output_directory": "data/annotations",
-  "total_sequences": 5107,
-  "processed_sequences": 1203,
-  "remaining_sequences": 3904,
-  "total_classifier_attempts": 43208,
-  "successful_extractions": 28941,
-  "failed_extractions": 14267,
-  "classifier_statistics": {
-    "natural_labels": {
-      "noun": {"attempts": 1567, "successes": 1234, "success_rate": 0.787, "total_spans": 3456},
-      "verb": {"attempts": 1567, "successes": 1345, "success_rate": 0.858, "total_spans": 2234},
-      "adjective": {"attempts": 1567, "successes": 987, "success_rate": 0.630, "total_spans": 1876}
-    },
-    "code_labels": {
-      "keyword": {"attempts": 876, "successes": 789, "success_rate": 0.901, "total_spans": 1234},
-      "identifier": {"attempts": 876, "successes": 823, "success_rate": 0.940, "total_spans": 2345},
-      "operator": {"attempts": 876, "successes": 734, "success_rate": 0.838, "total_spans": 987}
-    },
-    "xbar_roles": {
-      "head": {"attempts": 5107, "successes": 3456, "success_rate": 0.677, "total_spans": 4567},
-      "specifier": {"attempts": 5107, "successes": 2134, "success_rate": 0.418, "total_spans": 2876},
-      "modifier": {"attempts": 5107, "successes": 1876, "success_rate": 0.367, "total_spans": 3234}
-    }
-  },
-  "domain_breakdown": {
-    "natural": {"sequences": 2567, "total_spans": 34567, "avg_spans_per_sequence": 13.47},
-    "code": {"sequences": 1876, "total_spans": 18923, "avg_spans_per_sequence": 10.09},
-    "mixed": {"sequences": 664, "total_spans": 8234, "avg_spans_per_sequence": 12.40}
-  },
-  "training_dataset_progress": {
-    "current_total_spans": 61724,
-    "target_spans": 100000,
-    "completion_rate": 0.617,
-    "estimated_sequences_needed": 1956,
-    "priority_classifiers": ["noun", "verb", "identifier", "keyword", "head"]
-  },
-  "active_processes": [
-    {"pid": 1234, "range": "1-100", "started_at": "2025-08-01T16:30:00Z", "progress": "85/100"},
-    {"pid": 1235, "range": "101-200", "started_at": "2025-08-01T16:35:00Z", "progress": "23/100"}
-  ]
+    "total_positions": 43,
+    "processing_time": 5.123
+  }
 }
 ```
 
 ## Configuration
 
-### Default Configuration (span_annotator.yaml)
+### Pipeline Configuration (span_annotator.yaml)
 
 ```yaml
 # Model configuration
@@ -376,28 +253,11 @@ model:
   max_tokens: 1024
   timeout: 30
 
-# Agent configuration
-agent:
-  max_retries: 3
-  retry_delay: 1.0
-  template_directory: "templates"
-  response_format: "json"
-
 # Processing configuration
 processing:
-  chunk_size: 100
-  max_parallel_requests: 4
-  request_delay: 0.5
-  max_sequence_length: 512
-
-# xbar classifier configuration
-classifiers:
-  natural_labels: ["noun", "verb", "adjective", "adverb", "determiner", "preposition", "pronoun", "conjunction", "punctuation"]
-  natural_roles: ["subject", "predicate", "modifier", "complement"]
-  code_labels: ["keyword", "identifier", "operator", "literal", "delimiter", "type_name", "comment"]
-  code_roles: ["function", "declaration", "expression", "statement"]
-  mixed_roles: ["inline_code", "documentation_context", "instructional_sequence"]
-  xbar_roles: ["head", "specifier", "modifier", "complement", "adjunct"]
+  max_retries: 3
+  conversation_timeout: 30.0
+  batch_size: 64
 
 # Output configuration
 output:
@@ -406,13 +266,55 @@ output:
   consolidate_on_completion: true
   include_metadata: true
 
-# Validation configuration
-validation:
-  max_char_start: 512
-  max_char_end: 512
-  min_span_length: 1
-  max_span_length: 100
-  require_valid_json: true
+# Logging configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  log_to_file: true
+
+# X-bar classifier configuration
+classifiers:
+  natural_labels: ["noun", "verb", "adjective", "adverb", "determiner", "preposition", "pronoun", "conjunction", "punctuation"]
+  natural_roles: ["subject", "predicate", "modifier", "complement"]
+  code_labels: ["keyword", "identifier", "operator", "literal", "delimiter", "type_name", "comment"]  
+  code_roles: ["function", "declaration", "expression", "statement"]
+  mixed_roles: ["inline_code", "documentation_context", "instructional_sequence"]
+  xbar_roles: ["head", "specifier", "modifier", "complement", "adjunct"]
+```
+
+### Agent Configuration (config/agents/span_annotator.yaml)
+
+```yaml
+agent_type: span_annotator
+
+model:
+  name: phi4-mini
+  temperature: 0.1
+  max_context_tokens: 131072
+  max_turn_tokens: 1024
+
+dialogue:
+  max_turns: 8
+  memory_limit: 16
+  trim_strategy: rolling
+
+span_annotator:
+  model_name: phi4-mini
+  temperature: 0.1
+  max_retries: 3
+  conversation_timeout: 30.0
+  domain_detection: auto
+  comprehensive_annotation: true
+
+format:
+  expected_fields: [ text, start_char, end_char, xbar_class, confidence ]
+  strict_json: true
+  parse_strategy: json
+
+logging:
+  verbosity: info
+  track_annotations: true
+  log_spans: true
 ```
 
 ## CLI Usage
@@ -421,46 +323,62 @@ validation:
 
 ```bash
 # Process single sequence
-python -m x_spanformer.pipelines.span_annotator \
+uv run -m x_spanformer.pipelines.span_annotator \
   --corpus data/vocab/corpus.jsonl \
   --output data/annotations \
   --range 1
 
 # Process multiple sequences
-python -m x_spanformer.pipelines.span_annotator \
+uv run -m x_spanformer.pipelines.span_annotator \
   --corpus data/vocab/corpus.jsonl \
   --output data/annotations \
   --range 1,5,10
 
 # Process range of sequences
-python -m x_spanformer.pipelines.span_annotator \
+uv run -m x_spanformer.pipelines.span_annotator \
   --corpus data/vocab/corpus.jsonl \
   --output data/annotations \
   --range 1-100
+
+# With custom configuration files
+uv run -m x_spanformer.pipelines.span_annotator \
+  --corpus data/vocab/corpus.jsonl \
+  --output data/annotations \
+  --range 1-100 \
+  --config config/pipelines/span_annotator.yaml \
+  --agent config/agents/span_annotator_agent.yaml
+
+# Consolidate existing results only
+uv run -m x_spanformer.pipelines.span_annotator \
+  --corpus data/vocab/corpus.jsonl \
+  --output data/annotations \
+  --range 1-100 \
+  --consolidate-only
 ```
 
 ### Advanced Usage
 
 ```bash
-# Custom configuration
-python -m x_spanformer.pipelines.span_annotator \
+# Custom configuration files
+uv run -m x_spanformer.pipelines.span_annotator \
   --corpus data/vocab/corpus.jsonl \
   --output data/annotations \
-  --config config/custom_span_annotator.yaml \
-  --range 1-50
+  --range 1-50 \
+  --config config/pipelines/span_annotator.yaml \
+  --agent config/agents/span_annotator_agent.yaml
 
-# Resume processing with specific range
-python -m x_spanformer.pipelines.span_annotator \
+# Resume processing with specific range (automatic resume enabled)
+uv run -m x_spanformer.pipelines.span_annotator \
   --corpus data/vocab/corpus.jsonl \
   --output data/annotations \
   --range 51-100
 
-# High-throughput processing
-python -m x_spanformer.pipelines.span_annotator \
+# Consolidate existing results without processing new sequences
+uv run -m x_spanformer.pipelines.span_annotator \
   --corpus data/vocab/corpus.jsonl \
   --output data/annotations \
-  --range 1-1000 \
-  --config config/high_throughput_span_annotator.yaml
+  --range 1-100 \
+  --consolidate-only
 ```
 
 ### Multi-Process Coordination
@@ -469,19 +387,19 @@ For large-scale annotation (50k+ sequences), run multiple processes on different
 
 ```bash
 # Terminal 1: Process sequences 1-1000
-python -m x_spanformer.pipelines.span_annotator \
+uv run -m x_spanformer.pipelines.span_annotator \
   --corpus data/vocab/corpus.jsonl \
   --output data/annotations \
   --range 1-1000
 
 # Terminal 2: Process sequences 1001-2000
-python -m x_spanformer.pipelines.span_annotator \
+uv run -m x_spanformer.pipelines.span_annotator \
   --corpus data/vocab/corpus.jsonl \
   --output data/annotations \
   --range 1001-2000
 
 # Terminal 3: Process sequences 2001-3000
-python -m x_spanformer.pipelines.span_annotator \
+uv run -m x_spanformer.pipelines.span_annotator \
   --corpus data/vocab/corpus.jsonl \
   --output data/annotations \
   --range 2001-3000
@@ -489,230 +407,232 @@ python -m x_spanformer.pipelines.span_annotator \
 
 The global `metadata.json` automatically tracks active processes and prevents conflicts.
 
-## Comprehensive Annotation System
+## Integration with Training Pipeline
 
-### XBar Classifier Mapping
+### Annotation Record Generation
 
-Instead of individual templates, the pipeline uses comprehensive classifier definitions:
-
-```python
-# Example comprehensive system prompt construction
-def build_comprehensive_system_prompt(domain_type: str) -> str:
-    """Build system prompt with ALL xbar classifiers for domain."""
-    
-    base_prompt = """
-You are an expert linguistic annotator specializing in X-bar theory span identification.
-Your task is to identify ALL applicable linguistic spans in the given text using the comprehensive classifier set below.
-
-IMPORTANT GUIDELINES:
-1. Use position-based indexing (character positions in the original text)
-2. Use 0-based indexing with char_end INCLUSIVE (last character of span)
-3. Provide confidence scores between 0.0 and 1.0
-4. Ensure spans don't inappropriately overlap
-5. Include hierarchical levels: word, phrase, clause, sentence
-6. Return comprehensive JSON with ALL identified spans
-
-"""
-    
-    if domain_type == "natural":
-        classifier_definitions = """
-NATURAL LANGUAGE CLASSIFIERS:
-
-Word Level:
-- noun: Identify all nouns (proper, common, collective)
-- verb: Identify all verbs (action, linking, auxiliary)
-- adjective: Identify all adjectives (descriptive, comparative, superlative)
-- adverb: Identify all adverbs (manner, time, place, degree)
-- determiner: Identify determiners (the, a, an, this, that, these, those)
-- preposition: Identify prepositions (in, on, at, by, for, with, etc.)
-
-Phrase Level:
-- noun_phrase: Identify complete noun phrases with modifiers
-- verb_phrase: Identify complete verb phrases with complements
-- adjective_phrase: Identify adjective phrases with modifiers
-- prepositional_phrase: Identify prepositional phrases
-
-Clause Level:
-- main_clause: Identify main/independent clauses
-- subordinate_clause: Identify dependent/subordinate clauses
-
-Sentence Level:
-- simple_sentence: Identify complete simple sentences
-- compound_sentence: Identify compound sentences with coordination
-"""
-    
-    elif domain_type == "code":
-        classifier_definitions = """
-CODE CLASSIFIERS:
-
-Word Level:
-- keyword: Programming language keywords (if, for, class, def, return, etc.)
-- identifier: Variable names, function names, class names
-- operator: All operators (+, -, *, /, ==, !=, &&, ||, etc.)
-- literal: String literals, numeric literals, boolean literals
-
-Phrase Level:
-- expression: Mathematical or logical expressions
-- function_call: Function calls with arguments
-- assignment: Variable assignment statements
-- parameter_list: Function parameter lists
-- argument_list: Function call argument lists
-
-Statement Level:
-- if_statement: Conditional statements
-- loop_statement: For loops, while loops
-- function_definition: Complete function definitions
-- class_definition: Complete class definitions
-"""
-    
-    return base_prompt + classifier_definitions
-```
-
-## Shared Utilities Integration
-
-The pipeline leverages existing shared utilities and introduces new ones:
-
-### Existing Utilities
-- **jsonl_processor.py**: For loading and validating corpus.jsonl files
-- **text_processor.py**: For text splitting and length management if needed
-- **position_mapper.py**: For character-to-position alignment in tokenizer-free architecture
-
-### New Shared Utilities
+Span annotations are packaged into `AnnotationRecord` objects for training:
 
 ```python
-# x_spanformer/agents/xbar_map.py - comprehensive classifier mappings
+from x_spanformer.schema.annotation_record import AnnotationRecord, SpanAnnotation
 
-class XBarClassifierMap:
-    """Comprehensive X-bar classifier definitions for all domains."""
-    
-    def get_natural_classifiers(self) -> Dict[str, str]:
-        """Return all natural language classifiers with descriptions."""
-        
-    def get_code_classifiers(self) -> Dict[str, str]:
-        """Return all code classifiers with descriptions."""
-        
-    def get_mixed_classifiers(self) -> Dict[str, str]:
-        """Return all mixed domain classifiers with descriptions."""
-        
-    def build_comprehensive_prompt(self, domain_type: str) -> str:
-        """Build comprehensive system prompt for domain."""
-
-# x_spanformer/pipelines/shared/annotation_processor.py
-
-class ComprehensiveAnnotationProcessor:
-    """Process comprehensive annotation responses from async conversations."""
-    
-    def parse_comprehensive_response(self, response: str, expected_classifiers: List[str]) -> Dict:
-        """Parse model response containing all classifier annotations."""
-        
-    def validate_span_boundaries(self, spans: List[Dict], text_length: int) -> List[Dict]:
-        """Validate and filter span boundaries for consistency."""
-        
-    def align_with_position_embeddings(self, spans: List[Dict], text: str) -> List[Dict]:
-        """Align character spans with position-wise embeddings using PositionMapper."""
-
-class AnnotationProcessor:
-    """Shared utilities for annotation pipelines."""
-    
-    def validate_span_boundaries(self, sequence: str, start: int, end: int) -> bool:
-        """Validate span boundaries are within sequence bounds."""
-        
-    def parse_json_response(self, response: str) -> List[dict]:
-        """Parse and validate JSON response from LLM."""
-        
-    def consolidate_working_files(self, working_dir: Path, output_file: Path):
-        """Consolidate individual working files into training JSONL."""
-        
-    def update_global_metadata(self, metadata_file: Path, updates: dict):
-        """Thread-safe global metadata updates."""
+# Create training record
+record = AnnotationRecord(
+    raw=sequence_text,
+    sequence_id=sequence_number,
+    embedding_chunk_id=chunk_id,
+    span_annotations=[
+        SpanAnnotation(
+            start_pos=4,
+            end_pos=19,
+            xbar_class="NP",
+            confidence=0.95
+        )
+    ],
+    total_positions=len(sequence_text)
+)
 ```
+
+### Batch Processing with Resume Capability
+
+The system supports efficient batch processing with resume capabilities:
+
+```python
+# Process large batches with automatic resume
+async def process_corpus(corpus_path: str, output_path: str):
+    pipeline = SpanAnnotatorPipeline()
+    
+    # Load existing results for resume
+    existing_results = pipeline.load_existing_results(Path(output_path))
+    
+    # Process remaining sequences
+    results = await pipeline.process_sequence_range(
+        corpus_file=Path(corpus_path),
+        output_dir=Path(output_path),
+        range_spec="1-1000",
+        resume=True
+    )
+    
+    logger.info(f"Processed {results['successful_annotations']} sequences")
+```
+
+## Validation and Quality Control
+
+### Position Validation
+
+All position spans are validated against sequence boundaries:
+
+```python
+def validate_position_span(span: PositionSpan, sequence_length: int) -> bool:
+    """Validate position span against sequence constraints."""
+    return (
+        0 <= span.start_pos < sequence_length and
+        span.start_pos < span.end_pos <= sequence_length and
+        span.end_pos - span.start_pos >= 1  # Minimum span length
+    )
+```
+
+### Linguistic Coherence Checks
+
+- **Whitespace Coherence**: Spans respect word boundaries when appropriate
+- **Hierarchical Consistency**: Overlapping spans maintain proper nesting relationships
+- **X-bar Compliance**: Generated spans follow X-bar theory constraints
+- **JSON Validation**: All LLM responses are validated for proper JSON structure
+- **Confidence Scoring**: LLM responses include confidence scores for span quality assessment
 
 ## Performance Characteristics
 
-### Computational Complexity
+### Async Processing Benefits
 
-- **Single Sequence**: O(C) where C is number of applicable classifiers (~20-30)
-- **Template Rendering**: O(1) per classifier (Jinja template compilation cached)
-- **LLM Requests**: O(C) network requests per sequence
-- **JSON Parsing**: O(R) where R is response length
-- **File I/O**: O(1) per sequence (individual working files)
+- **Concurrent Sessions**: Multiple LLM conversations can run simultaneously (max_concurrent: 5)
+- **I/O Efficiency**: Async file operations and network requests
+- **Memory Management**: Streaming processing for large corpora
+- **Fault Tolerance**: Individual session failures don't affect batch processing
 
-### Memory Usage
+### Scalability Considerations
 
-- **Working Memory**: ~1-2MB per sequence (JSON data + metadata)
-- **Template Cache**: ~100KB for all Jinja templates
-- **Global Metadata**: ~1-10MB depending on corpus size
-- **Process Memory**: ~50-100MB per span_annotator process
+- **Batch Size Tuning**: Configurable batch sizes (default: 64) based on available resources
+- **Rate Limiting**: Built-in rate limiting for LLM API calls (request_delay: 0.5s)
+- **Memory Usage**: Streaming approach keeps memory usage constant
+- **Checkpointing**: Regular saves enable processing of very large corpora
+- **Resume Capability**: Failed or interrupted runs can be resumed without losing progress
 
-### Scalability Characteristics
+## Future Extensions
 
-**Single Process**:
-- **Throughput**: ~10-20 sequences/minute (depending on model speed)
-- **Memory**: ~100MB baseline + working files
-- **Network**: ~20-30 requests/minute to Ollama
+### Enhanced Linguistic Analysis
 
-**Multi-Process (N processes)**:
-- **Throughput**: ~N × (10-20) sequences/minute
-- **Memory**: N × 100MB + shared working directory
-- **Network**: N × (20-30) requests/minute to Ollama
-- **Coordination**: Lock-free through range-based assignment
+- **Dependency Relations**: Extend to capture syntactic dependencies
+- **Semantic Roles**: Add semantic role labeling capabilities
+- **Cross-lingual Support**: Multi-language annotation templates
+- **Domain Specialization**: Custom classifiers for specific domains
 
-### Expected Performance for 5k Sequences
+### Training Integration
 
-**Sequential Processing**:
-- **Total Time**: ~4-8 hours (assuming 10-20 sequences/minute)
-- **Total Requests**: ~100k-150k LLM requests
-- **Storage**: ~500MB-1GB for working files + consolidated output
+- **Active Learning**: Select most informative spans for annotation
+- **Confidence Weighting**: Use annotation confidence in training loss
+- **Adversarial Validation**: Cross-validate annotations between different agents
+- **Human-in-the-Loop**: Integration with human annotation tools for quality control
 
-**Parallel Processing (4 processes)**:
-- **Total Time**: ~1-2 hours
-- **Total Requests**: Same (~100k-150k)
-- **Storage**: Same (~500MB-1GB)
-- **Coordination**: Automatic through range assignment
+### Performance Optimization
 
-## Resume and Validation
+- **Caching**: Cache system prompts and common responses
+- **Batch Optimization**: Dynamic batch size adjustment based on performance
+- **Model Optimization**: Support for different model sizes and capabilities
+- **Distributed Processing**: Support for distributed annotation across multiple machines
+- Function definitions and calls
+- Variable declarations and references  
+- Control flow structures
+- Expression boundaries
 
-### Resume Capabilities
+Code: "{text}"
+"""
+```
 
-The pipeline includes comprehensive resume functionality:
+### Quality Focus and Error Handling
 
-1. **Working File Detection**: Automatically detects existing working files
-2. **Progress Analysis**: Determines completed vs remaining classifiers per sequence
-3. **Selective Processing**: Only processes missing classifiers
-4. **Metadata Continuity**: Maintains statistics across resume sessions
+- **Malformed Response Handling**: Invalid JSON responses are logged but don't block processing
+- **Confidence Scoring**: LLM responses include confidence scores for span quality assessment
+- **Resumable Processing**: Failed sessions can be restarted without losing progress
+- **Statistical Tracking**: Success/failure rates tracked per classifier type
 
-### Validation Features
+## Integration with Training Pipeline
 
-1. **Span Boundary Validation**: Ensures spans are within sequence bounds
-2. **JSON Response Validation**: Validates LLM responses against expected schema
-3. **Classifier Coverage**: Tracks which classifiers have been attempted per sequence
-4. **Global Consistency**: Verifies working files match global metadata
+### Annotation Record Generation
 
-### Error Handling
+Span annotations are packaged into `AnnotationRecord` objects for training:
 
-1. **Request Failures**: Retry failed requests up to max_retries
-2. **Invalid Responses**: Log and continue with other classifiers
-3. **File Corruption**: Detect and repair corrupted working files
-4. **Process Interruption**: Safe to kill and restart processes
+```python
+from x_spanformer.schema.annotation_record import AnnotationRecord, SpanAnnotation
 
-## Integration with Existing Pipelines
+# Create training record
+record = AnnotationRecord(
+    raw=sequence_text,
+    sequence_id=sequence_number,
+    embedding_chunk_id=chunk_id,
+    span_annotations=[
+        SpanAnnotation(
+            start_pos=4,
+            end_pos=19,
+            xbar_class="NP",
+            confidence=0.95
+        )
+    ],
+    total_positions=len(sequence_text)
+)
+```
 
-### Upstream Dependencies
+### Batch Processing with Resume Capability
 
-- **jsonl2vocab**: Provides corpus.jsonl input file
-- **PretrainRecord schema**: Uses established schema for sequence format
+The system supports efficient batch processing with resume capabilities:
 
-### Downstream Usage
+```python
+# Process large batches with automatic resume
+async def process_corpus(corpus_path: str, output_path: str):
+    agent = SpanAnnotatorSession()
+    
+    # Load existing results for resume
+    existing_results = load_existing_annotations(output_path)
+    
+    # Process remaining sequences
+    async for batch in agent.process_corpus_batch(
+        corpus_path, 
+        resume_from=existing_results,
+        batch_size=32
+    ):
+        save_annotation_batch(batch, output_path)
+        logger.info(f"Processed {len(batch.records)} sequences")
+```
 
-- **Training Pipeline**: annotations.jsonl feeds into span boundary training
-- **Evaluation Pipeline**: Working files enable annotation quality analysis
-- **Factorized Pointer Network**: Direct input for supervised training
+## Validation and Quality Control
 
-### Schema Compatibility
+### Position Validation
 
-All output formats maintain compatibility with existing X-Spanformer schemas:
-- Uses PretrainRecord format for sequence metadata
-- Generates training records compatible with span boundary training
-- Maintains character-level indexing for alignment with embedding pipeline
+All position spans are validated against sequence boundaries:
 
-This pipeline serves as the critical bridge between corpus generation (jsonl2vocab) and supervised training, providing the hierarchical span annotations needed for the factorized pointer network training described in Section 3.3 of the X-Spanformer paper.
+```python
+def validate_position_span(span: PositionSpan, sequence_length: int) -> bool:
+    """Validate position span against sequence constraints."""
+    return (
+        0 <= span.start_pos < sequence_length and
+        span.start_pos < span.end_pos <= sequence_length and
+        span.end_pos - span.start_pos >= 1  # Minimum span length
+    )
+```
+
+### Linguistic Coherence Checks
+
+- **Whitespace Coherence**: Spans respect word boundaries when appropriate
+- **Hierarchical Consistency**: Overlapping spans maintain proper nesting relationships
+- **X-bar Compliance**: Generated spans follow X-bar theory constraints
+
+## Performance Characteristics
+
+### Async Processing Benefits
+
+- **Concurrent Sessions**: Multiple LLM conversations can run simultaneously
+- **I/O Efficiency**: Async file operations and network requests
+- **Memory Management**: Streaming processing for large corpora
+- **Fault Tolerance**: Individual session failures don't affect batch processing
+
+### Scalability Considerations
+
+- **Batch Size Tuning**: Configurable batch sizes based on available resources
+- **Rate Limiting**: Built-in rate limiting for LLM API calls
+- **Memory Usage**: Streaming approach keeps memory usage constant
+- **Checkpointing**: Regular saves enable processing of very large corpora
+
+## Future Extensions
+
+### Enhanced Linguistic Analysis
+
+- **Dependency Relations**: Extend to capture syntactic dependencies
+- **Semantic Roles**: Add semantic role labeling capabilities
+- **Cross-lingual Support**: Multi-language annotation templates
+- **Domain Specialization**: Custom classifiers for specific domains
+
+### Training Integration
+
+- **Active Learning**: Select most informative spans for annotation
+- **Confidence Weighting**: Use annotation confidence in training loss
+- **Adversarial Validation**: Cross-validate annotations between different agents
+- **Human-in-the-Loop**: Integration with human annotation tools for quality control

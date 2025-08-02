@@ -8,7 +8,7 @@ and the position-wise contextual embeddings used by X-Spanformer.
 import unittest
 from typing import List
 
-from x_spanformer.agents.position_mapper import (
+from x_spanformer.xbar.position_mapper import (
     PositionMapper,
     CharacterSpan,
     PositionSpan,

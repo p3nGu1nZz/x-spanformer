@@ -24,7 +24,7 @@ from typing import Optional, List, Dict
 # Add the parent directory to the path to import schema modules
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from x_spanformer.agents.config_loader import load_judge_config
+from x_spanformer.config.judge_config_loader import load_judge_config
 from x_spanformer.agents.ollama_client import check_ollama_connection
 from x_spanformer.agents.rich_utils import console
 from x_spanformer.schema.pretrain_record import PretrainRecord

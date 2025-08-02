@@ -16,7 +16,7 @@ from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
-from x_spanformer.agents.config_loader import load_judge_config
+from x_spanformer.config.judge_config_loader import load_judge_config
 from x_spanformer.agents.ollama_client import check_ollama_connection
 from x_spanformer.agents.rich_utils import (
     console,
