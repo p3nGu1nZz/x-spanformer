@@ -4,7 +4,7 @@ from rich.panel import Panel
 from tenacity import retry, stop_after_attempt, wait_fixed
 from typing import Dict, Optional
 
-from ..config_loader import load_judge_config
+from x_spanformer.config.judge_config_loader import load_judge_config
 from ..dialogue import DialogueManager
 from ..ollama_client import chat
 from ..prompts import render_prompt

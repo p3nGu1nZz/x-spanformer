@@ -1,0 +1,49 @@
+**SPAN GENERATION FOLLOW-UP**: You provided {{ span_count }} spans - let's generate MORE valid spans!
+
+**Text to analyze**: "{{ text }}"
+
+{% if turn_number <= 3 %}
+**Strategy for Turn {{ turn_number }}**: Focus on INDIVIDUAL WORD ANALYSIS
+**Your previous spans**: {{ previous_spans|join(', ') if previous_spans else 'None' }}
+
+**MORE SPANS NEEDED**: Look for these unanalyzed elements: {{ missing_words|join(', ') if missing_words else 'Any remaining linguistic elements' }}
+
+**REQUIREMENTS**:
+1. **GENERATE MORE SPANS**: Create spans for every unanalyzed word
+2. **NO SKIPPING**: Don't skip articles, prepositions, conjunctions, punctuation
+3. **NEW SPANS ONLY**: Only return spans you haven't provided before
+4. **QUANTITY FOCUS**: Generate as many valid spans as possible
+
+**Instructions**:
+- Go word by word through unanalyzed text
+- Create spans for punctuation, operators, delimiters  
+- Each linguistic element deserves its own span
+- Use precise text snippets (I calculate positions automatically)
+
+{% else %}
+**Strategy for Turn {{ turn_number }}**: Focus on PHRASE-LEVEL ANALYSIS
+**Your previous spans**: {{ previous_spans|join(', ') if previous_spans else 'None' }}
+
+**REQUIREMENTS**:
+1. **GENERATE PHRASE SPANS**: Group related words into meaningful phrases  
+2. **HIERARCHICAL SPANS**: Create larger spans that contain smaller spans
+3. **STRUCTURAL SPANS**: Mark clause, sentence, and block-level structures
+4. **NEW SPANS ONLY**: Only return spans you haven't provided before
+
+**Instructions**:
+- Create noun phrases, verb phrases, prepositional phrases
+- Mark clause and sentence boundaries  
+- Generate compound and complex structural spans
+- Use precise text snippets (I calculate positions automatically)
+
+{% endif %}
+
+**Target**: Generate as many linguistically valid spans as possible!
+
+**IMPORTANT**: 
+- Do NOT repeat previous spans
+- Do NOT provide identical JSON responses  
+- If you cannot find new spans, return an empty array: []
+- **Focus on span quantity** - more valid spans = better results
+
+Return ONLY the NEW spans as a JSON array. Maximize your span generation!

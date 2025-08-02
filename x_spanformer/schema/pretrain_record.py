@@ -5,24 +5,41 @@ from x_spanformer.schema.metadata import RecordMeta
 
 
 class PretrainRecord(BaseModel):
-    raw: str = Field(..., description="The raw text segment extracted from source material")
-    type: Optional[str] = Field(default=None, description="Content type classification: natural, code, or mixed")
-    id: Optional[RecordID] = Field(default_factory=RecordID, description="Globally unique record ID")
-    meta: RecordMeta = Field(default_factory=lambda: RecordMeta(**{}), description="Metadata about the segment")
+    """
+    Enhanced PretrainRecord schema for X-Spanformer pipelines.
+    
+    Supports the complete pipeline flow from corpus generation through embedding
+    generation to span annotation. Compatible with all existing pipelines while
+    adding support for position-wise embedding alignment.
+    """
+    raw: str = Field(..., description="The raw Unicode text sequence for processing")
+    type: Optional[str] = Field(default=None, description="Content domain type: natural, code, or mixed")
+    id: Optional[RecordID] = Field(default_factory=RecordID, description="Globally unique record identifier")
+    meta: RecordMeta = Field(default_factory=lambda: RecordMeta(**{}), description="Processing metadata and source information")
+    
+    # New fields for embedding and annotation alignment
+    sequence_number: Optional[int] = Field(default=None, description="Sequential position in corpus for embedding lookup")
+    embedding_chunk_id: Optional[int] = Field(default=None, description="Chunk ID containing position-wise embeddings for this sequence")
+    embedding_positions: Optional[int] = Field(default=None, description="Number of position-wise embeddings (sequence length)")
 
     model_config = ConfigDict(
         json_schema_extra = {
             "example": {
                 "raw": "The quick brown fox jumps over the lazy dog.",
                 "type": "natural",
-                "id": {"id": "3d3e1e3e-8f6b-4a9a-9fc6-efedc5f805a8"},
+                "id": {"id": "corpus-seq-00000001"},
                 "meta": {
-                    "tags": ["example", "english", "simple"],
+                    "tags": ["natural", "example"],
                     "doc_language": "en",
-                    "extracted_by": "pdf2seg v0.3.1",
+                    "extracted_by": "jsonl2vocab",
                     "confidence": 0.95,
-                    "source_file": "fox-example-2025.pdf"
-                }
+                    "source_file": "corpus.jsonl",
+                    "sequence_number": 1,
+                    "status": "keep"
+                },
+                "sequence_number": 1,
+                "embedding_chunk_id": 1,
+                "embedding_positions": 44
             }
         }
     )

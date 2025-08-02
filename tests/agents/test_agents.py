@@ -3,14 +3,14 @@ import re
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 
 import yaml
 from x_spanformer.agents import (
-    config_loader,
     ollama_client,
     prompts,
 )
+from x_spanformer.config import judge_config_loader
 from x_spanformer.agents.dialogue import DialogueManager
 from x_spanformer.agents.session import (
     JudgeSession,
@@ -28,12 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 class TestAgents(unittest.TestCase):
     def setUp(self):
-        self.test_dir = Path(__file__).parent / "test_agent_data"
-        self.test_dir.mkdir(exist_ok=True)
-        self.config_dir = self.test_dir / "config"
-        self.config_dir.mkdir(exist_ok=True)
-        self.templates_dir = self.test_dir / "templates"
-        self.templates_dir.mkdir(exist_ok=True)
+        """Set up test fixtures with mock data."""
         self.dummy_config = {
             "agent_type": "test_agent",
             "model": {"name": "test_model", "temperature": 0.1},
@@ -49,21 +44,27 @@ class TestAgents(unittest.TestCase):
             "regex_filters": [{"pattern": "badword"}],
             "templates": {"system": "system_prompt", "judge": "judge_prompt"},
         }
-        with (self.config_dir / "test.yaml").open("w") as f:
-            yaml.dump(self.dummy_config, f)
-        with (self.templates_dir / "test_prompt.j2").open("w") as f:
-            f.write("Hello {{name}}")
 
-    def tearDown(self):
-        import shutil
-
-        shutil.rmtree(self.test_dir)
-
-    @patch("x_spanformer.agents.config_loader.Path")
-    def test_config_loader(self, mock_path):
-        mock_path.return_value.parent.__truediv__.return_value = self.config_dir
-        cfg = config_loader.load_judge_config("test.yaml")
+    @patch("x_spanformer.config.judge_config_loader.Path")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("yaml.safe_load")
+    def test_config_loader(self, mock_yaml_load, mock_file_open, mock_path):
+        """Test config loader with mocked file system."""
+        # Mock YAML loading to return our test config
+        mock_yaml_load.return_value = self.dummy_config
+        
+        # Mock path existence check
+        mock_path_instance = MagicMock()
+        mock_path_instance.exists.return_value = True
+        mock_path.return_value.parent.parent.parent.__truediv__.return_value.__truediv__.return_value.__truediv__.return_value = mock_path_instance
+        
+        # Suppress console output
+        with patch("x_spanformer.config.judge_config_loader.c"):
+            cfg = judge_config_loader.load_judge_config("test.yaml", quiet=True)
+            
         self.assertEqual(cfg["agent_type"], "test_agent")
+        self.assertEqual(cfg["model"]["name"], "test_model")
+        self.assertEqual(cfg["judge"]["judges"], 5)
 
     def test_dialogue_manager(self):
         dm = DialogueManager(max_turns=1)

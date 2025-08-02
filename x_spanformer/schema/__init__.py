@@ -1,6 +1,7 @@
 # x_spanformer/schema/__init__.py
 from .pretrain_record import PretrainRecord
 from .training_record import TrainingRecord
+from .annotation_record import AnnotationRecord, SpanAnnotation, AnnotationBatch
 from .span import SpanLabel
 from .scoring import EntropyProfile
 from .source import SourceInfo
