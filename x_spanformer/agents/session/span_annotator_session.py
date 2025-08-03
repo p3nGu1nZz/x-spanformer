@@ -32,7 +32,7 @@ from x_spanformer.schema.annotation_record import (
 from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.metadata import RecordMeta
 
-
+# Initialize logger - will be configured by pipeline
 logger = logging.getLogger(__name__)
 
 
@@ -340,9 +340,15 @@ class SpanAnnotatorSession:
         """
         start_time = asyncio.get_event_loop().time()
         
+        # Log processing start using the module logger
+        logger.info(f"[SESSION] Starting annotation processing for sequence {task.sequence_id}")
+        logger.info(f"[SESSION] Text length: {len(task.text)} chars")
+        logger.info(f"[SESSION] Text preview: {task.text[:100]}{'...' if len(task.text) > 100 else ''}")
+        
         try:
             async with self.semaphore:
                 # Log which sequence is being processed (now inside semaphore)
+                logger.info(f"[SESSION] Acquired semaphore for sequence {task.sequence_id}")
                 logger.info(f"[PROCESSING] Sequence {task.sequence_id} (length: {len(task.text)} chars)")
                 # Initialize position mapper
                 mapper = PositionMapper(task.text)
@@ -366,6 +372,10 @@ class SpanAnnotatorSession:
                 
                 # Initial annotation request
                 initial_request = self.get_initial_annotation_request(task.text, domain_type)
+                logger.info(f"[TURN 1] Starting initial annotation request for sequence {task.sequence_id}")
+                logger.info(f"[TURN 1] Request text length: {len(initial_request)} chars")
+                logger.info(f"[TURN 1] Domain type: {domain_type}")
+                logger.debug(f"[TURN 1] Full request: {initial_request}")
                 
                 try:
                     response = await asyncio.wait_for(
@@ -375,6 +385,10 @@ class SpanAnnotatorSession:
                         ),
                         timeout=self.conversation_timeout
                     )
+                    logger.info(f"[TURN 1] Received LLM response for sequence {task.sequence_id}")
+                    logger.info(f"[TURN 1] Response length: {len(response)} chars")
+                    logger.info(f"[TURN 1] Full LLM response: {response}")
+                    
                     all_responses.append({
                         "role": "user",
                         "content": initial_request
@@ -395,6 +409,7 @@ class SpanAnnotatorSession:
                         })
                     
                     # Extract spans from initial response
+                    logger.info(f"[TURN 1] Starting span extraction from LLM response...")
                     from x_spanformer.pipelines.shared.annotation_processor import AnnotationProcessor
                     processor = AnnotationProcessor()
                     domain_enum = {
@@ -409,6 +424,18 @@ class SpanAnnotatorSession:
                         XBarClassifierMap.get_classifier_names(domain_enum)
                     )
                     all_spans.extend(initial_spans)
+                    logger.info(f"[TURN 1] Extracted {len(initial_spans)} spans from initial response for sequence {task.sequence_id}")
+                    
+                    if len(initial_spans) == 0:
+                        logger.warning(f"[TURN 1] No spans found in initial response for sequence {task.sequence_id}")
+                        logger.warning(f"[TURN 1] This might indicate LLM format issues or parsing problems")
+                    else:
+                        logger.info(f"[TURN 1] Successfully extracted spans:")
+                        for i, span in enumerate(initial_spans[:5]):  # Show first 5 spans
+                            text = task.text[span.start_char:span.end_char]
+                            logger.info(f"[TURN 1]   {i+1}. {span.xbar_class}: '{text}' (pos {span.start_char}-{span.end_char})")
+                        if len(initial_spans) > 5:
+                            logger.info(f"[TURN 1]   ... and {len(initial_spans) - 5} more spans")
                     
                     # Update progress after initial extraction
                     if progress_callback:
@@ -437,6 +464,10 @@ class SpanAnnotatorSession:
                         followup_request = self.generate_followup_request(
                             task.text, domain_type, turns_used + 1, span_texts
                         )
+                        logger.info(f"[TURN {turns_used + 1}] Starting follow-up turn for sequence {task.sequence_id}")
+                        logger.info(f"[TURN {turns_used + 1}] Current total spans: {len(all_spans)}")
+                        logger.info(f"[TURN {turns_used + 1}] Request length: {len(followup_request)} chars")
+                        logger.debug(f"[TURN {turns_used + 1}] Full request: {followup_request}")
                         
                         try:
                             followup_response = await asyncio.wait_for(
@@ -446,6 +477,9 @@ class SpanAnnotatorSession:
                                 ),
                                 timeout=self.conversation_timeout
                             )
+                            logger.info(f"[TURN {turns_used + 1}] Received LLM response for sequence {task.sequence_id}")
+                            logger.info(f"[TURN {turns_used + 1}] Response length: {len(followup_response)} chars")
+                            logger.info(f"[TURN {turns_used + 1}] Full LLM response: {followup_response}")
                             
                             all_responses.append({
                                 "role": "user",
@@ -467,18 +501,26 @@ class SpanAnnotatorSession:
                                 })
                             
                             # Extract new spans
+                            logger.info(f"[TURN {turns_used}] Starting span extraction from follow-up response...")
                             new_spans = processor.extract_spans_from_comprehensive_response(
                                 followup_response,
                                 task.text,
                                 XBarClassifierMap.get_classifier_names(domain_enum)
                             )
+                            logger.info(f"[TURN {turns_used}] Extracted {len(new_spans)} new spans from follow-up response")
                             
-                            # Track extraction success
-                            if not new_spans:
+                            if len(new_spans) == 0:
+                                logger.warning(f"[TURN {turns_used}] No new spans found in follow-up response")
                                 consecutive_failed_extractions += 1
-                                logger.warning(f"No spans extracted from follow-up turn {turns_used} for sequence {task.sequence_id}")
+                                logger.warning(f"[TURN {turns_used}] Consecutive failed extractions: {consecutive_failed_extractions}/{failed_extraction_threshold}")
                             else:
-                                consecutive_failed_extractions = 0
+                                logger.info(f"[TURN {turns_used}] Successfully extracted new spans:")
+                                for i, span in enumerate(new_spans[:3]):  # Show first 3 spans
+                                    text = task.text[span.start_char:span.end_char]
+                                    logger.info(f"[TURN {turns_used}]   {i+1}. {span.xbar_class}: '{text}' (pos {span.start_char}-{span.end_char})")
+                                if len(new_spans) > 3:
+                                    logger.info(f"[TURN {turns_used}]   ... and {len(new_spans) - 3} more spans")
+                                consecutive_failed_extractions = 0  # Reset on success
                             
                             # Add only truly new spans (avoid duplicates)
                             initial_span_count = len(all_spans)
@@ -489,12 +531,15 @@ class SpanAnnotatorSession:
                                     all_spans.append(new_span)
                             
                             # Check for improvement
-                            if len(all_spans) == initial_span_count:
+                            unique_new_spans = len(all_spans) - initial_span_count
+                            if unique_new_spans == 0:
                                 no_improvement_count += 1
-                                logger.info(f"No new spans found in turn {turns_used} (no improvement count: {no_improvement_count})")
+                                logger.warning(f"[TURN {turns_used}] No unique new spans added (duplicates filtered)")
+                                logger.warning(f"[TURN {turns_used}] No improvement count: {no_improvement_count}/{no_improvement_threshold}")
                             else:
                                 no_improvement_count = 0
-                                logger.info(f"Found {len(all_spans) - initial_span_count} new spans in turn {turns_used}")
+                                logger.info(f"[TURN {turns_used}] Added {unique_new_spans} unique new spans")
+                                logger.info(f"[TURN {turns_used}] Total spans now: {len(all_spans)}")
                             
                             # Progress callback after extraction
                             if progress_callback:
@@ -510,23 +555,48 @@ class SpanAnnotatorSession:
                             
                             # Early termination if LLM is clearly not improving
                             if early_termination_enabled and consecutive_failed_extractions >= failed_extraction_threshold:
-                                logger.info(f"Terminating early due to consecutive failed extractions for sequence {task.sequence_id}")
+                                logger.warning(f"[TERMINATION] Early termination due to {consecutive_failed_extractions} consecutive failed extractions")
+                                logger.warning(f"[TERMINATION] Sequence {task.sequence_id} stopped at turn {turns_used}")
+                                break
+                            
+                            # Check other termination conditions
+                            if no_improvement_count >= no_improvement_threshold:
+                                logger.warning(f"[TERMINATION] No improvement for {no_improvement_count} turns")
+                                logger.warning(f"[TERMINATION] Sequence {task.sequence_id} stopped at turn {turns_used}")
+                                break
+                                
+                            if turns_used >= max_turns:
+                                logger.warning(f"[TERMINATION] Maximum turns ({max_turns}) reached")
+                                logger.warning(f"[TERMINATION] Sequence {task.sequence_id} stopped at turn {turns_used}")
                                 break
                             
                             # Small delay between turns
                             await asyncio.sleep(0.1)
                             
                         except asyncio.TimeoutError:
-                            logger.warning(f"Timeout on turn {turns_used + 1} for sequence {task.sequence_id}")
+                            logger.error(f"[TIMEOUT] Turn {turns_used + 1} timed out for sequence {task.sequence_id}")
+                            logger.error(f"[TIMEOUT] Timeout threshold: {self.conversation_timeout}s")
                             break
                         except Exception as e:
-                            logger.error(f"Error in turn {turns_used + 1} for sequence {task.sequence_id}: {e}")
+                            logger.error(f"[ERROR] Turn {turns_used + 1} failed for sequence {task.sequence_id}: {e}")
+                            logger.error(f"[ERROR] Exception type: {type(e).__name__}")
                             break
                     
-                    logger.info(f"Completed annotation for sequence {task.sequence_id}: {len(all_spans)} spans in {turns_used} turns")
+                    # Conversation completion summary
+                    logger.info(f"[SUMMARY] Conversation completed for sequence {task.sequence_id}")
+                    logger.info(f"[SUMMARY] Total turns used: {turns_used}/{max_turns}")
+                    logger.info(f"[SUMMARY] Total spans extracted: {len(all_spans)}")
+                    logger.info(f"[SUMMARY] Final termination reason: " + 
+                              ("Max turns reached" if turns_used >= max_turns else
+                               f"Early termination ({consecutive_failed_extractions} failed extractions)" if consecutive_failed_extractions >= failed_extraction_threshold else
+                               f"No improvement ({no_improvement_count} turns)" if no_improvement_count >= no_improvement_threshold else
+                               "Normal completion"))
                     
                 except Exception as e:
-                    logger.error(f"Failed initial annotation for sequence {task.sequence_id}: {e}")
+                    logger.error(f"[FATAL] Failed initial annotation for sequence {task.sequence_id}")
+                    logger.error(f"[FATAL] Exception type: {type(e).__name__}")
+                    logger.error(f"[FATAL] Exception details: {str(e)}")
+                    logger.error(f"[FATAL] Initial request preview: {initial_request[:200]}{'...' if len(initial_request) > 200 else ''}")
                     all_spans = []
                     # Ensure we still capture any conversation history that occurred before the failure
                     if turns_used == 0:
@@ -542,13 +612,16 @@ class SpanAnnotatorSession:
                 
                 # Convert to position spans using collected spans
                 char_spans = all_spans
-                logger.info(f"Total character spans collected: {len(char_spans)}")
+                logger.info(f"[VALIDATION] Starting span conversion and validation...")
+                logger.info(f"[VALIDATION] Total character spans collected: {len(char_spans)}")
                 
                 # Convert to position spans
                 position_spans = mapper.batch_char_to_position(char_spans)
+                logger.info(f"[VALIDATION] Converted to {len(position_spans)} position spans")
                 
                 # Validate spans
                 validated_spans = []
+                invalid_count = 0
                 for pos_span, issues in mapper.validate_position_spans(position_spans):
                     if not issues:
                         validated_spans.append(SpanAnnotation(
@@ -562,22 +635,39 @@ class SpanAnnotatorSession:
                             }
                         ))
                     else:
-                        logger.warning(f"Invalid span for sequence {task.sequence_id}: {issues}")
+                        invalid_count += 1
+                        span_length = pos_span.end_pos - pos_span.start_pos
+                        span_text = mapper.get_position_text(pos_span.start_pos, pos_span.end_pos) if pos_span.start_pos < len(task.text) and pos_span.end_pos <= len(task.text) else "INVALID_BOUNDS"
+                        logger.warning(f"[VALIDATION] Invalid span rejected: {issues}")
+                        logger.warning(f"[VALIDATION] Invalid span details: {pos_span.xbar_class} at [{pos_span.start_pos}-{pos_span.end_pos}] length={span_length} text='{span_text}'")
+                
+                logger.info(f"[VALIDATION] Validation complete:")
+                logger.info(f"[VALIDATION]   - Valid spans: {len(validated_spans)}")
+                logger.info(f"[VALIDATION]   - Invalid spans rejected: {invalid_count}")
+                logger.info(f"[VALIDATION]   - Validation success rate: {len(validated_spans)/(len(validated_spans)+invalid_count)*100:.1f}%" if (len(validated_spans)+invalid_count) > 0 else "[VALIDATION]   - No spans to validate")
                 
                 # Create annotation record
                 # Validate conversation_turns format before creating AnnotationRecord
                 validated_conversation_turns = []
+                invalid_turns = 0
                 for turn in all_responses:
                     if not isinstance(turn, dict):
-                        logger.warning(f"Invalid turn format (not dict): {turn}")
+                        invalid_turns += 1
+                        logger.warning(f"[VALIDATION] Invalid turn format (not dict): {type(turn)}")
                         continue
                     if "role" not in turn or "content" not in turn:
-                        logger.warning(f"Invalid turn format (missing role/content): {turn}")
+                        invalid_turns += 1
+                        logger.warning(f"[VALIDATION] Invalid turn format (missing role/content): {list(turn.keys())}")
                         continue
                     if not isinstance(turn["role"], str) or not isinstance(turn["content"], str):
-                        logger.warning(f"Invalid turn format (non-string values): {turn}")
+                        invalid_turns += 1
+                        logger.warning(f"[VALIDATION] Invalid turn format (non-string values): role={type(turn['role'])}, content={type(turn['content'])}")
                         continue
                     validated_conversation_turns.append(turn)
+                
+                logger.info(f"[VALIDATION] Conversation validation:")
+                logger.info(f"[VALIDATION]   - Valid turns: {len(validated_conversation_turns)}")
+                logger.info(f"[VALIDATION]   - Invalid turns rejected: {invalid_turns}")
                 
                 annotation_record = AnnotationRecord(
                     raw=task.text,

@@ -80,6 +80,47 @@ class PipelineLogger:
         return logger
     
     @staticmethod
+    def configure_module_logger(pipeline_logger: logging.Logger, module_name: str) -> logging.Logger:
+        """
+        Configure a module logger to use the same handlers and settings as the pipeline logger.
+        
+        Args:
+            pipeline_logger: The main pipeline logger with configured handlers
+            module_name: Name of the module to configure logging for
+            
+        Returns:
+            Configured module logger
+        """
+        module_logger = logging.getLogger(module_name)
+        
+        # Clear existing handlers to avoid duplicates
+        module_logger.handlers.clear()
+        
+        # Copy handlers from pipeline logger
+        for handler in pipeline_logger.handlers:
+            module_logger.addHandler(handler)
+        
+        # Set same level as pipeline logger
+        module_logger.setLevel(pipeline_logger.level)
+        
+        # Prevent propagation to avoid duplicate messages
+        module_logger.propagate = False
+        
+        return module_logger
+    
+    @staticmethod
+    def configure_all_module_loggers(pipeline_logger: logging.Logger, module_names: List[str]):
+        """
+        Configure multiple module loggers to use the same handlers as the pipeline logger.
+        
+        Args:
+            pipeline_logger: The main pipeline logger with configured handlers
+            module_names: List of module names to configure
+        """
+        for module_name in module_names:
+            PipelineLogger.configure_module_logger(pipeline_logger, module_name)
+    
+    @staticmethod
     def setup_from_config(config, pipeline_name: str) -> logging.Logger:
         """
         Set up logging from a configuration object.
