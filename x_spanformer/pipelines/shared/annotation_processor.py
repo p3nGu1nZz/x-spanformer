@@ -6,10 +6,12 @@ span boundaries, and converting between different annotation formats.
 """
 
 import json
+import logging
 import re
+import shutil
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
-import logging
 
 from x_spanformer.xbar.position_mapper import (
     CharacterSpan,
@@ -468,3 +470,208 @@ class AnnotationProcessor:
         
         mapper = PositionMapper(text=text)
         return mapper.batch_char_to_position(spans)
+    
+    def calculate_working_file_statistics(self, working_dir: Path) -> Dict[str, int]:
+        """
+        Calculate actual statistics from working files for metadata accuracy.
+        
+        Args:
+            working_dir: Directory containing working files (e.g., output_dir/working)
+            
+        Returns:
+            Dictionary with actual counts from working files
+        """
+        if not working_dir.exists():
+            logger.warning(f"Working directory does not exist: {working_dir}")
+            return {
+                "total_files": 0,
+                "successful_count": 0,
+                "failed_count": 0,
+                "total_spans": 0
+            }
+        
+        total_files = 0
+        successful_count = 0
+        failed_count = 0
+        total_spans = 0
+        
+        for working_file in working_dir.glob("corpus-seq-*.json"):
+            try:
+                with open(working_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                total_files += 1
+                annotation_session = data.get("annotation_session", {})
+                status = annotation_session.get("annotation_status", "unknown")
+                spans = annotation_session.get("spans_extracted", 0)
+                
+                if status == "completed" and spans > 0:
+                    successful_count += 1
+                    total_spans += spans
+                else:
+                    failed_count += 1
+                    
+            except Exception as e:
+                logger.warning(f"Failed to read working file {working_file}: {e}")
+                total_files += 1
+                failed_count += 1
+        
+        logger.info(f"Working file statistics: {total_files} total, {successful_count} successful, {failed_count} failed, {total_spans} spans")
+        
+        return {
+            "total_files": total_files,
+            "successful_count": successful_count,
+            "failed_count": failed_count,
+            "total_spans": total_spans
+        }
+    
+    def update_metadata_file(
+        self, 
+        metadata_file: Path, 
+        processed_count: int, 
+        successful_count: int,
+        failed_count: int,
+        total_spans: int,
+        agent_stats: Optional[Dict[str, Any]] = None
+    ):
+        """
+        Update metadata file with processing progress and quality metrics.
+        
+        Args:
+            metadata_file: Path to metadata.json file
+            processed_count: Total number of processed sequences
+            successful_count: Number of successfully processed sequences
+            failed_count: Number of failed sequences
+            total_spans: Total number of spans extracted
+            agent_stats: Optional agent statistics dictionary
+        """
+        try:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                metadata: Dict[str, Any] = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            metadata: Dict[str, Any] = {
+                "pipeline_version": "1.0",
+                "started_at": datetime.now().isoformat()
+            }
+        
+        # Calculate quality metrics
+        avg_spans_per_sequence = total_spans / max(1, successful_count)
+        success_rate = successful_count / max(1, processed_count)
+        
+        # Update counts and quality metrics
+        metadata["last_updated"] = datetime.now().isoformat()
+        metadata["processed_sequences"] = processed_count
+        metadata["successful_annotations"] = successful_count
+        metadata["failed_annotations"] = failed_count
+        metadata["total_spans"] = total_spans
+        metadata["quality_metrics"] = {
+            "avg_spans_per_sequence": round(avg_spans_per_sequence, 2),
+            "success_rate": round(success_rate, 4),
+            "annotation_density": round(total_spans / max(1, processed_count), 2),
+            "pipeline_efficiency": "real_time_writing_enabled"
+        }
+        
+        if agent_stats:
+            metadata["agent_stats"] = agent_stats
+        
+        # Write atomically using temporary file
+        temp_file = metadata_file.with_suffix('.tmp')
+        with open(temp_file, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2)
+        
+        temp_file.replace(metadata_file)
+        logger.debug(f"Updated metadata: {processed_count} processed, {successful_count} successful, {failed_count} failed")
+    
+    def fix_metadata_from_working_files(self, output_dir: Path, agent_stats: Optional[Dict[str, Any]] = None):
+        """
+        Fix metadata.json by recalculating from working files.
+        
+        Args:
+            output_dir: Output directory containing working files and metadata.json
+            agent_stats: Optional agent statistics to include
+        """
+        working_dir = output_dir / "working"
+        metadata_file = output_dir / "metadata.json"
+        
+        logger.info("Fixing metadata.json by recalculating from working files...")
+        
+        # Calculate actual statistics from working files
+        actual_stats = self.calculate_working_file_statistics(working_dir)
+        
+        # Update metadata with corrected statistics
+        self.update_metadata_file(
+            metadata_file,
+            actual_stats["total_files"],
+            actual_stats["successful_count"],
+            actual_stats["failed_count"],
+            actual_stats["total_spans"],
+            agent_stats
+        )
+        
+        # Verify the fix
+        if metadata_file.exists():
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            
+            logger.info(f"Metadata fixed:")
+            logger.info(f"  - Processed sequences: {metadata.get('processed_sequences', 0)}")
+            logger.info(f"  - Successful annotations: {metadata.get('successful_annotations', 0)}")
+            logger.info(f"  - Failed annotations: {metadata.get('failed_annotations', 0)}")
+            logger.info(f"  - Total spans: {metadata.get('total_spans', 0)}")
+            logger.info(f"  - Success rate: {metadata.get('quality_metrics', {}).get('success_rate', 0):.1%}")
+        else:
+            logger.error("Failed to fix metadata - file not found")
+        
+        return actual_stats
+    
+    def analyze_processing_gaps(self, working_dir: Path, target_sequence_ids: List[int]) -> Dict[str, Any]:
+        """
+        Analyze gaps in processing by comparing working files to target sequences.
+        
+        Args:
+            working_dir: Directory containing working files
+            target_sequence_ids: List of all sequence IDs that should be processed
+            
+        Returns:
+            Dictionary with gap analysis results
+        """
+        if not working_dir.exists():
+            return {
+                "total_target_sequences": len(target_sequence_ids),
+                "working_files_found": 0,
+                "missing_sequences": target_sequence_ids,
+                "max_processed_id": 0,
+                "gaps_within_range": []
+            }
+        
+        # Find existing working files
+        existing_sequence_ids = set()
+        for working_file in working_dir.glob("corpus-seq-*.json"):
+            try:
+                # Extract sequence number from filename
+                filename = working_file.stem  # corpus-seq-00000001
+                seq_num_str = filename.split('-')[-1]  # 00000001
+                seq_num = int(seq_num_str)
+                existing_sequence_ids.add(seq_num)
+            except (ValueError, IndexError):
+                logger.warning(f"Could not parse sequence number from {working_file}")
+        
+        # Find maximum processed sequence ID
+        max_processed_id = max(existing_sequence_ids) if existing_sequence_ids else 0
+        
+        # Find missing sequences (gaps) within the processed range
+        target_set = set(target_sequence_ids)
+        processed_range_targets = {seq_id for seq_id in target_set if seq_id <= max_processed_id}
+        gaps_within_range = sorted(processed_range_targets - existing_sequence_ids)
+        
+        # Find all missing sequences
+        missing_sequences = sorted(target_set - existing_sequence_ids)
+        
+        return {
+            "total_target_sequences": len(target_sequence_ids),
+            "working_files_found": len(existing_sequence_ids),
+            "missing_sequences": missing_sequences,
+            "max_processed_id": max_processed_id,
+            "gaps_within_range": gaps_within_range,
+            "existing_sequence_ids": sorted(existing_sequence_ids)
+        }
