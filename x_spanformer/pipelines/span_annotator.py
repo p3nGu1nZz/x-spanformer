@@ -368,28 +368,43 @@ class SpanAnnotatorPipeline:
     
     def find_missing_sequences(self, target_sequences: List[PretrainRecord], existing_results: Dict[int, str]) -> List[int]:
         """
-        Find sequences that don't have working files at all (completely missing).
+        Find sequences that are missing within the processed range (gaps).
+        Only considers sequences as missing if they fall within the range of processed sequences.
         
         Args:
             target_sequences: List of all sequences to process
             existing_results: Dict mapping sequence_id -> status for sequences with working files
             
         Returns:
-            List of sequence numbers that have no working files
+            List of sequence numbers that represent gaps in processing
         """
+        if not existing_results:
+            # Fresh run - no sequences are "missing", they're just unprocessed
+            logger.info("Fresh run detected - no existing working files found")
+            return []
+        
+        # Find the highest processed sequence ID
+        max_processed_id = max(existing_results.keys()) if existing_results else 0
+        
+        # Get all target sequence IDs within the processed range
+        target_sequence_ids = {record.sequence_number for record in target_sequences 
+                             if record.sequence_number is not None and record.sequence_number <= max_processed_id}
+        
+        # Find gaps: sequences within processed range that don't have working files
         missing_sequence_numbers = []
+        for seq_id in target_sequence_ids:
+            if seq_id not in existing_results:
+                missing_sequence_numbers.append(seq_id)
         
-        for record in target_sequences:
-            if record.sequence_number not in existing_results:
-                # This sequence has no working file at all
-                missing_sequence_numbers.append(record.sequence_number)
-        
-        logger.info(f"Found {len(missing_sequence_numbers)} sequences without working files")
-        if missing_sequence_numbers and len(missing_sequence_numbers) <= 20:
-            logger.info(f"Missing sequences: {sorted(missing_sequence_numbers)}")
-        elif missing_sequence_numbers:
-            sample = sorted(missing_sequence_numbers)[:10]
-            logger.info(f"Missing sequences (sample): {sample}... and {len(missing_sequence_numbers) - 10} more")
+        if missing_sequence_numbers:
+            logger.info(f"Found {len(missing_sequence_numbers)} gap sequences (within processed range 1-{max_processed_id})")
+            if len(missing_sequence_numbers) <= 20:
+                logger.info(f"Gap sequences: {sorted(missing_sequence_numbers)}")
+            else:
+                sample = sorted(missing_sequence_numbers)[:10]
+                logger.info(f"Gap sequences (sample): {sample}... and {len(missing_sequence_numbers) - 10} more")
+        else:
+            logger.info(f"No gaps found within processed range (1-{max_processed_id})")
         
         return missing_sequence_numbers
     
@@ -667,47 +682,62 @@ class SpanAnnotatorPipeline:
         # Load existing results for resume
         existing_results = self.load_existing_results(output_dir) if resume else {}
         
-        # Find missing sequences - those without working files
-        missing_sequences = self.find_missing_sequences(target_sequences, existing_results)
+        # Find gap sequences - those missing within the processed range
+        gap_sequences = self.find_missing_sequences(target_sequences, existing_results)
         
-        # Filter sequences to process - retry failed sequences, skip completed ones, include missing
+        # Categorize sequences for processing
         sequences_to_process = []
         failed_sequences_to_retry = []
-        missing_sequences_to_process = []
+        gap_sequences_to_process = []
         completed_count = 0
+        new_sequences_count = 0
+        
+        # Get highest processed sequence ID for categorization
+        max_processed_id = max(existing_results.keys()) if existing_results else 0
         
         for record in target_sequences:
             if record.sequence_number in existing_results:
                 status = existing_results[record.sequence_number]
                 if status == "completed":
-                    logger.info(f"Skipping completed sequence {record.sequence_number}")
                     self.stats["processed_sequences"] += 1
                     self.stats["successful_annotations"] += 1
                     completed_count += 1
                     continue
                 elif status == "failed":
-                    logger.info(f"Retrying failed sequence {record.sequence_number}")
                     failed_sequences_to_retry.append(record)
                     continue
-            elif record.sequence_number in missing_sequences:
-                logger.info(f"Found missing sequence {record.sequence_number} (no working file)")
-                missing_sequences_to_process.append(record)
+            elif record.sequence_number in gap_sequences:
+                # This is a gap within the processed range
+                gap_sequences_to_process.append(record)
+                continue
+            elif record.sequence_number is not None and record.sequence_number > max_processed_id:
+                # This is a new sequence beyond the processed range
+                sequences_to_process.append(record)
+                new_sequences_count += 1
                 continue
             
+            # Should not reach here, but add to new sequences as fallback
             sequences_to_process.append(record)
+            new_sequences_count += 1
         
         # Initialize telemetry with already completed sequences
         self.telemetry["completed_sequences"] = completed_count
         
-        # Process in priority order: failed sequences first, then missing sequences, then new sequences
+        # Process in priority order: failed sequences first, then gaps, then new sequences
         # This ensures we fill gaps in completed sequences before continuing with new ones
-        all_sequences_to_process = failed_sequences_to_retry + missing_sequences_to_process + sequences_to_process
+        all_sequences_to_process = failed_sequences_to_retry + gap_sequences_to_process + sequences_to_process
+        
+        # Improved logging with proper categorization
+        if existing_results:
+            logger.info(f"Resume mode: Found {len(existing_results)} existing working files (highest ID: {max_processed_id})")
+        else:
+            logger.info(f"Fresh run: No existing working files found")
         
         logger.info(f"Processing {len(all_sequences_to_process)} sequences:")
         logger.info(f"  - Retrying {len(failed_sequences_to_retry)} failed sequences")
-        logger.info(f"  - Processing {len(missing_sequences_to_process)} missing sequences (no working files)")
-        logger.info(f"  - Processing {len(sequences_to_process)} new sequences")
-        logger.info(f"  - Skipped {len(target_sequences) - len(all_sequences_to_process)} completed sequences")
+        logger.info(f"  - Processing {len(gap_sequences_to_process)} gap sequences (within processed range)")
+        logger.info(f"  - Processing {new_sequences_count} new sequences (beyond processed range)")
+        logger.info(f"  - Skipped {completed_count} completed sequences")
         
         # Process sequences in batches
         batch_size = self.config.processing.batch_size

@@ -72,7 +72,7 @@ async def check_ollama_connection(model: str) -> bool:
 		
 		# Check if model is loaded
 		if check_model_loaded(model, result.stdout):
-			print(f"✅ Model {model} is loaded and ready")
+			logger.info(f"[SUCCESS] Model {model} is loaded and ready")
 			return True
 		else:
 			logger.error(f"Model {model} is not loaded. Please run: ollama run {model}")
