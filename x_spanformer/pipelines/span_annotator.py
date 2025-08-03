@@ -31,6 +31,8 @@ from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.annotation_record import AnnotationRecord, AnnotationBatch
 from x_spanformer.config.span_annotator_config_loader import load_config
 from x_spanformer.pipelines.shared.annotation_processor import AnnotationProcessor
+from x_spanformer.pipelines.shared.pipeline_telemetry import SpanAnnotationTelemetry
+from x_spanformer.pipelines.shared.pipeline_logging import setup_logging, SpanAnnotationLogger
 
 logger = logging.getLogger(__name__)
 
@@ -50,35 +52,46 @@ class SpanAnnotatorPipeline:
         self.annotation_processor = AnnotationProcessor()
         
         # Load agent configuration if provided
-        if agent_config_path:
-            # For now, we'll pass individual parameters to the agent
-            # TODO: Create agent config loader if needed
-            agent_config_file = Path(agent_config_path)
-            if agent_config_file.exists():
-                import yaml
-                with open(agent_config_file, 'r', encoding='utf-8') as f:
-                    agent_config = yaml.safe_load(f)
-                
-                model_config = agent_config.get("model", {})
-                model_name = model_config.get("name", "phi4-mini")
-                temperature = model_config.get("temperature", 0.1)
-                
-                # Extract dialogue configuration
-                dialogue_config = agent_config.get("dialogue", {})
-                max_turns = dialogue_config.get("max_turns", 16)
-                
-                # Extract early termination config
-                early_termination_config = agent_config.get("agent", {}).get("early_termination")
-            else:
-                model_name = "phi4-mini"
-                temperature = 0.1
-                max_turns = 16
-                early_termination_config = None
-        else:
-            model_name = "phi4-mini"
-            temperature = 0.1
-            max_turns = 16
-            early_termination_config = None
+        agent_config_path = agent_config_path or "config/agents/span_annotator_agent.yaml"
+        agent_config_file = Path(agent_config_path)
+        
+        if not agent_config_file.exists():
+            raise FileNotFoundError(f"Agent configuration file not found: {agent_config_file}")
+        
+        try:
+            import yaml
+            with open(agent_config_file, 'r', encoding='utf-8') as f:
+                agent_config = yaml.safe_load(f)
+            
+            if not agent_config:
+                raise ValueError(f"Agent configuration file is empty or invalid: {agent_config_file}")
+            
+            model_config = agent_config.get("model", {})
+            if not model_config:
+                raise ValueError(f"Missing 'model' section in agent config: {agent_config_file}")
+            
+            model_name = model_config.get("name")
+            if not model_name:
+                raise ValueError(f"Missing 'model.name' in agent config: {agent_config_file}")
+            
+            temperature = model_config.get("temperature")
+            if temperature is None:
+                raise ValueError(f"Missing 'model.temperature' in agent config: {agent_config_file}")
+            
+            # Extract dialogue configuration
+            dialogue_config = agent_config.get("dialogue", {})
+            if not dialogue_config:
+                raise ValueError(f"Missing 'dialogue' section in agent config: {agent_config_file}")
+            
+            max_turns = dialogue_config.get("max_turns")
+            if max_turns is None:
+                raise ValueError(f"Missing 'dialogue.max_turns' in agent config: {agent_config_file}")
+            
+            # Extract early termination config
+            early_termination_config = agent_config.get("agent", {}).get("early_termination")
+            
+        except Exception as e:
+            raise RuntimeError(f"Failed to load agent configuration from {agent_config_file}: {e}")
         
         # Initialize span annotator session
         self.agent = SpanAnnotatorSession(
@@ -87,6 +100,7 @@ class SpanAnnotatorPipeline:
             max_retries=self.config.processing.max_retries,
             conversation_timeout=self.config.processing.conversation_timeout,
             max_turns=max_turns,
+            temperature=temperature,
             early_termination_config=early_termination_config
         )
         
@@ -99,19 +113,13 @@ class SpanAnnotatorPipeline:
             "total_spans": 0,
             "processing_time": 0.0,
             "started_at": None,
-            "completed_at": None
+            "completed_at": None,
+            "consecutive_failures": 0,  # Track consecutive failures
+            "max_consecutive_failures": 3  # Exit after 3 consecutive failures
         }
         
-        # Telemetry tracking
-        self.telemetry = {
-            "start_time": None,
-            "completed_sequences": 0,
-            "total_sequences": 0,
-            "spans_by_type": {},
-            "spans_by_modality": {},
-            "sequence_times": [],
-            "last_sequence_time": None
-        }
+        # Initialize shared telemetry
+        self.telemetry = SpanAnnotationTelemetry()
     
     def get_all_corpus_sequences(self, corpus_file: Path) -> List[int]:
         """
@@ -324,15 +332,75 @@ class SpanAnnotatorPipeline:
                     data = json.load(f)
                 
                 sequence_number = data.get("sequence_number")
-                annotation_status = data.get("annotation_session", {}).get("annotation_status", "unknown")
+                annotation_session = data.get("annotation_session", {})
+                annotation_status = annotation_session.get("annotation_status", "unknown")
+                spans_extracted = annotation_session.get("spans_extracted", 0)
                 
                 if sequence_number is not None:
-                    existing_results[sequence_number] = annotation_status
+                    # Validate that "completed" sequences actually have spans
+                    if annotation_status == "completed" and spans_extracted > 0:
+                        existing_results[sequence_number] = "completed"
+                    elif annotation_status == "completed" and spans_extracted == 0:
+                        # Mark as failed if no spans were extracted despite "completed" status
+                        existing_results[sequence_number] = "failed"
+                        logger.warning(f"Sequence {sequence_number} marked as completed but has 0 spans - treating as failed")
+                    elif annotation_status == "failed":
+                        existing_results[sequence_number] = "failed"
+                    elif annotation_status.startswith("in_progress"):
+                        # Mark incomplete sequences as failed to retry them
+                        existing_results[sequence_number] = "failed"
+                        logger.info(f"Sequence {sequence_number} was incomplete ({annotation_status}) - will retry")
+                    else:
+                        # Any other status - treat as failed to be safe
+                        existing_results[sequence_number] = "failed"
+                        logger.warning(f"Sequence {sequence_number} has unclear status '{annotation_status}' - treating as failed")
                     
             except Exception as e:
                 logger.warning(f"Failed to load existing result from {working_file}: {e}")
         
         return existing_results
+    
+    def find_missing_sequences(self, target_sequences: List[PretrainRecord], existing_results: Dict[int, str]) -> List[int]:
+        """
+        Find sequences that are missing within the processed range (gaps).
+        Only considers sequences as missing if they fall within the range of processed sequences.
+        
+        Args:
+            target_sequences: List of all sequences to process
+            existing_results: Dict mapping sequence_id -> status for sequences with working files
+            
+        Returns:
+            List of sequence numbers that represent gaps in processing
+        """
+        if not existing_results:
+            # Fresh run - no sequences are "missing", they're just unprocessed
+            logger.info("Fresh run detected - no existing working files found")
+            return []
+        
+        # Find the highest processed sequence ID
+        max_processed_id = max(existing_results.keys()) if existing_results else 0
+        
+        # Get all target sequence IDs within the processed range
+        target_sequence_ids = {record.sequence_number for record in target_sequences 
+                             if record.sequence_number is not None and record.sequence_number <= max_processed_id}
+        
+        # Find gaps: sequences within processed range that don't have working files
+        missing_sequence_numbers = []
+        for seq_id in target_sequence_ids:
+            if seq_id not in existing_results:
+                missing_sequence_numbers.append(seq_id)
+        
+        if missing_sequence_numbers:
+            logger.info(f"Found {len(missing_sequence_numbers)} gap sequences (within processed range 1-{max_processed_id})")
+            if len(missing_sequence_numbers) <= 20:
+                logger.info(f"Gap sequences: {sorted(missing_sequence_numbers)}")
+            else:
+                sample = sorted(missing_sequence_numbers)[:10]
+                logger.info(f"Gap sequences (sample): {sample}... and {len(missing_sequence_numbers) - 10} more")
+        else:
+            logger.info(f"No gaps found within processed range (1-{max_processed_id})")
+        
+        return missing_sequence_numbers
     
     def save_working_file(
         self, 
@@ -539,6 +607,15 @@ class SpanAnnotatorPipeline:
                 "started_at": datetime.now().isoformat()
             }
         
+        # Always recalculate from actual working files to ensure accuracy
+        actual_stats = self._calculate_actual_stats(output_dir)
+        
+        # Use actual stats instead of incremental counters
+        processed_count = actual_stats["total_files"]
+        successful_count = actual_stats["successful_count"] 
+        failed_count = actual_stats["failed_count"]
+        total_spans = actual_stats["total_spans"]
+        
         # Calculate quality metrics
         avg_spans_per_sequence = total_spans / max(1, successful_count)
         success_rate = successful_count / max(1, processed_count)
@@ -559,6 +636,84 @@ class SpanAnnotatorPipeline:
         
         with open(metadata_file, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
+    
+    def _calculate_actual_stats(self, output_dir: Path) -> Dict[str, int]:
+        """
+        Calculate actual statistics from working files to ensure metadata accuracy.
+        
+        Args:
+            output_dir: Directory containing working files
+            
+        Returns:
+            Dictionary with actual counts from working files
+        """
+        working_dir = output_dir / "working"
+        
+        if not working_dir.exists():
+            return {
+                "total_files": 0,
+                "successful_count": 0,
+                "failed_count": 0,
+                "total_spans": 0
+            }
+        
+        total_files = 0
+        successful_count = 0
+        failed_count = 0
+        total_spans = 0
+        
+        for working_file in working_dir.glob("corpus-seq-*.json"):
+            try:
+                with open(working_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                total_files += 1
+                annotation_session = data.get("annotation_session", {})
+                status = annotation_session.get("annotation_status", "unknown")
+                spans = annotation_session.get("spans_extracted", 0)
+                
+                if status == "completed" and spans > 0:
+                    successful_count += 1
+                    total_spans += spans
+                else:
+                    failed_count += 1
+                    
+            except Exception as e:
+                logger.warning(f"Failed to read working file {working_file}: {e}")
+                total_files += 1
+                failed_count += 1
+        
+        return {
+            "total_files": total_files,
+            "successful_count": successful_count,
+            "failed_count": failed_count,
+            "total_spans": total_spans
+        }
+
+    def fix_existing_metadata(self, output_dir: Path):
+        """
+        Fix existing metadata.json by recalculating from working files.
+        This can be called to repair incorrect metadata without reprocessing.
+        """
+        logger.info("Fixing metadata.json by recalculating from working files...")
+        
+        # This will automatically recalculate from working files
+        self.update_global_metadata(output_dir, 0, 0, 0, 0)
+        
+        # Verify the fix
+        metadata_file = output_dir / "metadata.json"
+        if metadata_file.exists():
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            
+            logger.info(f"Metadata fixed:")
+            logger.info(f"  - Processed sequences: {metadata.get('processed_sequences', 0)}")
+            logger.info(f"  - Successful annotations: {metadata.get('successful_annotations', 0)}")
+            logger.info(f"  - Failed annotations: {metadata.get('failed_annotations', 0)}")
+            logger.info(f"  - Total spans: {metadata.get('total_spans', 0)}")
+            logger.info(f"  - Success rate: {metadata.get('quality_metrics', {}).get('success_rate', 0):.1%}")
+        else:
+            logger.error("Failed to fix metadata - file not found")
     
     async def process_sequence_range(
         self,
@@ -581,14 +736,6 @@ class SpanAnnotatorPipeline:
         """
         self.stats["started_at"] = datetime.now().isoformat()
         
-        # Initialize telemetry
-        self.telemetry["start_time"] = datetime.now()
-        self.telemetry["total_sequences"] = 0
-        self.telemetry["completed_sequences"] = 0
-        self.telemetry["spans_by_type"] = {}
-        self.telemetry["spans_by_modality"] = {}
-        self.telemetry["sequence_times"] = []
-        
         # Parse target sequences - if no range specified, process all sequences
         if range_spec:
             sequence_ids = self.parse_range_specification(range_spec)
@@ -599,7 +746,6 @@ class SpanAnnotatorPipeline:
             logger.info(f"Processing all sequences in corpus")
         
         self.stats["total_sequences"] = len(target_sequences)
-        self.telemetry["total_sequences"] = len(target_sequences)
         
         # Ensure output structure
         self.ensure_output_structure(output_dir)
@@ -607,38 +753,111 @@ class SpanAnnotatorPipeline:
         # Load existing results for resume
         existing_results = self.load_existing_results(output_dir) if resume else {}
         
-        # Filter sequences to process
+        # Fix metadata on resume to ensure accuracy from the start
+        if resume and existing_results:
+            logger.info("Resume mode detected - correcting metadata from working files...")
+            actual_stats = self.annotation_processor.fix_metadata_from_working_files(output_dir, self.agent.get_statistics())
+            
+            # Initialize telemetry with corrected metadata for accurate progress tracking
+            self.telemetry.initialize(
+                total_sequences=len(target_sequences),
+                existing_completed=actual_stats["successful_count"],
+                existing_failed=actual_stats["failed_count"]
+            )
+            SpanAnnotationLogger.log_metadata_correction(logger, actual_stats)
+        else:
+            # Initialize telemetry for fresh run
+            self.telemetry.initialize(total_sequences=len(target_sequences))
+        
+        # Find gap sequences - those missing within the processed range
+        gap_sequences = self.find_missing_sequences(target_sequences, existing_results)
+        
+        # Categorize sequences for processing
         sequences_to_process = []
+        failed_sequences_to_retry = []
+        gap_sequences_to_process = []
+        completed_count = 0
+        new_sequences_count = 0
+        
+        # Get highest processed sequence ID for categorization
+        max_processed_id = max(existing_results.keys()) if existing_results else 0
+        
         for record in target_sequences:
             if record.sequence_number in existing_results:
                 status = existing_results[record.sequence_number]
                 if status == "completed":
-                    logger.info(f"Skipping completed sequence {record.sequence_number}")
                     self.stats["processed_sequences"] += 1
+                    self.stats["successful_annotations"] += 1
+                    completed_count += 1
                     continue
+                elif status == "failed":
+                    failed_sequences_to_retry.append(record)
+                    continue
+            elif record.sequence_number in gap_sequences:
+                # This is a gap within the processed range
+                gap_sequences_to_process.append(record)
+                continue
+            elif record.sequence_number is not None and record.sequence_number > max_processed_id:
+                # This is a new sequence beyond the processed range
+                sequences_to_process.append(record)
+                new_sequences_count += 1
+                continue
             
+            # Should not reach here, but add to new sequences as fallback
             sequences_to_process.append(record)
+            new_sequences_count += 1
         
-        logger.info(f"Processing {len(sequences_to_process)} sequences (skipped {len(target_sequences) - len(sequences_to_process)} completed)")
+        # Initialize telemetry with already completed and failed sequences
+        # (Skip if already initialized from corrected metadata during resume)
+        if not (resume and existing_results):
+            # Get completed and failed counts from the categorization
+            completed_count = sum(1 for record in target_sequences 
+                                if record.sequence_number in existing_results 
+                                and existing_results[record.sequence_number] == "completed")
+            failed_count = len([record for record in target_sequences 
+                              if record.sequence_number in existing_results 
+                              and existing_results[record.sequence_number] == "failed"])
+            
+            self.telemetry.initialize(
+                total_sequences=len(target_sequences),
+                existing_completed=completed_count,
+                existing_failed=failed_count
+            )
+        
+        # Process in priority order: failed sequences first, then gaps, then new sequences
+        # This ensures we fill gaps in completed sequences before continuing with new ones
+        all_sequences_to_process = failed_sequences_to_retry + gap_sequences_to_process + sequences_to_process
+        
+        # Improved logging with proper categorization
+        if existing_results:
+            logger.info(f"Resume mode: Found {len(existing_results)} existing working files (highest ID: {max_processed_id})")
+        else:
+            logger.info(f"Fresh run: No existing working files found")
+        
+        logger.info(f"Processing {len(all_sequences_to_process)} sequences:")
+        logger.info(f"  - Retrying {len(failed_sequences_to_retry)} failed sequences")
+        logger.info(f"  - Processing {len(gap_sequences_to_process)} gap sequences (within processed range)")
+        logger.info(f"  - Processing {new_sequences_count} new sequences (beyond processed range)")
+        logger.info(f"  - Skipped {completed_count} completed sequences")
         
         # Process sequences in batches
         batch_size = self.config.processing.batch_size
-        successful_count = 0
+        successful_count = self.stats["successful_annotations"]  # Include already completed
         failed_count = 0
         total_spans = 0
         
         # Track sequence start times for telemetry
         sequence_start_times = {}
         
-        for i in range(0, len(sequences_to_process), batch_size):
-            batch = sequences_to_process[i:i + batch_size]
+        for i in range(0, len(all_sequences_to_process), batch_size):
+            batch = all_sequences_to_process[i:i + batch_size]
             
             # Record start times for this batch
             batch_start_time = datetime.now()
             for record in batch:
                 sequence_start_times[record.sequence_number] = batch_start_time
             
-            logger.info(f"Processing batch {i//batch_size + 1}/{(len(sequences_to_process) + batch_size - 1)//batch_size}")
+            logger.info(f"Processing batch {i//batch_size + 1}/{(len(all_sequences_to_process) + batch_size - 1)//batch_size}")
             
             try:
                 # Create progress callback to save working files incrementally
@@ -657,9 +876,19 @@ class SpanAnnotatorPipeline:
                                     self.save_working_file(output_dir, record, annotation_record)
                                     # Update telemetry
                                     sequence_start_time = sequence_start_times.get(sequence_id, batch_start_time)
-                                    self.update_telemetry_on_completion(annotation_record, sequence_start_time)
+                                    self.telemetry.update_on_completion(annotation_record, sequence_start_time)
+                                    
+                                    # Update metadata immediately after each sequence
+                                    self.update_global_metadata(
+                                        output_dir,
+                                        self.stats["processed_sequences"] + 1,  
+                                        self.stats["successful_annotations"] + 1,
+                                        self.stats["failed_annotations"], 
+                                        self.stats["total_spans"] + len(annotation_record.span_annotations)
+                                    )
+                                    
                                     # Display telemetry panel
-                                    self.display_telemetry_panel()
+                                    self.telemetry.display_progress_panel()
                                     logger.info(f"[COMPLETED] Sequence {sequence_id} - wrote to annotations.jsonl")
                                 else:
                                     self.save_working_file(output_dir, record, status="completed")
@@ -675,7 +904,10 @@ class SpanAnnotatorPipeline:
                 # Annotate batch with progress tracking
                 annotation_batch = await self.agent.annotate_batch(batch, progress_callback=progress_callback)
                 
-                # Save final results
+                # Save final results and track consecutive failures
+                batch_successful = 0
+                batch_failed = 0
+                
                 for j, record in enumerate(batch):
                     if j < len(annotation_batch.records):
                         annotation_result = annotation_batch.records[j]
@@ -697,28 +929,64 @@ class SpanAnnotatorPipeline:
                         if not matching_result:
                             matching_result = annotation_batch.records[j]
                         
-                        # Skip annotations write since it was already done in progress callback
-                        self.save_working_file(output_dir, record, matching_result, skip_annotations_write=True)
-                        successful_count += 1
-                        total_spans += len(matching_result.span_annotations)
+                        # Check if sequence was successful
+                        if matching_result and hasattr(matching_result, 'span_annotations') and len(matching_result.span_annotations) > 0:
+                            # Skip annotations write since it was already done in progress callback
+                            self.save_working_file(output_dir, record, matching_result, skip_annotations_write=True)
+                            successful_count += 1
+                            batch_successful += 1
+                            total_spans += len(matching_result.span_annotations)
+                            # Reset consecutive failures on success
+                            self.stats["consecutive_failures"] = 0
+                        else:
+                            # Sequence failed - no spans extracted
+                            self.save_working_file(output_dir, record, error_message="No spans extracted", status="failed")
+                            failed_count += 1
+                            batch_failed += 1
+                            self.stats["consecutive_failures"] += 1
+                            # Update telemetry for failure
+                            sequence_start_time = sequence_start_times.get(record.sequence_number)
+                            self.telemetry.update_on_failure(sequence_start_time)
+                            logger.warning(f"Sequence {record.sequence_number} failed: no spans extracted (consecutive failures: {self.stats['consecutive_failures']})")
                     else:
                         self.save_working_file(output_dir, record, error_message="Batch processing incomplete", status="failed")
                         failed_count += 1
+                        batch_failed += 1
+                        self.stats["consecutive_failures"] += 1
+                        # Update telemetry for failure
+                        sequence_start_time = sequence_start_times.get(record.sequence_number)
+                        self.telemetry.update_on_failure(sequence_start_time)
+                        logger.warning(f"Sequence {record.sequence_number} failed: batch processing incomplete (consecutive failures: {self.stats['consecutive_failures']})")
                 
+                # Check for consecutive failure exit condition
+                if self.stats["consecutive_failures"] >= self.stats["max_consecutive_failures"]:
+                    logger.error(f"Exiting due to {self.stats['consecutive_failures']} consecutive failures")
+                    break
+                    
             except Exception as e:
                 logger.error(f"Batch processing failed: {e}")
-                # Save failed results
+                # Save failed results and track consecutive failures
                 for record in batch:
                     self.save_working_file(output_dir, record, error_message=str(e), status="failed")
                     failed_count += 1
+                    self.stats["consecutive_failures"] += 1
+                    # Update telemetry for failure
+                    sequence_start_time = sequence_start_times.get(record.sequence_number)
+                    self.telemetry.update_on_failure(sequence_start_time)
+                    logger.warning(f"Sequence {record.sequence_number} failed with exception: {e} (consecutive failures: {self.stats['consecutive_failures']})")
+                
+                # Check for consecutive failure exit condition
+                if self.stats["consecutive_failures"] >= self.stats["max_consecutive_failures"]:
+                    logger.error(f"Exiting due to {self.stats['consecutive_failures']} consecutive failures")
+                    break
             
-            # Update progress
+            # Update progress after each batch
             self.stats["processed_sequences"] += len(batch)
             self.stats["successful_annotations"] = successful_count
             self.stats["failed_annotations"] = failed_count
             self.stats["total_spans"] = total_spans
             
-            # Update global metadata
+            # Update global metadata after each batch
             self.update_global_metadata(
                 output_dir, 
                 self.stats["processed_sequences"],
@@ -726,6 +994,8 @@ class SpanAnnotatorPipeline:
                 failed_count,
                 total_spans
             )
+            
+            logger.info(f"Batch {i//batch_size + 1} completed: {batch_successful} successful, {batch_failed} failed")
         
         self.stats["completed_at"] = datetime.now().isoformat()
         
@@ -749,105 +1019,6 @@ class SpanAnnotatorPipeline:
         
         logger.info("Annotations written in compact JSONL format with automatic deduplication")
     
-    def display_telemetry_panel(self):
-        """Display telemetry panel with progress and statistics in logger-compatible format."""
-        current_time = datetime.now()
-        
-        # Calculate progress metrics
-        progress_pct = (self.telemetry["completed_sequences"] / max(self.telemetry["total_sequences"], 1)) * 100
-        
-        # Calculate timing metrics
-        elapsed_time = 0
-        sequences_per_min = 0
-        eta_minutes = 0
-        eta_display = "calculating..."
-        
-        if self.telemetry["start_time"]:
-            elapsed_seconds = (current_time - self.telemetry["start_time"]).total_seconds()
-            elapsed_time = elapsed_seconds / 60  # Convert to minutes
-            
-            if elapsed_seconds > 0 and self.telemetry["completed_sequences"] > 0:
-                sequences_per_min = (self.telemetry["completed_sequences"] * 60) / elapsed_seconds
-                
-                remaining_sequences = self.telemetry["total_sequences"] - self.telemetry["completed_sequences"]
-                if sequences_per_min > 0:
-                    eta_minutes = remaining_sequences / sequences_per_min
-                    
-                    # Format ETA display
-                    if eta_minutes >= 60:
-                        eta_hours = int(eta_minutes // 60)
-                        eta_mins = int(eta_minutes % 60)
-                        eta_display = f"{eta_hours}h {eta_mins}m"
-                    else:
-                        eta_display = f"{eta_minutes:.1f} minutes"
-        
-        # Calculate span statistics
-        total_spans = sum(self.telemetry["spans_by_type"].values())
-        span_types_summary = ", ".join([f"{type_name}: {count}" for type_name, count in sorted(self.telemetry["spans_by_type"].items())])
-        modality_summary = ", ".join([f"{mod}: {count}" for mod, count in sorted(self.telemetry["spans_by_modality"].items())])
-        
-        # Calculate average sequence processing time
-        avg_seq_time = 0
-        if self.telemetry["sequence_times"]:
-            avg_seq_time = sum(self.telemetry["sequence_times"]) / len(self.telemetry["sequence_times"])
-        
-        # Display telemetry panel
-        logger.info("=" * 80)
-        logger.info("TELEMETRY PANEL - Span Annotation Progress")
-        logger.info("=" * 80)
-        logger.info(f"Progress: {self.telemetry['completed_sequences']}/{self.telemetry['total_sequences']} sequences ({progress_pct:.1f}%)")
-        logger.info(f"Processing Rate: {sequences_per_min:.2f} sequences/min")
-        logger.info(f"Elapsed Time: {elapsed_time:.1f} minutes")
-        logger.info(f"ETA: {eta_display}")
-        logger.info(f"Average Sequence Time: {avg_seq_time:.1f} seconds")
-        logger.info("-" * 40)
-        logger.info(f"Total Spans Extracted: {total_spans}")
-        if span_types_summary:
-            logger.info(f"Span Types: {span_types_summary}")
-        if modality_summary:
-            logger.info(f"Modalities: {modality_summary}")
-        logger.info("=" * 80)
-
-    def update_telemetry_on_completion(self, annotation_result: AnnotationRecord, sequence_start_time: datetime):
-        """Update telemetry data when a sequence is completed."""
-        current_time = datetime.now()
-        
-        # Update completion count
-        self.telemetry["completed_sequences"] += 1
-        
-        # Track sequence processing time
-        if sequence_start_time:
-            sequence_time = (current_time - sequence_start_time).total_seconds()
-            self.telemetry["sequence_times"].append(sequence_time)
-            self.telemetry["last_sequence_time"] = sequence_time
-        
-        # Track span statistics
-        if hasattr(annotation_result, 'span_annotations') and annotation_result.span_annotations:
-            for span in annotation_result.span_annotations:
-                # Track by xbar_class (type)
-                span_type = span.xbar_class if hasattr(span, 'xbar_class') else 'unknown'
-                self.telemetry["spans_by_type"][span_type] = self.telemetry["spans_by_type"].get(span_type, 0) + 1
-                
-                # Track by modality (inferred from span properties)
-                modality = self._infer_span_modality(span)
-                self.telemetry["spans_by_modality"][modality] = self.telemetry["spans_by_modality"].get(modality, 0) + 1
-    
-    def _infer_span_modality(self, span) -> str:
-        """Infer the modality of a span based on its properties."""
-        span_type = span.xbar_class if hasattr(span, 'xbar_class') else ''
-        
-        # Basic modality classification based on X-bar class
-        if any(keyword in span_type.lower() for keyword in ['punct', 'symbol', 'operator', 'delim']):
-            return 'punctuation'
-        elif any(keyword in span_type.lower() for keyword in ['noun', 'verb', 'adj', 'adv', 'det', 'prep']):
-            return 'lexical'
-        elif any(keyword in span_type.lower() for keyword in ['phrase', 'clause', "'"]):
-            return 'syntactic'
-        elif any(keyword in span_type.lower() for keyword in ['sentence', 'block', 'root']):
-            return 'structural'
-        else:
-            return 'other'
-
     def deduplicate_annotations_file(self, output_dir: Path) -> Dict[str, int]:
         """
         Post-process existing annotations.jsonl to remove duplicates.
@@ -976,25 +1147,40 @@ def main():
     # Initialize pipeline and load configuration
     pipeline = SpanAnnotatorPipeline(args.config, args.agent)
     
-    # Setup logging based on configuration
-    log_handlers = [logging.StreamHandler(sys.stdout)]
+    # Setup logging using shared logging utilities
+    from x_spanformer.pipelines.shared.pipeline_logging import PipelineLogger
+    
+    # Configure logging from pipeline config
+    log_file_path = None
     if pipeline.config.logging.log_to_file:
         args.output.mkdir(parents=True, exist_ok=True)
-        log_handlers.append(logging.FileHandler(args.output / "span_annotator.log"))
+        log_file_path = args.output / "span_annotator.log"
     
-    logging.basicConfig(
-        level=getattr(logging, pipeline.config.logging.level.upper()),
-        format=pipeline.config.logging.format,
-        handlers=log_handlers
+    logger = PipelineLogger.setup_pipeline_logging(
+        pipeline_name="Span Annotation Pipeline",
+        log_level=pipeline.config.logging.level.upper(),
+        log_format=pipeline.config.logging.format,
+        log_to_file=pipeline.config.logging.log_to_file,
+        log_file_path=log_file_path,
+        console_output=True
     )
     
-    logger.info(f"Starting X-Spanformer Span Annotator Pipeline")
-    logger.info(f"Corpus: {args.corpus}")
-    logger.info(f"Output: {args.output}")
-    logger.info(f"Range: {args.range if args.range else 'ALL SEQUENCES'}")
-    
-    # Initialize pipeline
-    pipeline = SpanAnnotatorPipeline(args.config, args.agent)
+    # Log pipeline startup information
+    PipelineLogger.log_pipeline_start(
+        logger,
+        "X-Spanformer Span Annotator Pipeline",
+        corpus=str(args.corpus),
+        output=str(args.output),
+        range=args.range if args.range else 'ALL SEQUENCES',
+        config_path=args.config if args.config else 'default (config/pipelines/span_annotator.yaml)',
+        agent_config_path=args.agent if args.agent else 'default (config/agents/span_annotator_agent.yaml)',
+        batch_size=pipeline.config.processing.batch_size,
+        model=pipeline.agent.model_name,
+        max_turns=pipeline.agent.max_turns
+    )
+    logger.info(f"Loaded temperature: {pipeline.agent.temperature}")
+    logger.info(f"Loaded timeout: {pipeline.config.processing.conversation_timeout}")
+    logger.info(f"Loaded max_retries: {pipeline.config.processing.max_retries}")
     
     # Check Ollama connection with retry logic before starting processing
     async def check_ollama_with_retry():

@@ -3,9 +3,9 @@ agent_type: span_annotator
 # Agent-specific model settings (detailed configuration)
 model:
   name: phi4-mini
-  temperature: 0.1
+  temperature: 0.2
   max_context_tokens: 131072
-  max_turn_tokens: 1024
+  max_turn_tokens: 4096
 
 # Text processor settings for agent
 processor:
@@ -15,8 +15,8 @@ processor:
 
 # Dialogue session management
 dialogue:
-  max_turns: 8
-  memory_limit: 16
+  max_turns: 12
+  memory_limit: 24
   trim_strategy: rolling
 
 # Agent behavior settings

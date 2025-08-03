@@ -43,9 +43,10 @@ class DialogueAgent:
     Provides async interface for multi-turn conversations with session management.
     """
     
-    def __init__(self, model_name: str = "gpt-4o", max_turns: int = 16):
+    def __init__(self, model_name: str = "gpt-4o", max_turns: int = 16, temperature: float = 0.1):
         self.model_name = model_name
         self.max_turns = max_turns
+        self.temperature = temperature
         self.sessions: Dict[str, DialogueManager] = {}
     
     async def start_session(self, session_id: str, system_prompt: str):
@@ -67,7 +68,7 @@ class DialogueAgent:
                 model=self.model_name,
                 conversation=[{"role": msg["role"], "content": msg["content"]} for msg in messages[1:]],  # Skip system
                 system=messages[0]["content"],  # System prompt
-                temperature=0.1
+                temperature=self.temperature
             )
         except Exception as e:
             # Fallback to mock for testing when Ollama not available
@@ -155,6 +156,7 @@ class SpanAnnotatorSession:
         max_retries: int = 3,
         conversation_timeout: float = 30.0,
         max_turns: int = 16,
+        temperature: float = 0.1,
         early_termination_config: Optional[Dict[str, Any]] = None
     ):
         """
@@ -166,6 +168,7 @@ class SpanAnnotatorSession:
             max_retries: Maximum retry attempts per sequence
             conversation_timeout: Timeout for single conversation (seconds)
             max_turns: Maximum conversation turns per sequence
+            temperature: Temperature parameter for model inference
             early_termination_config: Early termination settings
         """
         self.model_name = model_name
@@ -173,6 +176,7 @@ class SpanAnnotatorSession:
         self.max_retries = max_retries
         self.conversation_timeout = conversation_timeout
         self.max_turns = max_turns
+        self.temperature = temperature
         
         # Early termination settings
         self.early_termination = early_termination_config or {
@@ -182,7 +186,7 @@ class SpanAnnotatorSession:
         }
         
         # Initialize dialogue agent
-        self.dialogue_agent = DialogueAgent(model_name=model_name, max_turns=max_turns)
+        self.dialogue_agent = DialogueAgent(model_name=model_name, max_turns=max_turns, temperature=temperature)
         
         # Async processing controls
         self.semaphore = asyncio.Semaphore(max_concurrent)
@@ -338,6 +342,8 @@ class SpanAnnotatorSession:
         
         try:
             async with self.semaphore:
+                # Log which sequence is being processed (now inside semaphore)
+                logger.info(f"[PROCESSING] Sequence {task.sequence_id} (length: {len(task.text)} chars)")
                 # Initialize position mapper
                 mapper = PositionMapper(task.text)
                 
@@ -522,6 +528,17 @@ class SpanAnnotatorSession:
                 except Exception as e:
                     logger.error(f"Failed initial annotation for sequence {task.sequence_id}: {e}")
                     all_spans = []
+                    # Ensure we still capture any conversation history that occurred before the failure
+                    if turns_used == 0:
+                        # Even if no turns completed, add the error info to responses
+                        all_responses.append({
+                            "role": "user",
+                            "content": "Initial annotation request failed due to error"
+                        })
+                        all_responses.append({
+                            "role": "assistant", 
+                            "content": f"ERROR: {str(e)}"
+                        })
                 
                 # Convert to position spans using collected spans
                 char_spans = all_spans
@@ -548,13 +565,27 @@ class SpanAnnotatorSession:
                         logger.warning(f"Invalid span for sequence {task.sequence_id}: {issues}")
                 
                 # Create annotation record
+                # Validate conversation_turns format before creating AnnotationRecord
+                validated_conversation_turns = []
+                for turn in all_responses:
+                    if not isinstance(turn, dict):
+                        logger.warning(f"Invalid turn format (not dict): {turn}")
+                        continue
+                    if "role" not in turn or "content" not in turn:
+                        logger.warning(f"Invalid turn format (missing role/content): {turn}")
+                        continue
+                    if not isinstance(turn["role"], str) or not isinstance(turn["content"], str):
+                        logger.warning(f"Invalid turn format (non-string values): {turn}")
+                        continue
+                    validated_conversation_turns.append(turn)
+                
                 annotation_record = AnnotationRecord(
                     raw=task.text,
                     sequence_id=task.sequence_id,
                     embedding_chunk_id=task.embedding_chunk_id,
                     span_annotations=validated_spans,
                     total_positions=len(task.text),
-                    conversation_turns=all_responses,  # Use the actual conversation
+                    conversation_turns=validated_conversation_turns,  # Use validated conversation
                     agent_metadata={
                         "model": self.model_name,
                         "processing_time": asyncio.get_event_loop().time() - start_time,
@@ -644,6 +675,7 @@ class SpanAnnotatorSession:
             batch_id = f"batch-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         
         logger.info(f"Starting batch annotation {batch_id} with {len(pretrain_records)} sequences")
+        logger.info(f"Batch sequences: {[record.sequence_number for record in pretrain_records]}")
         
         # Create annotation tasks
         tasks = []

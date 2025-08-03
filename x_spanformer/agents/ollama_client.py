@@ -1,14 +1,14 @@
 import asyncio
 import subprocess
 import re
+import logging
 from typing import Optional, List
 
 from ollama import AsyncClient
-from rich.console import Console
 
 from x_spanformer.agents.constants import DEFAULT_SYSTEM
 
-c = Console()
+logger = logging.getLogger(__name__)
 Message = dict[str, str]
 
 async def check_ollama_running() -> bool:
@@ -27,13 +27,13 @@ async def check_ollama_running() -> bool:
 		)
 		return result.returncode == 0
 	except subprocess.TimeoutExpired:
-		c.print(f"[red]❌ ollama ps command timed out[/red]")
+		logger.error("ollama ps command timed out")
 		return False
 	except FileNotFoundError:
-		c.print(f"[red]❌ ollama command not found - is Ollama installed?[/red]")
+		logger.error("ollama command not found - is Ollama installed?")
 		return False
 	except Exception as e:
-		c.print(f"[red]❌ Error checking ollama status: {str(e)}[/red]")
+		logger.error(f"Error checking ollama status: {str(e)}")
 		return False
 
 def check_model_loaded(model: str, ps_output: str) -> bool:
@@ -53,7 +53,7 @@ async def check_ollama_connection(model: str) -> bool:
 	try:
 		# First check if Ollama is running
 		if not await check_ollama_running():
-			c.print(f"[red]❌ Ollama service is not running[/red]")
+			logger.error("Ollama service is not running")
 			return False
 		
 		# Get current ollama ps output
@@ -67,19 +67,19 @@ async def check_ollama_connection(model: str) -> bool:
 		)
 		
 		if result.returncode != 0:
-			c.print(f"[red]❌ ollama ps failed: {result.stderr}[/red]")
+			logger.error(f"ollama ps failed: {result.stderr}")
 			return False
 		
 		# Check if model is loaded
 		if check_model_loaded(model, result.stdout):
-			c.print(f"[green]✅ Model {model} is loaded and ready[/green]")
+			logger.info(f"[SUCCESS] Model {model} is loaded and ready")
 			return True
 		else:
-			c.print(f"[red]❌ Model {model} is not loaded. Please run: ollama run {model}[/red]")
+			logger.error(f"Model {model} is not loaded. Please run: ollama run {model}")
 			return False
 			
 	except Exception as e:
-		c.print(f"[red]❌ Error checking ollama connection: {str(e)}[/red]")
+		logger.error(f"Error checking ollama connection: {str(e)}")
 		return False
 
 async def chat(
@@ -96,12 +96,10 @@ async def chat(
 		messages.append({"role": "system", "content": system})
 	messages.extend(conversation)
 
-	# Reduced logging for better performance - only show essential info
-	c.print(f"[bold blue]Sending to {model} (T={temperature}):[/bold blue]")
-	for i, msg in enumerate(messages):
-		role_color = "yellow" if msg["role"] == "system" else "cyan" if msg["role"] == "user" else "green"
-		preview = (msg['content'][:60] + '...') if len(msg['content']) > 60 else msg['content']
-		c.print(f"[{role_color}]Message {i+1} ({msg['role']}):[/{role_color}] [dim]{preview}[/dim]")
+	# Single line truncated logging for dialogue
+	user_msg = next((msg['content'] for msg in messages if msg['role'] == 'user'), "")
+	user_preview = (user_msg[:80] + '...') if len(user_msg) > 80 else user_msg
+	logger.info(f"Sending to {model} (T={temperature}): {user_preview}")
 
 	response = await client.chat(
 		model=model,
@@ -111,9 +109,8 @@ async def chat(
 	)
 	content = response["message"]["content"]
 	
-	# Reduced response logging for performance
-	preview = (content[:60] + '...') if len(content) > 60 else content
-	c.print(f"[bold green]Response from {model}:[/bold green] [dim]{preview}[/dim]")
-	c.print()
+	# Single line truncated response logging
+	response_preview = (content[:80] + '...') if len(content) > 80 else content
+	logger.info(f"Response from {model}: {response_preview}")
 	
 	return content

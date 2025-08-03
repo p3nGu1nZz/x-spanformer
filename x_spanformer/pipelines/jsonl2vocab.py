@@ -286,6 +286,20 @@ def main():
     
     corpus = load_corpus_with_logging(files, stage_name="CORPUS LOADING")
     
+    # Also load full records to preserve type information
+    logger.info("Loading full records to preserve type information...")
+    full_records = []
+    for file_path in files:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                try:
+                    record_data = json.loads(line)
+                    full_records.append(record_data)
+                except json.JSONDecodeError:
+                    continue
+    
+    logger.info(f"Loaded {len(full_records)} full records with type information")
+    
     # Build initial vocabulary U_0 with frequency-based candidate selection
     U_0, freq = build_candidate_set_with_output(corpus, h["L_max"], h["M_candidates"], h.get("case_handling", "normalize"), out)
     
@@ -315,8 +329,43 @@ def main():
     else:
         normalized_corpus = corpus
     
-    # Save consolidated corpus for downstream pipelines (renamed to corpus.jsonl)
-    corpus_path = save_consolidated_corpus(normalized_corpus, out, filename="corpus.jsonl", source_info="jsonl2vocab")
+    # Save consolidated corpus for downstream pipelines with preserved types
+    logger.info("Saving consolidated corpus with preserved type information...")
+    corpus_path = out / "corpus.jsonl"
+    corpus_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().isoformat()
+    
+    with open(corpus_path, "w", encoding="utf-8") as f:
+        for i, (sequence, original_record) in enumerate(zip(normalized_corpus, full_records), 1):
+            # Create new record preserving original type and other metadata
+            record = {
+                "raw": sequence,
+                "type": original_record.get("type", "mixed"),  # Preserve original type
+                "id": {"id": f"corpus-seq-{i:08d}"},
+                "meta": {
+                    "status": "keep",
+                    "extracted_by": "jsonl2vocab",
+                    "timestamp": timestamp,
+                    "sequence_number": i,
+                    "source": "consolidated_corpus"
+                }
+            }
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    
+    logger.info(f"Saved consolidated corpus with preserved types: {corpus_path}")
+    logger.info(f"  Sequences: {len(normalized_corpus):,}")
+    
+    # Verify type distribution
+    type_counts = {}
+    for record in full_records:
+        record_type = record.get("type", "mixed")
+        type_counts[record_type] = type_counts.get(record_type, 0) + 1
+    
+    logger.info("Type distribution in saved corpus:")
+    for type_name, count in sorted(type_counts.items()):
+        percentage = (count / len(full_records)) * 100
+        logger.info(f"  {type_name}: {count} ({percentage:.1f}%)")
     
     # Save final vocabulary with statistics following VocabStats schema
     save_vocab(out / "vocab.jsonl", V_final, p_final, stats)
