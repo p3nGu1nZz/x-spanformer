@@ -1,6 +1,5 @@
 import re
-from rich.console import Console
-from rich.panel import Panel
+import logging
 from tenacity import retry, stop_after_attempt, wait_fixed
 from typing import Dict, Optional
 
@@ -9,7 +8,7 @@ from ..dialogue import DialogueManager
 from ..ollama_client import chat
 from ..prompts import render_prompt
 
-c = Console()
+logger = logging.getLogger(__name__)
 
 class JudgeSession:
     """Session for evaluating text segments for training data quality."""
@@ -30,17 +29,18 @@ class JudgeSession:
             re.IGNORECASE | re.DOTALL
         )
         if not quiet and not config:
-            c.print(f"[bold green]⚖️ JudgeSession initialized[/] with config: [yellow]{config_name}[/yellow]")
+            logger.info(f"JudgeSession initialized with config: {config_name}")
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.05))  # Further reduced wait time to 0.05s for optimal performance
     async def evaluate(self, text: str) -> dict:
         """Evaluate a text segment for training data suitability with a single judge."""
-        c.print(f"[white]⚖️ Judging text[/] (len={len(text)}): [dim]{text[:80]}{'…' if len(text) > 80 else ''}")
+        text_preview = (text[:80] + '…') if len(text) > 80 else text
+        logger.info(f"Judging text (len={len(text)}): {text_preview}")
         
         # Apply regex filters first
         for rx in self.regex_filters:
             if rx.search(text):
-                c.print(f"[red]❌ Regex filter triggered:[/] pattern=[dim]{rx.pattern}[/] — auto-discarded")
+                logger.info(f"Regex filter triggered: pattern={rx.pattern} — auto-discarded")
                 return {"score": 0.1, "status": "discard", "reason": "regex filter triggered"}
 
         model = self.cfg["judge"]["model_name"]
@@ -49,17 +49,17 @@ class JudgeSession:
 
         dm = DialogueManager(system_prompt=self.system, max_turns=max_turns)
         dm.add("user", render_prompt(self.cfg["templates"]["judge"], text=text))
-        c.print(f"[cyan]• Judge Evaluation[/] — model=[magenta]{model}[/], T={temp}")
+        logger.debug(f"Judge evaluation — model={model}, T={temp}")
 
         reply = await chat(model=model, conversation=dm.as_messages(), temperature=temp)
         result = self.parse(reply)
 
-        c.print(f"[green]↳ Judge Response:[/] [white]{result['status']}[/], score={result['score']} — [dim]{result['reason']}[/]")
+        logger.info(f"Judge response: {result['status']}, score={result['score']} — {result['reason']}")
         
         # Apply discard threshold - use judge's own threshold
         discard_threshold = self.cfg.get("judge", {}).get("discard_threshold", 0.25)
         if result["score"] < discard_threshold:
-            c.print(f"[red]🗑️ Judge threshold: Score {result['score']:.3f} below discard threshold {discard_threshold:.3f} — status changed to discard[/red]")
+            logger.info(f"Judge threshold: Score {result['score']:.3f} below discard threshold {discard_threshold:.3f} — status changed to discard")
             result["status"] = "discard"
             result["reason"] = f"judge threshold: score {result['score']:.3f} < {discard_threshold:.3f}"
         
@@ -69,7 +69,7 @@ class JudgeSession:
         """Parse LLM response into structured judgment."""
         m = self.pattern.search(text)
         if not m:
-            c.print(Panel.fit(f"[bold yellow]⚠ Could not parse judge output:[/]\n[dim]{text.strip()[:160]}", title="Judge Parse Failure", border_style="yellow"))
+            logger.warning(f"Could not parse judge output: {text.strip()[:160]}")
             return {"score": 0.5, "status": "discard", "type": "natural", "reason": "unparseable"}
         
         # Normalize status to expected values (only keep/discard)
@@ -103,11 +103,5 @@ class JudgeSession:
             "reason": " / ".join(reasons)
         }
 
-        c.print(Panel.fit(
-            f"[green]Status:[/] {final['status']}\n"
-            f"[cyan]Score:[/] {final['score']}\n"
-            f"[yellow]Type:[/] {final['type']}\n"
-            f"[dim]Reason:[/] {final['reason']}",
-            title="⚖️ Judge Consensus", border_style="green"
-        ))
+        logger.info(f"Judge consensus - Status: {final['status']}, Score: {final['score']}, Type: {final['type']}, Reason: {final['reason']}")
         return final

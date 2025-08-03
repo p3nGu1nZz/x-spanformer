@@ -318,6 +318,17 @@ class TestJsonl2VocabPipeline:
     def test_main_pipeline_success(self, mock_load_hparams, mock_find_files, mock_load_corpus,
                                  mock_build_candidates, mock_validate, mock_induce_vocab):
         """Test main pipeline execution success path."""
+        # Create actual test file with mock data for type preservation
+        test_file = self.input_dir / "test.jsonl"
+        test_records = [
+            {"raw": "hello", "type": "natural", "id": {"id": "test1"}, "meta": {"status": "keep"}},
+            {"raw": "world", "type": "mixed", "id": {"id": "test2"}, "meta": {"status": "keep"}}
+        ]
+        
+        with open(test_file, 'w', encoding='utf-8') as f:
+            for record in test_records:
+                f.write(json.dumps(record) + '\n')
+        
         # Setup mocks
         mock_load_hparams.return_value = {
             "L_max": 5, 
@@ -327,7 +338,7 @@ class TestJsonl2VocabPipeline:
             "delta_perplexity": 0.01,
             "delta_oov": 0.001
         }
-        mock_find_files.return_value = [self.input_dir / "test.jsonl"]
+        mock_find_files.return_value = [test_file]
         mock_load_corpus.return_value = ["hello", "world"]
         mock_build_candidates.return_value = (
             ["h", "e", "l", "o", "w", "r", "d"], 
@@ -352,6 +363,22 @@ class TestJsonl2VocabPipeline:
         
         # Verify output file was created
         assert (self.output_dir / "vocab.jsonl").exists()
+        
+        # Verify corpus file with type preservation was created
+        corpus_file = self.output_dir / "corpus.jsonl"
+        assert corpus_file.exists(), "Corpus file should be created"
+        
+        # Verify type preservation in corpus file
+        with open(corpus_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            assert len(lines) == 2, "Should have 2 corpus records"
+            
+            record1 = json.loads(lines[0])
+            record2 = json.loads(lines[1])
+            
+            # Check that types are preserved from original dataset
+            assert record1["type"] == "natural", "First record should preserve 'natural' type"
+            assert record2["type"] == "mixed", "Second record should preserve 'mixed' type"
 
 
 class TestJsonl2VocabEdgeCases:

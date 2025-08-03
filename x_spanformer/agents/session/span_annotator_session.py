@@ -342,6 +342,8 @@ class SpanAnnotatorSession:
         
         try:
             async with self.semaphore:
+                # Log which sequence is being processed (now inside semaphore)
+                logger.info(f"[PROCESSING] Sequence {task.sequence_id} (length: {len(task.text)} chars)")
                 # Initialize position mapper
                 mapper = PositionMapper(task.text)
                 
@@ -526,6 +528,17 @@ class SpanAnnotatorSession:
                 except Exception as e:
                     logger.error(f"Failed initial annotation for sequence {task.sequence_id}: {e}")
                     all_spans = []
+                    # Ensure we still capture any conversation history that occurred before the failure
+                    if turns_used == 0:
+                        # Even if no turns completed, add the error info to responses
+                        all_responses.append({
+                            "role": "user",
+                            "content": "Initial annotation request failed due to error"
+                        })
+                        all_responses.append({
+                            "role": "assistant", 
+                            "content": f"ERROR: {str(e)}"
+                        })
                 
                 # Convert to position spans using collected spans
                 char_spans = all_spans
@@ -552,13 +565,27 @@ class SpanAnnotatorSession:
                         logger.warning(f"Invalid span for sequence {task.sequence_id}: {issues}")
                 
                 # Create annotation record
+                # Validate conversation_turns format before creating AnnotationRecord
+                validated_conversation_turns = []
+                for turn in all_responses:
+                    if not isinstance(turn, dict):
+                        logger.warning(f"Invalid turn format (not dict): {turn}")
+                        continue
+                    if "role" not in turn or "content" not in turn:
+                        logger.warning(f"Invalid turn format (missing role/content): {turn}")
+                        continue
+                    if not isinstance(turn["role"], str) or not isinstance(turn["content"], str):
+                        logger.warning(f"Invalid turn format (non-string values): {turn}")
+                        continue
+                    validated_conversation_turns.append(turn)
+                
                 annotation_record = AnnotationRecord(
                     raw=task.text,
                     sequence_id=task.sequence_id,
                     embedding_chunk_id=task.embedding_chunk_id,
                     span_annotations=validated_spans,
                     total_positions=len(task.text),
-                    conversation_turns=all_responses,  # Use the actual conversation
+                    conversation_turns=validated_conversation_turns,  # Use validated conversation
                     agent_metadata={
                         "model": self.model_name,
                         "processing_time": asyncio.get_event_loop().time() - start_time,
@@ -648,6 +675,7 @@ class SpanAnnotatorSession:
             batch_id = f"batch-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         
         logger.info(f"Starting batch annotation {batch_id} with {len(pretrain_records)} sequences")
+        logger.info(f"Batch sequences: {[record.sequence_number for record in pretrain_records]}")
         
         # Create annotation tasks
         tasks = []

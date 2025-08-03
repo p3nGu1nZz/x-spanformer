@@ -2,12 +2,10 @@ from pathlib import Path
 import logging
 from typing import Optional, List
 
-from rich.console import Console
 from jinja2 import Environment, FileSystemLoader, TemplateNotFound
 
 from x_spanformer.xbar.xbar_map import XBarClassifierMap, DomainType
 
-c = Console()
 logger = logging.getLogger(__name__)
 
 env = Environment(
@@ -23,11 +21,11 @@ def render_prompt(template_name: str, **kwargs) -> str:
     except TemplateNotFound:
         # Fallback to direct string template if file not found
         tmpl = env.from_string(template_name)
-    c.print(f"[dim]Rendering template: {template_name}.j2[/dim]")
+    logger.debug(f"Rendering template: {template_name}.j2")
     return tmpl.render(**kwargs)
 
 def get_system_prompt(template_name: str = "judge_system", **kwargs) -> str:
-    c.print(f"[dim]Using system prompt: {template_name}.j2[/dim]")
+    logger.debug(f"Using system prompt: {template_name}.j2")
     return render_prompt(template_name, **kwargs)
 
 def render_span_annotator_system_prompt(domain_type: str = "natural", **kwargs) -> str:

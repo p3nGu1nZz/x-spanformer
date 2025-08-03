@@ -53,29 +53,43 @@ class SpanAnnotatorPipeline:
         agent_config_path = agent_config_path or "config/agents/span_annotator_agent.yaml"
         agent_config_file = Path(agent_config_path)
         
-        if agent_config_file.exists():
-            # For now, we'll pass individual parameters to the agent
-            # TODO: Create agent config loader if needed
+        if not agent_config_file.exists():
+            raise FileNotFoundError(f"Agent configuration file not found: {agent_config_file}")
+        
+        try:
             import yaml
             with open(agent_config_file, 'r', encoding='utf-8') as f:
                 agent_config = yaml.safe_load(f)
             
+            if not agent_config:
+                raise ValueError(f"Agent configuration file is empty or invalid: {agent_config_file}")
+            
             model_config = agent_config.get("model", {})
-            model_name = model_config.get("name", "phi4-mini")
-            temperature = model_config.get("temperature", 0.1)
+            if not model_config:
+                raise ValueError(f"Missing 'model' section in agent config: {agent_config_file}")
+            
+            model_name = model_config.get("name")
+            if not model_name:
+                raise ValueError(f"Missing 'model.name' in agent config: {agent_config_file}")
+            
+            temperature = model_config.get("temperature")
+            if temperature is None:
+                raise ValueError(f"Missing 'model.temperature' in agent config: {agent_config_file}")
             
             # Extract dialogue configuration
             dialogue_config = agent_config.get("dialogue", {})
-            max_turns = dialogue_config.get("max_turns", 16)
+            if not dialogue_config:
+                raise ValueError(f"Missing 'dialogue' section in agent config: {agent_config_file}")
+            
+            max_turns = dialogue_config.get("max_turns")
+            if max_turns is None:
+                raise ValueError(f"Missing 'dialogue.max_turns' in agent config: {agent_config_file}")
             
             # Extract early termination config
             early_termination_config = agent_config.get("agent", {}).get("early_termination")
-        else:
-            # Fallback to hardcoded defaults if agent config file not found
-            model_name = "phi4-mini"
-            temperature = 0.1
-            max_turns = 16
-            early_termination_config = None
+            
+        except Exception as e:
+            raise RuntimeError(f"Failed to load agent configuration from {agent_config_file}: {e}")
         
         # Initialize span annotator session
         self.agent = SpanAnnotatorSession(
@@ -97,7 +111,9 @@ class SpanAnnotatorPipeline:
             "total_spans": 0,
             "processing_time": 0.0,
             "started_at": None,
-            "completed_at": None
+            "completed_at": None,
+            "consecutive_failures": 0,  # Track consecutive failures
+            "max_consecutive_failures": 3  # Exit after 3 consecutive failures
         }
         
         # Telemetry tracking
@@ -322,15 +338,60 @@ class SpanAnnotatorPipeline:
                     data = json.load(f)
                 
                 sequence_number = data.get("sequence_number")
-                annotation_status = data.get("annotation_session", {}).get("annotation_status", "unknown")
+                annotation_session = data.get("annotation_session", {})
+                annotation_status = annotation_session.get("annotation_status", "unknown")
+                spans_extracted = annotation_session.get("spans_extracted", 0)
                 
                 if sequence_number is not None:
-                    existing_results[sequence_number] = annotation_status
+                    # Validate that "completed" sequences actually have spans
+                    if annotation_status == "completed" and spans_extracted > 0:
+                        existing_results[sequence_number] = "completed"
+                    elif annotation_status == "completed" and spans_extracted == 0:
+                        # Mark as failed if no spans were extracted despite "completed" status
+                        existing_results[sequence_number] = "failed"
+                        logger.warning(f"Sequence {sequence_number} marked as completed but has 0 spans - treating as failed")
+                    elif annotation_status == "failed":
+                        existing_results[sequence_number] = "failed"
+                    elif annotation_status.startswith("in_progress"):
+                        # Mark incomplete sequences as failed to retry them
+                        existing_results[sequence_number] = "failed"
+                        logger.info(f"Sequence {sequence_number} was incomplete ({annotation_status}) - will retry")
+                    else:
+                        # Any other status - treat as failed to be safe
+                        existing_results[sequence_number] = "failed"
+                        logger.warning(f"Sequence {sequence_number} has unclear status '{annotation_status}' - treating as failed")
                     
             except Exception as e:
                 logger.warning(f"Failed to load existing result from {working_file}: {e}")
         
         return existing_results
+    
+    def find_missing_sequences(self, target_sequences: List[PretrainRecord], existing_results: Dict[int, str]) -> List[int]:
+        """
+        Find sequences that don't have working files at all (completely missing).
+        
+        Args:
+            target_sequences: List of all sequences to process
+            existing_results: Dict mapping sequence_id -> status for sequences with working files
+            
+        Returns:
+            List of sequence numbers that have no working files
+        """
+        missing_sequence_numbers = []
+        
+        for record in target_sequences:
+            if record.sequence_number not in existing_results:
+                # This sequence has no working file at all
+                missing_sequence_numbers.append(record.sequence_number)
+        
+        logger.info(f"Found {len(missing_sequence_numbers)} sequences without working files")
+        if missing_sequence_numbers and len(missing_sequence_numbers) <= 20:
+            logger.info(f"Missing sequences: {sorted(missing_sequence_numbers)}")
+        elif missing_sequence_numbers:
+            sample = sorted(missing_sequence_numbers)[:10]
+            logger.info(f"Missing sequences (sample): {sample}... and {len(missing_sequence_numbers) - 10} more")
+        
+        return missing_sequence_numbers
     
     def save_working_file(
         self, 
@@ -581,8 +642,8 @@ class SpanAnnotatorPipeline:
         
         # Initialize telemetry
         self.telemetry["start_time"] = datetime.now()
-        self.telemetry["total_sequences"] = 0
-        self.telemetry["completed_sequences"] = 0
+        self.telemetry["total_sequences"] = 0  # Will be set after loading sequences
+        self.telemetry["completed_sequences"] = 0  # Will be updated as we process
         self.telemetry["spans_by_type"] = {}
         self.telemetry["spans_by_modality"] = {}
         self.telemetry["sequence_times"] = []
@@ -598,6 +659,7 @@ class SpanAnnotatorPipeline:
         
         self.stats["total_sequences"] = len(target_sequences)
         self.telemetry["total_sequences"] = len(target_sequences)
+        self.telemetry["total_sequences"] = len(target_sequences)
         
         # Ensure output structure
         self.ensure_output_structure(output_dir)
@@ -605,38 +667,66 @@ class SpanAnnotatorPipeline:
         # Load existing results for resume
         existing_results = self.load_existing_results(output_dir) if resume else {}
         
-        # Filter sequences to process
+        # Find missing sequences - those without working files
+        missing_sequences = self.find_missing_sequences(target_sequences, existing_results)
+        
+        # Filter sequences to process - retry failed sequences, skip completed ones, include missing
         sequences_to_process = []
+        failed_sequences_to_retry = []
+        missing_sequences_to_process = []
+        completed_count = 0
+        
         for record in target_sequences:
             if record.sequence_number in existing_results:
                 status = existing_results[record.sequence_number]
                 if status == "completed":
                     logger.info(f"Skipping completed sequence {record.sequence_number}")
                     self.stats["processed_sequences"] += 1
+                    self.stats["successful_annotations"] += 1
+                    completed_count += 1
                     continue
+                elif status == "failed":
+                    logger.info(f"Retrying failed sequence {record.sequence_number}")
+                    failed_sequences_to_retry.append(record)
+                    continue
+            elif record.sequence_number in missing_sequences:
+                logger.info(f"Found missing sequence {record.sequence_number} (no working file)")
+                missing_sequences_to_process.append(record)
+                continue
             
             sequences_to_process.append(record)
         
-        logger.info(f"Processing {len(sequences_to_process)} sequences (skipped {len(target_sequences) - len(sequences_to_process)} completed)")
+        # Initialize telemetry with already completed sequences
+        self.telemetry["completed_sequences"] = completed_count
+        
+        # Process in priority order: failed sequences first, then missing sequences, then new sequences
+        # This ensures we fill gaps in completed sequences before continuing with new ones
+        all_sequences_to_process = failed_sequences_to_retry + missing_sequences_to_process + sequences_to_process
+        
+        logger.info(f"Processing {len(all_sequences_to_process)} sequences:")
+        logger.info(f"  - Retrying {len(failed_sequences_to_retry)} failed sequences")
+        logger.info(f"  - Processing {len(missing_sequences_to_process)} missing sequences (no working files)")
+        logger.info(f"  - Processing {len(sequences_to_process)} new sequences")
+        logger.info(f"  - Skipped {len(target_sequences) - len(all_sequences_to_process)} completed sequences")
         
         # Process sequences in batches
         batch_size = self.config.processing.batch_size
-        successful_count = 0
+        successful_count = self.stats["successful_annotations"]  # Include already completed
         failed_count = 0
         total_spans = 0
         
         # Track sequence start times for telemetry
         sequence_start_times = {}
         
-        for i in range(0, len(sequences_to_process), batch_size):
-            batch = sequences_to_process[i:i + batch_size]
+        for i in range(0, len(all_sequences_to_process), batch_size):
+            batch = all_sequences_to_process[i:i + batch_size]
             
             # Record start times for this batch
             batch_start_time = datetime.now()
             for record in batch:
                 sequence_start_times[record.sequence_number] = batch_start_time
             
-            logger.info(f"Processing batch {i//batch_size + 1}/{(len(sequences_to_process) + batch_size - 1)//batch_size}")
+            logger.info(f"Processing batch {i//batch_size + 1}/{(len(all_sequences_to_process) + batch_size - 1)//batch_size}")
             
             try:
                 # Create progress callback to save working files incrementally
@@ -656,6 +746,16 @@ class SpanAnnotatorPipeline:
                                     # Update telemetry
                                     sequence_start_time = sequence_start_times.get(sequence_id, batch_start_time)
                                     self.update_telemetry_on_completion(annotation_record, sequence_start_time)
+                                    
+                                    # Update metadata immediately after each sequence
+                                    self.update_global_metadata(
+                                        output_dir,
+                                        self.stats["processed_sequences"] + 1,  
+                                        self.stats["successful_annotations"] + 1,
+                                        self.stats["failed_annotations"], 
+                                        self.stats["total_spans"] + len(annotation_record.span_annotations)
+                                    )
+                                    
                                     # Display telemetry panel
                                     self.display_telemetry_panel()
                                     logger.info(f"[COMPLETED] Sequence {sequence_id} - wrote to annotations.jsonl")
@@ -673,7 +773,10 @@ class SpanAnnotatorPipeline:
                 # Annotate batch with progress tracking
                 annotation_batch = await self.agent.annotate_batch(batch, progress_callback=progress_callback)
                 
-                # Save final results
+                # Save final results and track consecutive failures
+                batch_successful = 0
+                batch_failed = 0
+                
                 for j, record in enumerate(batch):
                     if j < len(annotation_batch.records):
                         annotation_result = annotation_batch.records[j]
@@ -695,28 +798,55 @@ class SpanAnnotatorPipeline:
                         if not matching_result:
                             matching_result = annotation_batch.records[j]
                         
-                        # Skip annotations write since it was already done in progress callback
-                        self.save_working_file(output_dir, record, matching_result, skip_annotations_write=True)
-                        successful_count += 1
-                        total_spans += len(matching_result.span_annotations)
+                        # Check if sequence was successful
+                        if matching_result and hasattr(matching_result, 'span_annotations') and len(matching_result.span_annotations) > 0:
+                            # Skip annotations write since it was already done in progress callback
+                            self.save_working_file(output_dir, record, matching_result, skip_annotations_write=True)
+                            successful_count += 1
+                            batch_successful += 1
+                            total_spans += len(matching_result.span_annotations)
+                            # Reset consecutive failures on success
+                            self.stats["consecutive_failures"] = 0
+                        else:
+                            # Sequence failed - no spans extracted
+                            self.save_working_file(output_dir, record, error_message="No spans extracted", status="failed")
+                            failed_count += 1
+                            batch_failed += 1
+                            self.stats["consecutive_failures"] += 1
+                            logger.warning(f"Sequence {record.sequence_number} failed: no spans extracted (consecutive failures: {self.stats['consecutive_failures']})")
                     else:
                         self.save_working_file(output_dir, record, error_message="Batch processing incomplete", status="failed")
                         failed_count += 1
+                        batch_failed += 1
+                        self.stats["consecutive_failures"] += 1
+                        logger.warning(f"Sequence {record.sequence_number} failed: batch processing incomplete (consecutive failures: {self.stats['consecutive_failures']})")
                 
+                # Check for consecutive failure exit condition
+                if self.stats["consecutive_failures"] >= self.stats["max_consecutive_failures"]:
+                    logger.error(f"Exiting due to {self.stats['consecutive_failures']} consecutive failures")
+                    break
+                    
             except Exception as e:
                 logger.error(f"Batch processing failed: {e}")
-                # Save failed results
+                # Save failed results and track consecutive failures
                 for record in batch:
                     self.save_working_file(output_dir, record, error_message=str(e), status="failed")
                     failed_count += 1
+                    self.stats["consecutive_failures"] += 1
+                    logger.warning(f"Sequence {record.sequence_number} failed with exception: {e} (consecutive failures: {self.stats['consecutive_failures']})")
+                
+                # Check for consecutive failure exit condition
+                if self.stats["consecutive_failures"] >= self.stats["max_consecutive_failures"]:
+                    logger.error(f"Exiting due to {self.stats['consecutive_failures']} consecutive failures")
+                    break
             
-            # Update progress
+            # Update progress after each batch
             self.stats["processed_sequences"] += len(batch)
             self.stats["successful_annotations"] = successful_count
             self.stats["failed_annotations"] = failed_count
             self.stats["total_spans"] = total_spans
             
-            # Update global metadata
+            # Update global metadata after each batch
             self.update_global_metadata(
                 output_dir, 
                 self.stats["processed_sequences"],
@@ -724,6 +854,8 @@ class SpanAnnotatorPipeline:
                 failed_count,
                 total_spans
             )
+            
+            logger.info(f"Batch {i//batch_size + 1} completed: {batch_successful} successful, {batch_failed} failed")
         
         self.stats["completed_at"] = datetime.now().isoformat()
         
