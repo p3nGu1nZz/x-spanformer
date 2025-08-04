@@ -80,7 +80,7 @@ class PipelineTelemetry:
         if sequence_start_time:
             sequence_time = (current_time - sequence_start_time).total_seconds()
             self.telemetry["sequence_times"].append(sequence_time)
-            self.telemetry["last_sequence_time"] = current_time  # Store datetime, not float
+            self.telemetry["last_sequence_time"] = sequence_time  # Store duration in seconds
         
         # Track span statistics if annotation result provided
         if annotation_result and hasattr(annotation_result, 'span_annotations') and annotation_result.span_annotations:
@@ -109,7 +109,7 @@ class PipelineTelemetry:
         if sequence_start_time:
             sequence_time = (current_time - sequence_start_time).total_seconds()
             self.telemetry["sequence_times"].append(sequence_time)
-            self.telemetry["last_sequence_time"] = current_time  # Store datetime, not float
+            self.telemetry["last_sequence_time"] = sequence_time  # Store duration in seconds
     
     def display_progress_panel(self):
         """Display comprehensive telemetry panel with progress and statistics."""
@@ -263,11 +263,15 @@ class PipelineTelemetry:
                     logger.warning(f"start_time is not datetime: {type(telemetry_data['start_time'])}")
             
             if telemetry_data["last_sequence_time"]:
-                if isinstance(telemetry_data["last_sequence_time"], datetime):
-                    telemetry_data["last_sequence_time"] = telemetry_data["last_sequence_time"].isoformat()
+                if isinstance(telemetry_data["last_sequence_time"], (int, float)):
+                    # last_sequence_time is now stored as duration in seconds, no conversion needed
+                    pass
+                elif isinstance(telemetry_data["last_sequence_time"], datetime):
+                    # Handle legacy case where it was stored as datetime - convert to None
+                    logger.warning("Converting legacy datetime last_sequence_time to None")
+                    telemetry_data["last_sequence_time"] = None
                 else:
-                    logger.warning(f"last_sequence_time is not datetime: {type(telemetry_data['last_sequence_time'])}")
-                    # Convert float to None for now to avoid serialization issues
+                    logger.warning(f"last_sequence_time is unexpected type: {type(telemetry_data['last_sequence_time'])}")
                     telemetry_data["last_sequence_time"] = None
             
             # Add comprehensive telemetry section
@@ -346,11 +350,12 @@ class PipelineTelemetry:
                 logger.info("Empty telemetry session data - starting fresh")
                 return False
             
-            # Convert ISO string back to datetime
+            # Convert ISO string back to datetime for start_time
             if telemetry_data.get("start_time"):
                 telemetry_data["start_time"] = datetime.fromisoformat(telemetry_data["start_time"])
-            if telemetry_data.get("last_sequence_time"):
-                telemetry_data["last_sequence_time"] = datetime.fromisoformat(telemetry_data["last_sequence_time"])
+            
+            # last_sequence_time is now stored as float (duration), no conversion needed
+            # (keep as-is if it's a numeric value)
             
             # Restore telemetry data
             self.telemetry = telemetry_data
