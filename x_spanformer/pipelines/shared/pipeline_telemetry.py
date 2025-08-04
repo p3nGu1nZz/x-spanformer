@@ -65,6 +65,19 @@ class PipelineTelemetry:
         logger.info(f"  - Already completed: {existing_completed}")
         logger.info(f"  - Previously failed: {existing_failed}")
     
+    def reset_session_timing(self):
+        """
+        Reset the session timing for resumed pipelines.
+        
+        This should be called when resuming a pipeline to ensure that
+        current session metrics reflect only the new session, not the
+        entire historical runtime.
+        """
+        self.telemetry["start_time"] = datetime.now()
+        self.telemetry["sequence_times"] = []
+        logger.info(f"[TELEMETRY] Session timing reset for {self.pipeline_name}")
+        logger.info(f"[TELEMETRY] New session started at: {self.telemetry['start_time']}")
+    
     def update_on_completion(self, annotation_result=None, sequence_start_time: Optional[datetime] = None):
         """
         Update telemetry when a sequence is completed successfully.
@@ -467,6 +480,10 @@ class PipelineTelemetry:
             # Restore telemetry data
             self.telemetry = telemetry_data
             
+            # Reset session timing for resumed pipelines
+            # This ensures current session metrics reflect only the new session
+            self.reset_session_timing()
+            
             # Log resume information
             stats = telemetry_section.get("current_statistics", {})
             logger.info(f"Telemetry state loaded from {metadata_filepath}")
@@ -507,6 +524,9 @@ class PipelineTelemetry:
                 telemetry_data["start_time"] = datetime.fromisoformat(telemetry_data["start_time"])
             
             self.telemetry = telemetry_data
+            
+            # Reset session timing for resumed pipelines
+            self.reset_session_timing()
             
             logger.info(f"Telemetry state loaded from {filepath}")
             logger.info(f"Resuming from: {state['statistics']['processed_sequences']} processed sequences")

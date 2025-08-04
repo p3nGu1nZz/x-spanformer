@@ -56,6 +56,33 @@ class TestPipelineTelemetry:
         assert telemetry.telemetry["spans_by_modality"] == {}
         assert telemetry.telemetry["sequence_times"] == []
     
+    def test_reset_session_timing(self):
+        """Test that session timing is reset correctly."""
+        telemetry = PipelineTelemetry("Test Pipeline")
+        
+        # Initialize with some data
+        with patch('x_spanformer.pipelines.shared.pipeline_telemetry.datetime') as mock_datetime:
+            old_time = datetime(2025, 8, 3, 12, 0, 0)
+            mock_datetime.now.return_value = old_time
+            
+            telemetry.initialize(100, existing_completed=25, existing_failed=5)
+            telemetry.telemetry["sequence_times"] = [5.0, 10.0, 8.0]  # Add some sequence times
+            
+            # Now reset session timing
+            new_time = datetime(2025, 8, 3, 14, 0, 0)  # 2 hours later
+            mock_datetime.now.return_value = new_time
+            
+            telemetry.reset_session_timing()
+        
+        # Verify that session-specific data was reset
+        assert telemetry.telemetry["start_time"] == new_time
+        assert telemetry.telemetry["sequence_times"] == []
+        
+        # Verify that historical data was preserved
+        assert telemetry.telemetry["completed_sequences"] == 25
+        assert telemetry.telemetry["failed_sequences"] == 5
+        assert telemetry.telemetry["total_sequences"] == 100
+    
     def test_update_on_completion_basic(self):
         """Test basic completion update without annotation result."""
         telemetry = PipelineTelemetry("Test Pipeline")
