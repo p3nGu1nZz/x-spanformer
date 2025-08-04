@@ -31,20 +31,39 @@ We welcome collaborators interested in tokenizer-free modeling, span induction, 
    python -m venv .venv && source .venv/bin/activate
    pip install -e .[dev]
    ```
-3. **Explore** the `examples/`, `dataset/`, and `model/` folders
-4. Optionally clone [`ox-bar`](https://github.com/.../ox-bar) for the span compiler
+3. **Run the test suite to validate your environment**
+   ```bash
+   python -m pytest tests/ -v
+   ```
+4. **Explore** the architecture and data processing pipelines
+   - Study the pipelines in `x_spanformer/pipelines/`
+   - Examine the documentation in `docs/`
+   - Review the LaTeX paper in `docs/paper/`
 
 ---
 
-## 🧪 Lint, Test, Validate
+## 🧪 Development Workflow
 
-Before pushing:
+Before pushing changes:
 
 ```bash
-black .              # format code
-pytest tests/        # run tests
-oxbar validate .     # ensure span records are clean
+# Run the complete test suite
+python -m pytest tests/ -v
+
+# Run specific test categories
+python -m pytest tests/pipelines/     # Pipeline tests
+python -m pytest tests/embedding/     # Embedding module tests
+python -m pytest tests/schema/        # Schema validation tests
+
+# Run tests with coverage
+python -m pytest tests/ -v --cov=x_spanformer
 ```
+
+### Code Quality
+- Follow existing code style and patterns
+- Add tests for new functionality  
+- Update documentation for architectural changes
+- Ensure mathematical correctness aligns with the paper
 
 ---
 

@@ -1,33 +1,20 @@
 # JSONL2Vocab Pipeline
 
-# JSONL2Vocab Pipeline
-
-Following Algorithm 1 from Section 3.1 of the X-Spanformer paper, this pipeline ingests one or more JSONL files (recursively discovered in an input directory), extracts each record's text, and induces a hybrid Unigram-LM vocabulary via an EM + Viterbi procedure with adaptive pruning. It implements the mathematical formulation described in Section 3.1 of the X-Spanformer paper, writing per-stage artifacts under an output directory and emitting a final vocabulary as JSONL with comprehensive statistics.
+Following Algorithm 1 from Section 3.1 of the X-Spanformer paper, this pipeline ingests one or more JSONL files (recursively discovered in an input directory), extracts each record's text, and induces a hybrid Unigram-LM vocabulary via EM with Viterbi approximation and adaptive pruning. It implements the mathematical formulation described in Section 3.1 of the X-Spanformer paper, writing per-stage artifacts under an output directory and emitting a final vocabulary as JSONL with comprehensive statistics.
 
 ---
 
-## Overview
+## Algorithm Implementation
 
 This pipeline implements the **Adaptive Unigram-LM Vocabulary Induction** algorithm with the following stages:
 
-1. **Discover** all `*.jsonl` under `--in` (recursively).  
+1. **Discover** all `*.jsonl` under `--input` (recursively).  
 2. **Load** each record's `raw` field using `PretrainRecord` schema validation via shared utilities.  
-3. **Count** all substrings up to length `L_max`; dump `full_freq.json`.  
-4. **Select** top `M` substrings + all single codepoints to form U₀; dump `candidates.txt`.  
+3. **Count** all substrings up to length `L_max` with whitespace-aware tokenization; dump `full_freq.json`.  
+4. **Select** top `M` substrings + all single codepoints to form 𝒰₀; dump `candidates.txt`.  
 5. **EM-train** a Unigram LM with Viterbi-based segmentation, adaptively pruning low-probability pieces under perplexity and OOV thresholds; dump `final_probs.json`.  
 6. **Save** the final vocabulary (`piece` + `prob`) in `vocab.jsonl` using `VocabPiece` schema.
 7. **Output** comprehensive statistics in `vocab_stats.json` using `VocabStats` schema.
-
----
-
-## Overview
-
-This pipeline implements the **Adaptive Unigram-LM Vocabulary Induction** algorithm with the following stages:
-
-1. **Discover** all `*.jsonl` under `--in` (recursively).  
-2. **Load** each record's `raw` field using `PretrainRecord` schema validation.  
-3. **Count** all substrings up to length `L_max`; dump `full_freq.json`.  
-4. **Select** top `M` substrings + all single codepoints to form U₀; dump `candidates.txt`.  
 5. **EM-train** a Unigram LM with Viterbi-based segmentation, adaptively pruning low-probability pieces under perplexity and OOV thresholds; dump `final_probs.json`.  
 6. **Save** the final vocabulary (`piece` + `prob`) in `vocab.jsonl` using `VocabPiece` schema.
 7. **Output** comprehensive statistics in `vocab_stats.json` using `VocabStats` schema.ine inge## Overview

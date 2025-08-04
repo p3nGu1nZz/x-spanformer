@@ -86,15 +86,22 @@ Combines verbose float display with statistical analysis for comprehensive intro
 
 ## Output Structure
 
-The introspector expects the following directory structure from the vocab2embedding pipeline:
+The introspector works with the chunk-based storage system from the vocab2embedding pipeline:
 
 ```
 data/embedding/out/
-├── json/           # Metadata files (embedding_XXXXXX.json)
-├── seed/           # Seed embedding arrays (seed_emb_XXXXXX.npy)
-├── context/        # Contextual embedding arrays (context_emb_XXXXXX.npy)
-└── soft_prob/      # Soft probability matrices (soft_probs_XXXXXX.npy) [optional]
+├── chunks/                       # Compressed chunk storage
+│   ├── embeddings_000001.npz    # Sequences 1-100
+│   ├── embeddings_000002.npz    # Sequences 101-200
+│   └── embeddings_000052.npz    # Final chunk (partial)
+├── metadata.json                 # Global metadata and chunk information
+└── embedding.log                 # Processing log with validation
 ```
+
+**Key Features:**
+- **Efficient Access**: Loads individual sequences from compressed chunks without full decompression
+- **Millisecond Loading**: Fast single-sequence access even from large chunk files
+- **Chunk Storage Information**: Shows which chunk contains the target sequence
 
 ## Mathematical Context
 
@@ -126,11 +133,12 @@ X-SPANFORMER SEQUENCE INTROSPECTOR - SEQUENCE 1
    Sequence Length: 511 characters
    Span Candidates: 14668
    Vocabulary Size: 15452
+   Chunk Information: Found in embeddings_000001.npz (sequences 1-100)
 
 == NEURAL REPRESENTATIONS:
    Seed Embeddings (H0):     (511, 512)
    Contextual Embeddings (H): (511, 512)
-   Soft Probabilities (P):    (511, 15452)
+   Soft Probabilities (P):    (511, 15452) [if enabled]
 
 == SEQUENCE PREVIEW:
    'X-SPANFORMER\nSPAN-AwARE ENCODER\n5.4 Qualitative Span Interpretability...'
