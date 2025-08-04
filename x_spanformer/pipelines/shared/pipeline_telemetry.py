@@ -11,7 +11,8 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+# Use the same logger name as the main pipeline for consistent output
+logger = logging.getLogger("Span Annotation Pipeline")
 
 
 class PipelineTelemetry:
@@ -113,79 +114,92 @@ class PipelineTelemetry:
     
     def display_progress_panel(self):
         """Display comprehensive telemetry panel with progress and statistics."""
-        current_time = datetime.now()
-        
-        # Calculate progress metrics
-        processed_sequences = self.telemetry["completed_sequences"] + self.telemetry["failed_sequences"]
-        progress_pct = (self.telemetry["completed_sequences"] / max(self.telemetry["total_sequences"], 1)) * 100
-        success_rate = (self.telemetry["completed_sequences"] / max(processed_sequences, 1)) * 100
-        
-        # Calculate timing metrics
-        elapsed_time = 0
-        sequences_per_min = 0
-        eta_display = "calculating..."
-        
-        if self.telemetry["start_time"]:
-            elapsed_seconds = (current_time - self.telemetry["start_time"]).total_seconds()
-            elapsed_time = elapsed_seconds / 60  # Convert to minutes
+        try:
+            current_time = datetime.now()
             
-            if elapsed_seconds > 0 and processed_sequences > 0:
-                sequences_per_min = (processed_sequences * 60) / elapsed_seconds
-                
-                # Calculate remaining work: 
-                # - Unprocessed sequences from total corpus
-                # - Failed sequences that need retry
-                remaining_new_sequences = self.telemetry["total_sequences"] - self.telemetry["completed_sequences"]
-                remaining_work = remaining_new_sequences + self.telemetry["failed_sequences"]
-                
-                if sequences_per_min > 0 and remaining_work > 0:
-                    eta_minutes = remaining_work / sequences_per_min
-                    eta_display = self._format_eta(eta_minutes)
-                elif remaining_work == 0:
-                    eta_display = "Complete!"
-        
-        # Calculate span statistics
-        total_spans = sum(self.telemetry["spans_by_type"].values())
-        span_types_summary = self._format_span_summary(self.telemetry["spans_by_type"])
-        modality_summary = self._format_span_summary(self.telemetry["spans_by_modality"])
-        
-        # Calculate average sequence processing time
-        avg_seq_time = 0
-        if self.telemetry["sequence_times"]:
-            avg_seq_time = sum(self.telemetry["sequence_times"]) / len(self.telemetry["sequence_times"])
-        
-        # Calculate remaining work breakdown for display
-        remaining_new_sequences = self.telemetry["total_sequences"] - self.telemetry["completed_sequences"] 
-        total_remaining_work = remaining_new_sequences + self.telemetry["failed_sequences"]
-        
-        # Display telemetry panel
-        logger.info("=" * 80)
-        logger.info(f"TELEMETRY PANEL - {self.pipeline_name} Progress")
-        logger.info("=" * 80)
-        logger.info(f"Overall Progress: {processed_sequences}/{self.telemetry['total_sequences']} sequences ({progress_pct:.1f}%)")
-        logger.info(f"Success Rate: {self.telemetry['completed_sequences']}/{processed_sequences} successful ({success_rate:.1f}%)")
-        logger.info(f"Failed Sequences: {self.telemetry['failed_sequences']} (need retry)")
-        logger.info(f"Remaining Work: {total_remaining_work} sequences ({remaining_new_sequences} new + {self.telemetry['failed_sequences']} retries)")
-        logger.info("-" * 40)
-        
-        # Show processing performance for current session
-        current_session_processed = len(self.telemetry["sequence_times"])
-        if current_session_processed > 0:
-            logger.info(f"Current Session: {current_session_processed} sequences processed")
-            logger.info(f"Processing Rate: {sequences_per_min:.2f} sequences/min")
-            logger.info(f"Average Sequence Time: {avg_seq_time:.1f} seconds")
-        else:
-            logger.info("Current Session: No sequences processed yet")
-        
-        logger.info(f"Elapsed Time: {elapsed_time:.1f} minutes")
-        logger.info(f"ETA: {eta_display}")
-        logger.info("-" * 40)
-        logger.info(f"Total Spans Extracted: {total_spans}")
-        if span_types_summary:
-            logger.info(f"Span Types: {span_types_summary}")
-        if modality_summary:
-            logger.info(f"Modalities: {modality_summary}")
-        logger.info("=" * 80)
+            # Calculate progress metrics
+            processed_sequences = self.telemetry["completed_sequences"] + self.telemetry["failed_sequences"]
+            progress_pct = (self.telemetry["completed_sequences"] / max(self.telemetry["total_sequences"], 1)) * 100
+            success_rate = (self.telemetry["completed_sequences"] / max(processed_sequences, 1)) * 100
+            
+            # Calculate timing metrics
+            elapsed_time = 0
+            sequences_per_min = 0
+            eta_display = "calculating..."
+            
+            if self.telemetry["start_time"]:
+                elapsed_seconds = (current_time - self.telemetry["start_time"]).total_seconds()
+                elapsed_time = elapsed_seconds / 60  # Convert to minutes
+            
+                if elapsed_seconds > 0 and processed_sequences > 0:
+                    sequences_per_min = (processed_sequences * 60) / elapsed_seconds
+                    
+                    # Calculate remaining work: 
+                    # - Unprocessed sequences from total corpus
+                    # - Failed sequences that need retry
+                    remaining_new_sequences = self.telemetry["total_sequences"] - self.telemetry["completed_sequences"]
+                    remaining_work = remaining_new_sequences + self.telemetry["failed_sequences"]
+                    
+                    if sequences_per_min > 0 and remaining_work > 0:
+                        eta_minutes = remaining_work / sequences_per_min
+                        eta_display = self._format_eta(eta_minutes)
+                    elif remaining_work == 0:
+                        eta_display = "Complete!"
+            
+            # Calculate span statistics
+            total_spans = sum(self.telemetry["spans_by_type"].values())
+            span_types_summary = self._format_span_summary(self.telemetry["spans_by_type"])
+            modality_summary = self._format_span_summary(self.telemetry["spans_by_modality"])
+            
+            # Calculate average sequence processing time
+            avg_seq_time = 0
+            if self.telemetry["sequence_times"]:
+                avg_seq_time = sum(self.telemetry["sequence_times"]) / len(self.telemetry["sequence_times"])
+            
+            # Calculate remaining work breakdown for display
+            remaining_new_sequences = self.telemetry["total_sequences"] - self.telemetry["completed_sequences"] 
+            total_remaining_work = remaining_new_sequences + self.telemetry["failed_sequences"]
+            
+            # Display telemetry panel
+            logger.info("=" * 80)
+            logger.info(f"[TELEMETRY] {self.pipeline_name} Progress Panel")
+            logger.info("=" * 80)
+            logger.info(f"[TELEMETRY] Overall Progress: {processed_sequences}/{self.telemetry['total_sequences']} sequences ({progress_pct:.1f}%)")
+            logger.info(f"[TELEMETRY] Success Rate: {self.telemetry['completed_sequences']}/{processed_sequences} successful ({success_rate:.1f}%)")
+            logger.info(f"[TELEMETRY] Failed Sequences: {self.telemetry['failed_sequences']} (need retry)")
+            logger.info(f"[TELEMETRY] Remaining Work: {total_remaining_work} sequences ({remaining_new_sequences} new + {self.telemetry['failed_sequences']} retries)")
+            logger.info("-" * 40)
+            
+            # Show processing performance for current session
+            current_session_processed = len(self.telemetry["sequence_times"])
+            if current_session_processed > 0:
+                logger.info(f"[TELEMETRY] Current Session: {current_session_processed} sequences processed")
+                logger.info(f"[TELEMETRY] Processing Rate: {sequences_per_min:.2f} sequences/min")
+                logger.info(f"[TELEMETRY] Average Sequence Time: {avg_seq_time:.1f} seconds")
+            else:
+                logger.info("[TELEMETRY] Current Session: No sequences processed yet")
+            
+            logger.info(f"[TELEMETRY] Elapsed Time: {elapsed_time:.1f} minutes")
+            logger.info(f"[TELEMETRY] ETA: {eta_display}")
+            logger.info("-" * 40)
+            logger.info(f"[TELEMETRY] Total Spans Extracted: {total_spans}")
+            if span_types_summary:
+                logger.info(f"[TELEMETRY] Span Types: {span_types_summary}")
+            if modality_summary:
+                logger.info(f"[TELEMETRY] Modalities: {modality_summary}")
+            logger.info("=" * 80)
+            
+        except Exception as e:
+            logger.error(f"[TELEMETRY] Error displaying progress panel: {e}")
+            logger.error(f"[TELEMETRY] Exception type: {type(e).__name__}")
+            logger.error(f"[TELEMETRY] Telemetry data keys: {list(self.telemetry.keys())}")
+            # Display basic fallback information
+            logger.info("=" * 80)
+            logger.info(f"[TELEMETRY] {self.pipeline_name} Progress (Basic View)")
+            logger.info("=" * 80)
+            logger.info(f"[TELEMETRY] Progress: {self.telemetry.get('completed_sequences', 0)} completed, {self.telemetry.get('failed_sequences', 0)} failed")
+            logger.info(f"[TELEMETRY] Total sequences: {self.telemetry.get('total_sequences', 0)}")
+            logger.info("=" * 80)
     
     def get_statistics(self) -> Dict[str, Any]:
         """
@@ -354,8 +368,13 @@ class PipelineTelemetry:
             if telemetry_data.get("start_time"):
                 telemetry_data["start_time"] = datetime.fromisoformat(telemetry_data["start_time"])
             
-            # last_sequence_time is now stored as float (duration), no conversion needed
-            # (keep as-is if it's a numeric value)
+            # Ensure last_sequence_time is properly typed as float
+            if "last_sequence_time" in telemetry_data:
+                try:
+                    telemetry_data["last_sequence_time"] = float(telemetry_data["last_sequence_time"])
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid last_sequence_time value, removing: {telemetry_data.get('last_sequence_time')}")
+                    telemetry_data.pop("last_sequence_time", None)
             
             # Restore telemetry data
             self.telemetry = telemetry_data
