@@ -169,7 +169,15 @@ class SpanAnnotatorPipeline:
             force: Force display regardless of timing
             output_dir: Output directory to save telemetry to metadata.json (optional)
         """
-        if self.should_display_telemetry(force):
+        should_display = self.should_display_telemetry(force)
+        processed_sequences = self.telemetry.telemetry["completed_sequences"] + self.telemetry.telemetry["failed_sequences"]
+        
+        # Debug logging to understand why telemetry isn't displaying
+        if force or processed_sequences > 0:
+            logger.info(f"Telemetry check: processed={processed_sequences}, force={force}, should_display={should_display}")
+        
+        if should_display:
+            logger.info("Displaying telemetry progress panel...")
             self.telemetry.display_progress_panel()
             self.last_telemetry_display = datetime.now()
             
@@ -180,6 +188,8 @@ class SpanAnnotatorPipeline:
                     self.telemetry.save_telemetry_to_metadata(metadata_file)
                 except Exception as e:
                     logger.warning(f"Failed to save telemetry to metadata: {e}")
+        elif processed_sequences > 0:  # Only log when we've actually processed sequences
+            logger.info(f"Telemetry not displayed: processed={processed_sequences}, last_display={self.last_telemetry_display}")
     
     def display_current_stats(self):
         """

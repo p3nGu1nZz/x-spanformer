@@ -3,7 +3,7 @@ agent_type: span_annotator
 # Agent-specific model settings (detailed configuration)
 model:
   name: phi4-mini
-  temperature: 0.2
+  temperature: 0.5
   max_context_tokens: 131072
   max_turn_tokens: 4096
 

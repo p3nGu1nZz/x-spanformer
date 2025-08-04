@@ -104,7 +104,11 @@ async def chat(
 	response = await client.chat(
 		model=model,
 		messages=messages,
-		options={"temperature": temperature},
+		options={
+			"temperature": temperature,
+			"num_predict": 4096,  # Max tokens to prevent runaway generations
+			"repeat_penalty": 1.1  # Slight penalty for repetition
+		},
 		stream=False
 	)
 	content = response["message"]["content"]
