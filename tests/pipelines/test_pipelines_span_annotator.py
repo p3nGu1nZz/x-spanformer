@@ -487,5 +487,304 @@ class TestSpanAnnotatorPipelineMissingSequences:
         assert len([seq for seq in missing if seq <= 5]) == 1  # Only one gap in processed range
 
 
+class TestSpanAnnotatorPipelineValidation:
+    """Test cases for SpanAnnotatorPipeline validation integration."""
+    
+    def setup_method(self):
+        """Setup pipeline for validation testing."""
+        with patch('x_spanformer.pipelines.span_annotator.load_config'), \
+             patch('x_spanformer.pipelines.span_annotator.Path.exists', return_value=True), \
+             patch('builtins.open', create=True), \
+             patch('yaml.safe_load') as mock_yaml_load, \
+             patch('x_spanformer.pipelines.span_annotator.SpanAnnotatorSession'):
+            
+            # Mock agent config
+            mock_yaml_load.return_value = {
+                "model": {"name": "test-model", "temperature": 0.7},
+                "dialogue": {"max_turns": 5},
+                "agent": {"early_termination": {"enabled": True}}
+            }
+            
+            self.pipeline = SpanAnnotatorPipeline()
+    
+    def test_span_cleaner_initialization(self):
+        """Test that SpanCleaner is properly initialized in pipeline."""
+        assert hasattr(self.pipeline, 'span_cleaner')
+        assert self.pipeline.span_cleaner is not None
+        from x_spanformer.xbar.span_validator import SpanCleaner
+        assert isinstance(self.pipeline.span_cleaner, SpanCleaner)
+    
+    def test_append_to_annotations_file_with_validation(self):
+        """Test append_to_annotations_file with validation functionality."""
+        from x_spanformer.schema.annotation_record import AnnotationRecord, SpanAnnotation
+        from x_spanformer.schema.metadata import RecordMeta
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            
+            # Create mock span annotations - mix of valid and invalid
+            valid_span = SpanAnnotation(
+                start_pos=0,
+                end_pos=3,
+                xbar_class="determiner",
+                linguistic_features={"text": "The", "length": 3}
+            )
+            
+            # Invalid span: "in" labeled as "determiner"
+            invalid_span = SpanAnnotation(
+                start_pos=10,
+                end_pos=12,
+                xbar_class="determiner",
+                linguistic_features={"text": "in", "length": 2}
+            )
+            
+            # Create annotation record
+            annotation_result = AnnotationRecord(
+                sequence_id=1,
+                raw="The cat walked in the park.",
+                embedding_chunk_id=1,
+                span_annotations=[valid_span, invalid_span],
+                total_positions=27,
+                meta=RecordMeta(
+                    doc_language=None,
+                    extracted_by=None,
+                    confidence=None,
+                    source_file=None,
+                    notes=None
+                )
+            )
+            
+            # Mock the pipeline stats
+            self.pipeline.stats = {
+                "spans_deduplicated": 0,
+                "spans_validation_removed": 0,
+                "spans_written": 0
+            }
+            
+            # Call append_to_annotations_file
+            self.pipeline.append_to_annotations_file(output_dir, annotation_result)
+            
+            # Verify annotations file was created
+            annotations_file = output_dir / "annotations.jsonl"
+            assert annotations_file.exists()
+            
+            # Read and verify content
+            with open(annotations_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # Should only have 1 line (valid span), invalid span should be removed
+            assert len(lines) == 1
+            
+            annotation = json.loads(lines[0].strip())
+            assert annotation['span_annotation']['text'] == "The"
+            assert annotation['span_annotation']['xbar_class'] == "determiner"
+            
+            # Verify stats were updated
+            assert self.pipeline.stats["spans_validation_removed"] == 1
+            assert self.pipeline.stats["spans_written"] == 1
+    
+    def test_append_to_annotations_file_deduplication_and_validation(self):
+        """Test deduplication and validation working together."""
+        from x_spanformer.schema.annotation_record import AnnotationRecord, SpanAnnotation
+        from x_spanformer.schema.metadata import RecordMeta
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            
+            # Create duplicate spans (same position) with validation issues
+            span1 = SpanAnnotation(
+                start_pos=0,
+                end_pos=3,
+                xbar_class="determiner",
+                linguistic_features={"text": "The", "length": 3}
+            )
+            
+            span2 = SpanAnnotation(  # Duplicate position
+                start_pos=0,
+                end_pos=3,
+                xbar_class="determiner",
+                linguistic_features={"text": "The", "length": 3}
+            )
+            
+            span3 = SpanAnnotation(  # Invalid: "in" as determiner
+                start_pos=10,
+                end_pos=12,
+                xbar_class="determiner",
+                linguistic_features={"text": "in", "length": 2}
+            )
+            
+            # Create annotation record
+            annotation_result = AnnotationRecord(
+                sequence_id=1,
+                raw="The cat walked in the park.",
+                embedding_chunk_id=1,
+                span_annotations=[span1, span2, span3],
+                total_positions=27,
+                meta=RecordMeta(
+                    doc_language=None,
+                    extracted_by=None,
+                    confidence=None,
+                    source_file=None,
+                    notes=None
+                )
+            )
+            
+            # Mock the pipeline stats
+            self.pipeline.stats = {
+                "spans_deduplicated": 0,
+                "spans_validation_removed": 0,
+                "spans_written": 0
+            }
+            
+            # Call append_to_annotations_file
+            self.pipeline.append_to_annotations_file(output_dir, annotation_result)
+            
+            # Verify only 1 span remains (duplicate removed, invalid removed)
+            annotations_file = output_dir / "annotations.jsonl"
+            with open(annotations_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            assert len(lines) == 1
+            annotation = json.loads(lines[0].strip())
+            assert annotation['span_annotation']['text'] == "The"
+            
+            # Verify stats
+            assert self.pipeline.stats["spans_deduplicated"] == 1  # 1 duplicate removed
+            assert self.pipeline.stats["spans_validation_removed"] == 1  # 1 invalid removed
+            assert self.pipeline.stats["spans_written"] == 1  # 1 valid written
+    
+    def test_validation_logging(self):
+        """Test that validation logging works correctly."""
+        from x_spanformer.schema.annotation_record import AnnotationRecord, SpanAnnotation
+        from x_spanformer.schema.metadata import RecordMeta
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            
+            # Create multiple invalid spans for logging test
+            invalid_spans = [
+                SpanAnnotation(
+                    start_pos=i,
+                    end_pos=i+2,
+                    xbar_class="determiner",
+                    linguistic_features={"text": "in", "length": 2}
+                )
+                for i in range(3)  # 3 invalid spans
+            ]
+            
+            annotation_result = AnnotationRecord(
+                sequence_id=1,
+                raw="in in in the park.",
+                embedding_chunk_id=1,
+                span_annotations=invalid_spans,
+                total_positions=18,
+                meta=RecordMeta(
+                    doc_language=None,
+                    extracted_by=None,
+                    confidence=None,
+                    source_file=None,
+                    notes=None
+                )
+            )
+            
+            # Mock the pipeline stats
+            self.pipeline.stats = {
+                "spans_deduplicated": 0,
+                "spans_validation_removed": 0,
+                "spans_written": 0
+            }
+            
+            # Capture logging
+            with patch('x_spanformer.pipelines.span_annotator.logger') as mock_logger:
+                self.pipeline.append_to_annotations_file(output_dir, annotation_result)
+                
+                # Verify validation removal was logged
+                mock_logger.info.assert_any_call(
+                    "Validation removed 3 invalid spans for sequence 1 (kept 0 valid)"
+                )
+                
+                # Verify final append was logged
+                mock_logger.info.assert_any_call(
+                    "Appended 0 validated span records to " + str(output_dir / "annotations.jsonl")
+                )
+    
+    def test_validation_preserves_existing_spans(self):
+        """Test that validation doesn't affect existing spans in file."""
+        from x_spanformer.schema.annotation_record import AnnotationRecord, SpanAnnotation
+        from x_spanformer.schema.metadata import RecordMeta
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            annotations_file = output_dir / "annotations.jsonl"
+            
+            # Create existing annotations file with pre-existing span
+            existing_annotation = {
+                "raw": "Previous annotation.",
+                "sequence_id": 999,
+                "type": "natural",
+                "span_annotation": {
+                    "start_pos": 0,
+                    "end_pos": 8,
+                    "xbar_class": "adjective",
+                    "text": "Previous",
+                    "length": 8
+                },
+                "total_positions": 20
+            }
+            
+            with open(annotations_file, 'w', encoding='utf-8') as f:
+                json.dump(existing_annotation, f, ensure_ascii=False)
+                f.write('\n')
+            
+            # Add new span with validation
+            new_span = SpanAnnotation(
+                start_pos=0,
+                end_pos=3,
+                xbar_class="determiner",
+                linguistic_features={"text": "The", "length": 3}
+            )
+            
+            annotation_result = AnnotationRecord(
+                sequence_id=1,
+                raw="The cat sat.",
+                embedding_chunk_id=1,
+                span_annotations=[new_span],
+                total_positions=12,
+                meta=RecordMeta(
+                    doc_language=None,
+                    extracted_by=None,
+                    confidence=None,
+                    source_file=None,
+                    notes=None
+                )
+            )
+            
+            # Mock the pipeline stats
+            self.pipeline.stats = {
+                "spans_deduplicated": 0,
+                "spans_validation_removed": 0,
+                "spans_written": 0
+            }
+            
+            # Append new annotation
+            self.pipeline.append_to_annotations_file(output_dir, annotation_result)
+            
+            # Verify both spans exist
+            with open(annotations_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            assert len(lines) == 2
+            
+            # Verify existing span is preserved
+            first_annotation = json.loads(lines[0].strip())
+            assert first_annotation['sequence_id'] == 999
+            assert first_annotation['span_annotation']['text'] == "Previous"
+            
+            # Verify new span was added
+            second_annotation = json.loads(lines[1].strip())
+            assert second_annotation['sequence_id'] == 1
+            assert second_annotation['span_annotation']['text'] == "The"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

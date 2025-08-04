@@ -27,6 +27,7 @@ import sys
 from x_spanformer.agents.session.span_annotator_session import SpanAnnotatorSession
 from x_spanformer.agents.ollama_client import check_ollama_connection
 from x_spanformer.xbar.position_mapper import PositionMapper
+from x_spanformer.xbar.span_validator import SpanCleaner
 from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.annotation_record import AnnotationRecord, AnnotationBatch
 from x_spanformer.config.span_annotator_config_loader import load_config
@@ -120,11 +121,18 @@ class SpanAnnotatorPipeline:
             "started_at": None,
             "completed_at": None,
             "consecutive_failures": 0,  # Track consecutive failures
-            "max_consecutive_failures": 3  # Exit after 3 consecutive failures
+            "max_consecutive_failures": 3,  # Exit after 3 consecutive failures
+            # Validation statistics
+            "spans_deduplicated": 0,
+            "spans_validation_removed": 0,
+            "spans_written": 0
         }
         
         # Initialize shared telemetry
         self.telemetry = SpanAnnotationTelemetry()
+        
+        # Initialize span cleaner for real-time validation
+        self.span_cleaner = SpanCleaner()
         
         # Telemetry display settings
         self.last_telemetry_display = None
@@ -680,43 +688,81 @@ class SpanAnnotatorPipeline:
         
         if duplicate_count > 0:
             logger.info(f"Removed {duplicate_count} duplicate spans for sequence {sequence_id} (kept {len(unique_spans)} unique)")
+            self.stats["spans_deduplicated"] += duplicate_count
         
-        # Create one record per unique span and append to file (skip existing duplicates)
+        # Convert spans to annotation format for validation
+        validation_annotations = []
+        for span in unique_spans.values():
+            # Extract text and length from linguistic features if available
+            linguistic_features = span.linguistic_features or {}
+            span_text = linguistic_features.get("text", "")
+            span_length = linguistic_features.get("length", span.end_pos - span.start_pos)
+            
+            # Create validation annotation record
+            validation_record = {
+                "raw": raw_text,
+                "sequence_id": sequence_id,
+                "span_annotation": {
+                    "start_pos": span.start_pos,
+                    "end_pos": span.end_pos,
+                    "xbar_class": span.xbar_class,
+                    "text": span_text,
+                    "length": span_length
+                }
+            }
+            validation_annotations.append((span, validation_record))
+        
+        # Apply span validation - remove invalid spans
+        validated_spans = []
+        validation_removed = 0
+        
+        for span, validation_record in validation_annotations:
+            is_valid, reason = self.span_cleaner.validator.validate_span(validation_record)
+            
+            if is_valid:
+                # Check repetition limits within this sequence batch
+                span_text = validation_record['span_annotation']['text'].lower()
+                xbar_class = validation_record['span_annotation']['xbar_class']
+                
+                # Note: We could implement sequence-level repetition checking here
+                # but for now we'll rely on the main validator for cross-sequence limits
+                validated_spans.append((span, validation_record))
+            else:
+                validation_removed += 1
+                logger.debug(f"Validation removed span: '{validation_record['span_annotation']['text']}' - {reason}")
+        
+        if validation_removed > 0:
+            logger.info(f"Validation removed {validation_removed} invalid spans for sequence {sequence_id} (kept {len(validated_spans)} valid)")
+            self.stats["spans_validation_removed"] += validation_removed
+        
+        # Create one record per validated span and append to file (skip existing duplicates)
         new_spans_added = 0
         with open(annotations_file, 'a', encoding='utf-8') as f:
-            for span in unique_spans.values():
+            for span, validation_record in validated_spans:
                 span_key = (span.start_pos, span.end_pos)
                 
                 # Skip if this span already exists in the file for this sequence
                 if span_key in existing_spans:
                     continue
                 
-                # Extract text and length from linguistic features if available
-                linguistic_features = span.linguistic_features or {}
-                span_text = linguistic_features.get("text", "")
-                span_length = linguistic_features.get("length", span.end_pos - span.start_pos)
-                
-                # Log single-character spans for analysis
-                if span_length == 1:
-                    logger.debug(f"Single-char span: '{span_text}' ({span.xbar_class}) at pos {span.start_pos}-{span.end_pos}")
-                
+                # Use the validation record that already has the extracted text and length
                 span_record = {
                     "raw": raw_text,
                     "sequence_id": sequence_id,
                     "type": domain_type,
-                    "span_annotation": {
-                        "start_pos": span.start_pos,
-                        "end_pos": span.end_pos,
-                        "xbar_class": span.xbar_class,
-                        "text": span_text,
-                        "length": span_length
-                    },
+                    "span_annotation": validation_record['span_annotation'],
                     "total_positions": annotation_result.total_positions
                 }
+                
+                # Log single-character spans for analysis
+                if validation_record['span_annotation']['length'] == 1:
+                    logger.debug(f"Single-char span: '{validation_record['span_annotation']['text']}' ({span.xbar_class}) at pos {span.start_pos}-{span.end_pos}")
+                
                 f.write(json.dumps(span_record, ensure_ascii=False) + '\n')
                 new_spans_added += 1
                 
-        logger.info(f"Appended {new_spans_added} unique span records to {annotations_file}")
+        self.stats["spans_written"] += new_spans_added
+        logger.info(f"Appended {new_spans_added} validated span records to {annotations_file}")
     
     def update_global_metadata(
         self, 
