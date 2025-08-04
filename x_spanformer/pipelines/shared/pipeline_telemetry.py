@@ -190,8 +190,11 @@ class PipelineTelemetry:
             # Calculate span statistics for display
             current_session_spans = sum(self.telemetry["spans_by_type"].values())
             if self._historical_total_spans > 0:
-                logger.info(f"[TELEMETRY] Total Spans Extracted (All Sessions): {self._historical_total_spans}")
+                # Show both historical total and current session breakdown
+                total_all_sessions = self._historical_total_spans + current_session_spans
+                logger.info(f"[TELEMETRY] Total Spans Extracted (All Sessions): {total_all_sessions}")
                 logger.info(f"[TELEMETRY] Current Session Spans: {current_session_spans}")
+                logger.info(f"[TELEMETRY] Previous Sessions Spans: {self._historical_total_spans}")
             else:
                 logger.info(f"[TELEMETRY] Total Spans Extracted: {current_session_spans}")
                 
@@ -317,6 +320,12 @@ class PipelineTelemetry:
             stats = self.get_statistics()
             metadata["processed_sequences"] = stats["processed_sequences"]
             metadata["total_sequences"] = stats["total_sequences"]
+            
+            # Update total spans with combined total (historical + current session)
+            current_session_spans = sum(self.telemetry["spans_by_type"].values())
+            combined_total_spans = self._historical_total_spans + current_session_spans
+            metadata["total_spans"] = combined_total_spans
+            
             metadata["last_updated"] = datetime.now().isoformat()
             
             with open(metadata_filepath, 'w', encoding='utf-8') as f:
@@ -397,14 +406,20 @@ class PipelineTelemetry:
             # This includes the total spans calculated from all working files
             if "total_spans" in metadata:
                 historical_total_spans = metadata["total_spans"]
-                logger.debug(f"Found historical total spans: {historical_total_spans}")
+                logger.debug(f"Found total spans in metadata: {historical_total_spans}")
                 
-                # If the telemetry doesn't have comprehensive span statistics, 
-                # but we have the historical total, we can't reconstruct the breakdown
-                # However, we should note this in logging for the user
+                # Calculate current session spans from loaded telemetry data
                 current_session_spans = sum(telemetry_data.get("spans_by_type", {}).values())
-                if current_session_spans == 0 and historical_total_spans > 0:
-                    logger.info(f"Historical span data exists ({historical_total_spans} total spans from previous sessions)")
+                
+                if current_session_spans > 0:
+                    # If we have current session data, the historical total should be
+                    # the metadata total minus the current session spans
+                    self._historical_total_spans = max(0, historical_total_spans - current_session_spans)
+                    logger.debug(f"Calculated historical spans: {self._historical_total_spans} (metadata total: {historical_total_spans} - current session: {current_session_spans})")
+                else:
+                    # If no current session data, all spans are historical
+                    self._historical_total_spans = historical_total_spans
+                    logger.info(f"No current session spans found, treating all {historical_total_spans} spans as historical")
                     logger.info("Note: Detailed span type breakdown only available for current session")
             
             # Restore telemetry data
@@ -417,8 +432,7 @@ class PipelineTelemetry:
             logger.info(f"Previous session success rate: {stats.get('success_rate_percent', 0):.1f}%")
             
             # Add historical context to display
-            if "total_spans" in metadata:
-                self._historical_total_spans = metadata["total_spans"]
+            # Note: _historical_total_spans is already calculated above based on metadata and current session
             
             return True
             
