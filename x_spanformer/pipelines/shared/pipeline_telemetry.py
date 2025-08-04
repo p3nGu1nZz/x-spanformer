@@ -31,6 +31,7 @@ class PipelineTelemetry:
             pipeline_name: Name of the pipeline for display purposes
         """
         self.pipeline_name = pipeline_name
+        self._historical_total_spans = 0  # Total spans from all sessions (loaded from metadata)
         self.telemetry = {
             "start_time": None,
             "completed_sequences": 0,
@@ -126,13 +127,15 @@ class PipelineTelemetry:
             elapsed_time = 0
             sequences_per_min = 0
             eta_display = "calculating..."
+            current_session_processed = len(self.telemetry["sequence_times"])
             
             if self.telemetry["start_time"]:
                 elapsed_seconds = (current_time - self.telemetry["start_time"]).total_seconds()
                 elapsed_time = elapsed_seconds / 60  # Convert to minutes
             
-                if elapsed_seconds > 0 and processed_sequences > 0:
-                    sequences_per_min = (processed_sequences * 60) / elapsed_seconds
+                # Calculate processing rate based on current session performance
+                if elapsed_seconds > 0 and current_session_processed > 0:
+                    sequences_per_min = (current_session_processed * 60) / elapsed_seconds
                     
                     # Calculate remaining work: 
                     # - Unprocessed sequences from total corpus
@@ -146,12 +149,12 @@ class PipelineTelemetry:
                     elif remaining_work == 0:
                         eta_display = "Complete!"
             
-            # Calculate span statistics
+            # Calculate span statistics - combine historical and current session data
             total_spans = sum(self.telemetry["spans_by_type"].values())
             span_types_summary = self._format_span_summary(self.telemetry["spans_by_type"])
             modality_summary = self._format_span_summary(self.telemetry["spans_by_modality"])
             
-            # Calculate average sequence processing time
+            # Calculate average sequence processing time for current session
             avg_seq_time = 0
             if self.telemetry["sequence_times"]:
                 avg_seq_time = sum(self.telemetry["sequence_times"]) / len(self.telemetry["sequence_times"])
@@ -170,23 +173,32 @@ class PipelineTelemetry:
             logger.info(f"[TELEMETRY] Remaining Work: {total_remaining_work} sequences ({remaining_new_sequences} new + {self.telemetry['failed_sequences']} retries)")
             logger.info("-" * 40)
             
-            # Show processing performance for current session
-            current_session_processed = len(self.telemetry["sequence_times"])
+            # Show current session performance metrics
             if current_session_processed > 0:
                 logger.info(f"[TELEMETRY] Current Session: {current_session_processed} sequences processed")
-                logger.info(f"[TELEMETRY] Processing Rate: {sequences_per_min:.2f} sequences/min")
-                logger.info(f"[TELEMETRY] Average Sequence Time: {avg_seq_time:.1f} seconds")
+                logger.info(f"[TELEMETRY] Session Processing Rate: {sequences_per_min:.2f} sequences/min")
+                logger.info(f"[TELEMETRY] Session Average Time: {avg_seq_time:.1f} seconds per sequence")
+                logger.info(f"[TELEMETRY] Session Duration: {elapsed_time:.1f} minutes")
+                logger.info(f"[TELEMETRY] ETA (at current rate): {eta_display}")
             else:
                 logger.info("[TELEMETRY] Current Session: No sequences processed yet")
+                logger.info(f"[TELEMETRY] Session Duration: {elapsed_time:.1f} minutes")
+                logger.info("[TELEMETRY] ETA: Calculating...")
             
-            logger.info(f"[TELEMETRY] Elapsed Time: {elapsed_time:.1f} minutes")
-            logger.info(f"[TELEMETRY] ETA: {eta_display}")
             logger.info("-" * 40)
-            logger.info(f"[TELEMETRY] Total Spans Extracted: {total_spans}")
+            
+            # Calculate span statistics for display
+            current_session_spans = sum(self.telemetry["spans_by_type"].values())
+            if self._historical_total_spans > 0:
+                logger.info(f"[TELEMETRY] Total Spans Extracted (All Sessions): {self._historical_total_spans}")
+                logger.info(f"[TELEMETRY] Current Session Spans: {current_session_spans}")
+            else:
+                logger.info(f"[TELEMETRY] Total Spans Extracted: {current_session_spans}")
+                
             if span_types_summary:
-                logger.info(f"[TELEMETRY] Span Types: {span_types_summary}")
+                logger.info(f"[TELEMETRY] Span Types (Current Session): {span_types_summary}")
             if modality_summary:
-                logger.info(f"[TELEMETRY] Modalities: {modality_summary}")
+                logger.info(f"[TELEMETRY] Modalities (Current Session): {modality_summary}")
             logger.info("=" * 80)
             
         except Exception as e:
@@ -211,27 +223,30 @@ class PipelineTelemetry:
         processed_sequences = self.telemetry["completed_sequences"] + self.telemetry["failed_sequences"]
         success_rate = (self.telemetry["completed_sequences"] / max(processed_sequences, 1)) * 100
         
-        # Calculate timing metrics
+        # Calculate timing metrics based on current session
         elapsed_time = 0
         sequences_per_min = 0
+        current_session_processed = len(self.telemetry["sequence_times"])
         
         if self.telemetry["start_time"]:
             elapsed_seconds = (datetime.now() - self.telemetry["start_time"]).total_seconds()
             elapsed_time = elapsed_seconds / 60
             
-            if elapsed_seconds > 0 and processed_sequences > 0:
-                sequences_per_min = (processed_sequences * 60) / elapsed_seconds
+            # Use current session performance for rate calculation
+            if elapsed_seconds > 0 and current_session_processed > 0:
+                sequences_per_min = (current_session_processed * 60) / elapsed_seconds
         
-        # Calculate average sequence processing time
+        # Calculate average sequence processing time for current session
         avg_seq_time = 0
         if self.telemetry["sequence_times"]:
             avg_seq_time = sum(self.telemetry["sequence_times"]) / len(self.telemetry["sequence_times"])
         
-        # Calculate ETA
+        # Calculate ETA based on remaining work and current session rate
         eta_minutes = 0
-        remaining_sequences = self.telemetry["total_sequences"] - processed_sequences
-        if sequences_per_min > 0 and remaining_sequences > 0:
-            eta_minutes = remaining_sequences / sequences_per_min
+        remaining_new_sequences = self.telemetry["total_sequences"] - self.telemetry["completed_sequences"]
+        remaining_work = remaining_new_sequences + self.telemetry["failed_sequences"]
+        if sequences_per_min > 0 and remaining_work > 0:
+            eta_minutes = remaining_work / sequences_per_min
         
         return {
             "total_sequences": self.telemetry["total_sequences"],
@@ -243,7 +258,9 @@ class PipelineTelemetry:
             "processing_rate_per_min": sequences_per_min,
             "average_sequence_time_seconds": avg_seq_time,
             "eta_minutes": eta_minutes,
+            "current_session_processed": current_session_processed,
             "total_spans": sum(self.telemetry["spans_by_type"].values()),
+            "historical_total_spans": self._historical_total_spans,
             "spans_by_type": dict(self.telemetry["spans_by_type"]),
             "spans_by_modality": dict(self.telemetry["spans_by_modality"])
         }
@@ -376,6 +393,20 @@ class PipelineTelemetry:
                     logger.warning(f"Invalid last_sequence_time value, removing: {telemetry_data.get('last_sequence_time')}")
                     telemetry_data.pop("last_sequence_time", None)
             
+            # Load historical span statistics from metadata root level (legacy compatibility)
+            # This includes the total spans calculated from all working files
+            if "total_spans" in metadata:
+                historical_total_spans = metadata["total_spans"]
+                logger.debug(f"Found historical total spans: {historical_total_spans}")
+                
+                # If the telemetry doesn't have comprehensive span statistics, 
+                # but we have the historical total, we can't reconstruct the breakdown
+                # However, we should note this in logging for the user
+                current_session_spans = sum(telemetry_data.get("spans_by_type", {}).values())
+                if current_session_spans == 0 and historical_total_spans > 0:
+                    logger.info(f"Historical span data exists ({historical_total_spans} total spans from previous sessions)")
+                    logger.info("Note: Detailed span type breakdown only available for current session")
+            
             # Restore telemetry data
             self.telemetry = telemetry_data
             
@@ -384,6 +415,11 @@ class PipelineTelemetry:
             logger.info(f"Telemetry state loaded from {metadata_filepath}")
             logger.info(f"Resuming from: {stats.get('processed_sequences', 0)} processed sequences")
             logger.info(f"Previous session success rate: {stats.get('success_rate_percent', 0):.1f}%")
+            
+            # Add historical context to display
+            if "total_spans" in metadata:
+                self._historical_total_spans = metadata["total_spans"]
+            
             return True
             
         except Exception as e:

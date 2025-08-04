@@ -137,8 +137,8 @@ class TestPipelineTelemetry:
             current_time = datetime(2025, 8, 3, 12, 5, 0)  # 5 minutes later
             mock_datetime.now.return_value = current_time
             
-            # Add some sequence times
-            telemetry.telemetry["sequence_times"] = [5.0, 8.0, 6.0]  # seconds
+            # Add some sequence times - these represent current session sequences
+            telemetry.telemetry["sequence_times"] = [5.0, 8.0, 6.0]  # 3 sequences processed in current session
             
             stats = telemetry.get_statistics()
         
@@ -148,8 +148,10 @@ class TestPipelineTelemetry:
         assert stats["processed_sequences"] == 12
         assert stats["success_rate_percent"] == pytest.approx(83.33, rel=1e-2)
         assert stats["elapsed_time_minutes"] == pytest.approx(5.0)
-        assert stats["processing_rate_per_min"] == pytest.approx(2.4)  # 12 sequences / 5 minutes
+        # Processing rate is now based on current session: 3 sequences / 5 minutes = 0.6 seq/min
+        assert stats["processing_rate_per_min"] == pytest.approx(0.6)  # 3 sequences / 5 minutes
         assert stats["average_sequence_time_seconds"] == pytest.approx(6.33, rel=1e-2)
+        assert stats["current_session_processed"] == 3  # New field for current session count
     
     def test_infer_span_modality(self):
         """Test span modality inference."""
@@ -228,6 +230,8 @@ class TestPipelineTelemetry:
             telemetry.initialize(100, existing_completed=25, existing_failed=5)
             telemetry.telemetry["spans_by_type"] = {"NP": 50, "VP": 30}
             telemetry.telemetry["spans_by_modality"] = {"syntactic": 60, "lexical": 20}
+            # Add some sequence times to simulate current session activity
+            telemetry.telemetry["sequence_times"] = [5.0, 8.0, 6.0]  # 3 sequences in current session
             
             # Call display
             telemetry.display_progress_panel()
@@ -236,10 +240,11 @@ class TestPipelineTelemetry:
         assert mock_logger.info.called
         call_args = [call[0][0] for call in mock_logger.info.call_args_list]
         
-        # Check that key information is logged
-        assert any("TELEMETRY PANEL - Test Pipeline Progress" in arg for arg in call_args)
-        assert any("Progress: 30/100" in arg for arg in call_args)
+        # Check that key information is logged with new format
+        assert any("[TELEMETRY] Test Pipeline Progress Panel" in arg for arg in call_args)
+        assert any("Overall Progress: 30/100" in arg for arg in call_args)  # 25 completed + 5 failed
         assert any("Success Rate: 25/30" in arg for arg in call_args)
+        assert any("Current Session: 3 sequences processed" in arg for arg in call_args)  # New session info
 
 
 class TestSpanAnnotationTelemetry:
