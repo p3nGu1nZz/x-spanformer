@@ -90,6 +90,10 @@ class SpanAnnotatorPipeline:
             # Extract early termination config
             early_termination_config = agent_config.get("agent", {}).get("early_termination")
             
+            # Extract agent behavior settings
+            agent_behavior = agent_config.get("agent", {})
+            max_spans_per_sequence = agent_behavior.get("max_spans_per_sequence", 64)  # Default to 64
+            
         except Exception as e:
             raise RuntimeError(f"Failed to load agent configuration from {agent_config_file}: {e}")
         
@@ -101,7 +105,8 @@ class SpanAnnotatorPipeline:
             conversation_timeout=self.config.processing.conversation_timeout,
             max_turns=max_turns,
             temperature=temperature,
-            early_termination_config=early_termination_config
+            early_termination_config=early_termination_config,
+            max_spans_per_sequence=max_spans_per_sequence
         )
         
         # Processing statistics
@@ -120,6 +125,84 @@ class SpanAnnotatorPipeline:
         
         # Initialize shared telemetry
         self.telemetry = SpanAnnotationTelemetry()
+        
+        # Telemetry display settings
+        self.last_telemetry_display = None
+        self.telemetry_display_interval = 30  # Show telemetry every 30 seconds
+        self.sequences_per_telemetry_display = 5  # Or every 5 sequences
+    
+    def should_display_telemetry(self, force: bool = False) -> bool:
+        """
+        Determine if telemetry should be displayed based on time or sequence count.
+        
+        Args:
+            force: Force display regardless of timing
+            
+        Returns:
+            True if telemetry should be displayed
+        """
+        current_time = datetime.now()
+        
+        if force:
+            return True
+        
+        # Display every N sequences
+        processed_sequences = self.telemetry.telemetry["completed_sequences"] + self.telemetry.telemetry["failed_sequences"]
+        if processed_sequences > 0 and processed_sequences % self.sequences_per_telemetry_display == 0:
+            return True
+        
+        # Display at time intervals
+        if self.last_telemetry_display is None:
+            return True
+        
+        time_since_last = (current_time - self.last_telemetry_display).total_seconds()
+        if time_since_last >= self.telemetry_display_interval:
+            return True
+        
+        return False
+    
+    def display_telemetry_if_needed(self, force: bool = False, output_dir: Optional[Path] = None):
+        """
+        Display telemetry panel if conditions are met and optionally save to metadata.
+        
+        Args:
+            force: Force display regardless of timing
+            output_dir: Output directory to save telemetry to metadata.json (optional)
+        """
+        if self.should_display_telemetry(force):
+            self.telemetry.display_progress_panel()
+            self.last_telemetry_display = datetime.now()
+            
+            # Save telemetry to metadata.json if output directory provided
+            if output_dir:
+                try:
+                    metadata_file = output_dir / "metadata.json"
+                    self.telemetry.save_telemetry_to_metadata(metadata_file)
+                except Exception as e:
+                    logger.warning(f"Failed to save telemetry to metadata: {e}")
+    
+    def display_current_stats(self):
+        """
+        Display current processing statistics on demand.
+        Useful for debugging or monitoring.
+        """
+        logger.info("=" * 60)
+        logger.info("CURRENT PIPELINE STATUS")
+        logger.info("=" * 60)
+        self.telemetry.display_progress_panel()
+        
+        # Additional pipeline-specific stats
+        stats = self.telemetry.get_statistics()
+        logger.info(f"Pipeline Stats:")
+        logger.info(f"  - Total sequences to process: {stats['total_sequences']}")
+        logger.info(f"  - Completed this session: {len(self.telemetry.telemetry['sequence_times'])}")
+        logger.info(f"  - Success rate this session: {stats['success_rate_percent']:.1f}%")
+        logger.info(f"  - Average time per sequence: {stats['average_sequence_time_seconds']:.1f}s")
+        
+        if stats['processing_rate_per_min'] > 0:
+            logger.info(f"  - Current processing rate: {stats['processing_rate_per_min']:.2f} seq/min")
+        
+        logger.info("=" * 60)
     
     def get_all_corpus_sequences(self, corpus_file: Path) -> List[int]:
         """
@@ -672,8 +755,28 @@ class SpanAnnotatorPipeline:
         }
         metadata["agent_stats"] = self.agent.get_statistics()
         
-        with open(metadata_file, 'w', encoding='utf-8') as f:
-            json.dump(metadata, f, indent=2)
+        # Save telemetry data to metadata as well (integrated approach)
+        self.telemetry.save_telemetry_to_metadata(metadata_file)
+        
+        # Note: telemetry save will overwrite the file, so we need to merge manually
+        # Let's reload and ensure our data is preserved
+        try:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                updated_metadata = json.load(f)
+            
+            # Merge our metadata with telemetry data
+            for key, value in metadata.items():
+                if key != "telemetry":  # Don't overwrite telemetry section
+                    updated_metadata[key] = value
+            
+            with open(metadata_file, 'w', encoding='utf-8') as f:
+                json.dump(updated_metadata, f, indent=2)
+                
+        except Exception as e:
+            # Fallback to original approach if telemetry merge fails
+            logger.warning(f"Failed to merge telemetry data, using fallback: {e}")
+            with open(metadata_file, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2)
     
     def _calculate_actual_stats(self, output_dir: Path) -> Dict[str, int]:
         """
@@ -792,16 +895,28 @@ class SpanAnnotatorPipeline:
         existing_results = self.load_existing_results(output_dir) if resume else {}
         
         # Fix metadata on resume to ensure accuracy from the start
+        # Initialize telemetry once at the beginning
         if resume and existing_results:
             logger.info("Resume mode detected - correcting metadata from working files...")
             actual_stats = self.annotation_processor.fix_metadata_from_working_files(output_dir, self.agent.get_statistics())
             
-            # Initialize telemetry with corrected metadata for accurate progress tracking
-            self.telemetry.initialize(
-                total_sequences=len(target_sequences),
-                existing_completed=actual_stats["successful_count"],
-                existing_failed=actual_stats["failed_count"]
-            )
+            # Try to load telemetry state from metadata.json
+            metadata_file = output_dir / "metadata.json"
+            telemetry_loaded = self.telemetry.load_telemetry_from_metadata(metadata_file)
+            
+            if telemetry_loaded:
+                # Update telemetry with current target sequences (might be different range)
+                self.telemetry.telemetry["total_sequences"] = len(target_sequences)
+                logger.info(f"Telemetry loaded successfully - updated target sequences to {len(target_sequences)}")
+            else:
+                # If telemetry loading failed, initialize with corrected metadata for accurate progress tracking
+                self.telemetry.initialize(
+                    total_sequences=len(target_sequences),
+                    existing_completed=actual_stats["successful_count"],
+                    existing_failed=actual_stats["failed_count"]
+                )
+                logger.info("Telemetry initialized from corrected metadata")
+            
             # Log metadata correction
             logger.info("Metadata corrected from working files:")
             logger.info(f"  - Processed sequences: {actual_stats['total_files']}")
@@ -812,6 +927,9 @@ class SpanAnnotatorPipeline:
         else:
             # Initialize telemetry for fresh run
             self.telemetry.initialize(total_sequences=len(target_sequences))
+        
+        # Display initial telemetry panel
+        self.display_telemetry_if_needed(force=True, output_dir=output_dir)
         
         # Find gap sequences - those missing within the processed range
         gap_sequences = self.find_missing_sequences(target_sequences, existing_results)
@@ -850,23 +968,6 @@ class SpanAnnotatorPipeline:
             # Should not reach here, but add to new sequences as fallback
             sequences_to_process.append(record)
             new_sequences_count += 1
-        
-        # Initialize telemetry with already completed and failed sequences
-        # (Skip if already initialized from corrected metadata during resume)
-        if not (resume and existing_results):
-            # Get completed and failed counts from the categorization
-            completed_count = sum(1 for record in target_sequences 
-                                if record.sequence_number in existing_results 
-                                and existing_results[record.sequence_number] == "completed")
-            failed_count = len([record for record in target_sequences 
-                              if record.sequence_number in existing_results 
-                              and existing_results[record.sequence_number] == "failed"])
-            
-            self.telemetry.initialize(
-                total_sequences=len(target_sequences),
-                existing_completed=completed_count,
-                existing_failed=failed_count
-            )
         
         # Process in priority order: failed sequences first, then gaps, then new sequences
         # This ensures we fill gaps in completed sequences before continuing with new ones
@@ -932,8 +1033,8 @@ class SpanAnnotatorPipeline:
                                         self.stats["total_spans"] + len(annotation_record.span_annotations)
                                     )
                                     
-                                    # Display telemetry panel
-                                    self.telemetry.display_progress_panel()
+                                    # Display telemetry panel conditionally (time-based or sequence-count-based)
+                                    self.display_telemetry_if_needed(output_dir=output_dir)
                                     logger.info(f"[COMPLETED] Sequence {sequence_id} - {len(annotation_record.span_annotations)} spans extracted")
                                 else:
                                     # Sequence marked as completed but no spans extracted - treat as failed
@@ -1051,6 +1152,12 @@ class SpanAnnotatorPipeline:
             logger.info(f"Sequence {current_sequence.sequence_number} completed: {batch_successful} successful, {batch_failed} failed")
         
         self.stats["completed_at"] = datetime.now().isoformat()
+        
+        # Display final telemetry panel
+        logger.info("=" * 60)
+        logger.info("PIPELINE COMPLETION SUMMARY")
+        logger.info("=" * 60)
+        self.display_telemetry_if_needed(force=True, output_dir=output_dir)
         
         return self.stats
     

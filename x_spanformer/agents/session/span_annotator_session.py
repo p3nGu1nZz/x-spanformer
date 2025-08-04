@@ -157,7 +157,8 @@ class SpanAnnotatorSession:
         conversation_timeout: float = 30.0,
         max_turns: int = 16,
         temperature: float = 0.1,
-        early_termination_config: Optional[Dict[str, Any]] = None
+        early_termination_config: Optional[Dict[str, Any]] = None,
+        max_spans_per_sequence: int = 64
     ):
         """
         Initialize span annotator agent.
@@ -170,6 +171,7 @@ class SpanAnnotatorSession:
             max_turns: Maximum conversation turns per sequence
             temperature: Temperature parameter for model inference
             early_termination_config: Early termination settings
+            max_spans_per_sequence: Maximum spans to generate per sequence
         """
         self.model_name = model_name
         self.max_concurrent = max_concurrent
@@ -177,6 +179,7 @@ class SpanAnnotatorSession:
         self.conversation_timeout = conversation_timeout
         self.max_turns = max_turns
         self.temperature = temperature
+        self.max_spans_per_sequence = max_spans_per_sequence
         
         # Early termination settings
         self.early_termination = early_termination_config or {
@@ -289,7 +292,8 @@ class SpanAnnotatorSession:
             text=text,
             domain_type=domain_type,
             turn_number=1,
-            max_turns=self.max_turns
+            max_turns=self.max_turns,
+            max_spans_per_sequence=self.max_spans_per_sequence
         )
 
     def generate_followup_request(self, text: str, domain_type: str, turn_number: int, previous_spans: List[str]) -> str:
@@ -320,8 +324,10 @@ class SpanAnnotatorSession:
             text=text,
             domain_type=domain_type,
             turn_number=turn_number,
+            span_count=len(previous_spans),
             previous_spans=previous_spans,
-            missing_words=missing_words
+            missing_words=missing_words,
+            max_spans_per_sequence=self.max_spans_per_sequence
         )
     
     async def annotate_single_sequence(

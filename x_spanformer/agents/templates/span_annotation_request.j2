@@ -8,11 +8,10 @@ Please analyze the following {{ domain_type }} text using X-bar theory and ident
 **Analysis Requirements:**
 1. Identify spans at EVERY level: {{ levels | join(", ") }}
 2. Use the {{ domain_type }} domain classifiers provided in the system prompt
-3. Provide comprehensive coverage: 
-   - Analyze EVERY word (nouns, verbs, adjectives, adverbs, determiners, prepositions, etc.)
-   - Identify ALL phrases (noun phrases, verb phrases, prepositional phrases, etc.)  
-   - Mark clause and sentence boundaries
-   - Don't skip any linguistic elements
+3. Provide comprehensive coverage within the span limit: 
+   - Prioritize the most important linguistic elements
+   - Focus on key words, phrases, and structural boundaries
+   - Don't skip critical functional elements
 4. Include confidence scores based on how certain you are about each classification
 5. Ensure spans are hierarchically consistent (larger spans contain smaller spans)
 
@@ -20,22 +19,26 @@ Please analyze the following {{ domain_type }} text using X-bar theory and ident
 {{ expected_classifiers | join(", ") }}
 
 {% set word_count = text.split() | length %}
+{% set max_spans = max_spans_per_sequence|default(64) %}
 {% if domain_type == "natural" %}
-**Target span generation**: For {{ word_count }} words, generate as many valid spans as possible (typical range: {{ (word_count * 1.8) | round | int }}-{{ (word_count * 2.5) | round | int }} spans)
+**Target span generation**: For {{ word_count }} words, generate up to {{ max_spans }} high-quality spans focusing on key linguistic structures
 {% elif domain_type == "code" %}
-**Target span generation**: For {{ word_count }} words, generate as many valid spans as possible (typical range: {{ (word_count * 2.0) | round | int }}-{{ (word_count * 3.0) | round | int }} spans)
+**Target span generation**: For {{ word_count }} words, generate up to {{ max_spans }} high-quality spans focusing on key code structures
 {% else %}
-**Target span generation**: For {{ word_count }} words, generate as many valid spans as possible (typical range: {{ (word_count * 1.5) | round | int }}-{{ (word_count * 2.2) | round | int }} spans)
+**Target span generation**: For {{ word_count }} words, generate up to {{ max_spans }} high-quality spans focusing on key mixed content elements
 {% endif %}
 
+**IMPORTANT LIMITS**:
+- **Maximum {{ max_spans }} spans per sequence** - Focus on quality over quantity
+- Prioritize the most important linguistic structures first
+- Each span should provide clear linguistic value
+
 **Critical Instructions:**
-- **Goal: Maximum valid spans** - Generate as many linguistically valid spans as possible
-- Analyze the text systematically from left to right
-- Mark EVERY single word with its grammatical category
-- Identify ALL meaningful phrases and their boundaries
-- Don't miss functional words like articles, prepositions, conjunctions
-- Use precise character positions (count carefully!)
-- **Quality over completeness** - Focus on generating many valid spans rather than perfect coverage
+- **Quality over quantity** - Focus on the most important {{ max_spans }} spans
+- Prioritize: key phrases, clause boundaries, important words
+- Analyze systematically but selectively 
+- Each span should contribute meaningful linguistic structure
+- **Maximum {{ max_spans }} spans in your JSON response**
 
 Return your analysis as a JSON array with each span containing:
 - `text`: The exact text of the span (I will calculate positions automatically)

@@ -23,6 +23,7 @@ dialogue:
 agent:
   domain_detection: auto
   comprehensive_annotation: true
+  max_spans_per_sequence: 64
 
 templates:
   system: span_annotator_system

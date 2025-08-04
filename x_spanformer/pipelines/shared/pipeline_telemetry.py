@@ -5,6 +5,7 @@ Provides centralized telemetry functionality for tracking pipeline progress,
 performance metrics, ETA calculations, and status reporting across different
 pipeline types.
 """
+import json
 import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -79,7 +80,7 @@ class PipelineTelemetry:
         if sequence_start_time:
             sequence_time = (current_time - sequence_start_time).total_seconds()
             self.telemetry["sequence_times"].append(sequence_time)
-            self.telemetry["last_sequence_time"] = sequence_time
+            self.telemetry["last_sequence_time"] = current_time  # Store datetime, not float
         
         # Track span statistics if annotation result provided
         if annotation_result and hasattr(annotation_result, 'span_annotations') and annotation_result.span_annotations:
@@ -108,7 +109,7 @@ class PipelineTelemetry:
         if sequence_start_time:
             sequence_time = (current_time - sequence_start_time).total_seconds()
             self.telemetry["sequence_times"].append(sequence_time)
-            self.telemetry["last_sequence_time"] = sequence_time
+            self.telemetry["last_sequence_time"] = current_time  # Store datetime, not float
     
     def display_progress_panel(self):
         """Display comprehensive telemetry panel with progress and statistics."""
@@ -161,14 +162,23 @@ class PipelineTelemetry:
         logger.info("=" * 80)
         logger.info(f"TELEMETRY PANEL - {self.pipeline_name} Progress")
         logger.info("=" * 80)
-        logger.info(f"Progress: {processed_sequences}/{self.telemetry['total_sequences']} sequences ({progress_pct:.1f}%)")
+        logger.info(f"Overall Progress: {processed_sequences}/{self.telemetry['total_sequences']} sequences ({progress_pct:.1f}%)")
         logger.info(f"Success Rate: {self.telemetry['completed_sequences']}/{processed_sequences} successful ({success_rate:.1f}%)")
         logger.info(f"Failed Sequences: {self.telemetry['failed_sequences']} (need retry)")
         logger.info(f"Remaining Work: {total_remaining_work} sequences ({remaining_new_sequences} new + {self.telemetry['failed_sequences']} retries)")
-        logger.info(f"Processing Rate: {sequences_per_min:.2f} sequences/min")
+        logger.info("-" * 40)
+        
+        # Show processing performance for current session
+        current_session_processed = len(self.telemetry["sequence_times"])
+        if current_session_processed > 0:
+            logger.info(f"Current Session: {current_session_processed} sequences processed")
+            logger.info(f"Processing Rate: {sequences_per_min:.2f} sequences/min")
+            logger.info(f"Average Sequence Time: {avg_seq_time:.1f} seconds")
+        else:
+            logger.info("Current Session: No sequences processed yet")
+        
         logger.info(f"Elapsed Time: {elapsed_time:.1f} minutes")
         logger.info(f"ETA: {eta_display}")
-        logger.info(f"Average Sequence Time: {avg_seq_time:.1f} seconds")
         logger.info("-" * 40)
         logger.info(f"Total Spans Extracted: {total_spans}")
         if span_types_summary:
@@ -203,6 +213,12 @@ class PipelineTelemetry:
         if self.telemetry["sequence_times"]:
             avg_seq_time = sum(self.telemetry["sequence_times"]) / len(self.telemetry["sequence_times"])
         
+        # Calculate ETA
+        eta_minutes = 0
+        remaining_sequences = self.telemetry["total_sequences"] - processed_sequences
+        if sequences_per_min > 0 and remaining_sequences > 0:
+            eta_minutes = remaining_sequences / sequences_per_min
+        
         return {
             "total_sequences": self.telemetry["total_sequences"],
             "completed_sequences": self.telemetry["completed_sequences"],
@@ -212,10 +228,177 @@ class PipelineTelemetry:
             "elapsed_time_minutes": elapsed_time,
             "processing_rate_per_min": sequences_per_min,
             "average_sequence_time_seconds": avg_seq_time,
+            "eta_minutes": eta_minutes,
             "total_spans": sum(self.telemetry["spans_by_type"].values()),
             "spans_by_type": dict(self.telemetry["spans_by_type"]),
             "spans_by_modality": dict(self.telemetry["spans_by_modality"])
         }
+    
+    def save_telemetry_to_metadata(self, metadata_filepath: Path):
+        """
+        Save current telemetry state to the metadata.json file.
+        
+        Args:
+            metadata_filepath: Path to metadata.json file
+        """
+        try:
+            # Load existing metadata
+            if metadata_filepath.exists():
+                with open(metadata_filepath, 'r', encoding='utf-8') as f:
+                    metadata: Dict[str, Any] = json.load(f)
+            else:
+                metadata: Dict[str, Any] = {
+                    "pipeline_version": "1.0",
+                    "started_at": datetime.now().isoformat()
+                }
+            
+            # Update metadata with telemetry data
+            telemetry_data = dict(self.telemetry)
+            
+            # Convert datetime objects to ISO strings for JSON serialization
+            if telemetry_data["start_time"]:
+                if isinstance(telemetry_data["start_time"], datetime):
+                    telemetry_data["start_time"] = telemetry_data["start_time"].isoformat()
+                else:
+                    logger.warning(f"start_time is not datetime: {type(telemetry_data['start_time'])}")
+            
+            if telemetry_data["last_sequence_time"]:
+                if isinstance(telemetry_data["last_sequence_time"], datetime):
+                    telemetry_data["last_sequence_time"] = telemetry_data["last_sequence_time"].isoformat()
+                else:
+                    logger.warning(f"last_sequence_time is not datetime: {type(telemetry_data['last_sequence_time'])}")
+                    # Convert float to None for now to avoid serialization issues
+                    telemetry_data["last_sequence_time"] = None
+            
+            # Add comprehensive telemetry section
+            metadata["telemetry"] = {
+                "pipeline_name": self.pipeline_name,
+                "session_data": telemetry_data,
+                "current_statistics": self.get_statistics(),
+                "last_updated": datetime.now().isoformat()
+            }
+            
+            # Also update the legacy fields for backward compatibility
+            stats = self.get_statistics()
+            metadata["processed_sequences"] = stats["processed_sequences"]
+            metadata["total_sequences"] = stats["total_sequences"]
+            metadata["last_updated"] = datetime.now().isoformat()
+            
+            with open(metadata_filepath, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2)
+                
+            logger.debug(f"Telemetry state saved to {metadata_filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save telemetry state: {e}")
+
+    def save_telemetry_state(self, filepath: Path):
+        """
+        Save current telemetry state to a JSON file (legacy method).
+        
+        Args:
+            filepath: Path to save telemetry state
+        """
+        try:
+            state = {
+                "pipeline_name": self.pipeline_name,
+                "telemetry_snapshot": dict(self.telemetry),
+                "statistics": self.get_statistics(),
+                "saved_at": datetime.now().isoformat()
+            }
+            
+            # Convert datetime objects to ISO strings for JSON serialization
+            if state["telemetry_snapshot"]["start_time"]:
+                state["telemetry_snapshot"]["start_time"] = state["telemetry_snapshot"]["start_time"].isoformat()
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=2)
+                
+            logger.debug(f"Telemetry state saved to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save telemetry state: {e}")
+    
+    def load_telemetry_from_metadata(self, metadata_filepath: Path) -> bool:
+        """
+        Load telemetry state from the metadata.json file.
+        
+        Args:
+            metadata_filepath: Path to metadata.json file
+            
+        Returns:
+            True if loaded successfully, False otherwise
+        """
+        try:
+            if not metadata_filepath.exists():
+                return False
+                
+            with open(metadata_filepath, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            
+            # Check if telemetry data exists in metadata
+            if "telemetry" not in metadata:
+                logger.info("No telemetry data found in metadata.json - starting fresh")
+                return False
+            
+            telemetry_section = metadata["telemetry"]
+            telemetry_data = telemetry_section.get("session_data", {})
+            
+            if not telemetry_data:
+                logger.info("Empty telemetry session data - starting fresh")
+                return False
+            
+            # Convert ISO string back to datetime
+            if telemetry_data.get("start_time"):
+                telemetry_data["start_time"] = datetime.fromisoformat(telemetry_data["start_time"])
+            if telemetry_data.get("last_sequence_time"):
+                telemetry_data["last_sequence_time"] = datetime.fromisoformat(telemetry_data["last_sequence_time"])
+            
+            # Restore telemetry data
+            self.telemetry = telemetry_data
+            
+            # Log resume information
+            stats = telemetry_section.get("current_statistics", {})
+            logger.info(f"Telemetry state loaded from {metadata_filepath}")
+            logger.info(f"Resuming from: {stats.get('processed_sequences', 0)} processed sequences")
+            logger.info(f"Previous session success rate: {stats.get('success_rate_percent', 0):.1f}%")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to load telemetry state from metadata: {e}")
+            return False
+
+    def load_telemetry_state(self, filepath: Path) -> bool:
+        """
+        Load telemetry state from a JSON file (legacy method).
+        
+        Args:
+            filepath: Path to load telemetry state from
+            
+        Returns:
+            True if loaded successfully, False otherwise
+        """
+        try:
+            if not filepath.exists():
+                return False
+                
+            with open(filepath, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+            
+            # Restore telemetry data
+            telemetry_data = state["telemetry_snapshot"]
+            
+            # Convert ISO string back to datetime
+            if telemetry_data["start_time"]:
+                telemetry_data["start_time"] = datetime.fromisoformat(telemetry_data["start_time"])
+            
+            self.telemetry = telemetry_data
+            
+            logger.info(f"Telemetry state loaded from {filepath}")
+            logger.info(f"Resuming from: {state['statistics']['processed_sequences']} processed sequences")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to load telemetry state: {e}")
+            return False
     
     def _format_eta(self, eta_minutes: float) -> str:
         """Format ETA for display."""

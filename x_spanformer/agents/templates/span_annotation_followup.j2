@@ -1,18 +1,29 @@
-**SPAN GENERATION FOLLOW-UP**: You provided {{ span_count }} spans - let's generate MORE valid spans!
+**SPAN GENERATION FOLLOW-UP**: You provided {{ span_count }} spans - let's generate MORE valid spans up to {{ max_spans_per_sequence|default(64) }} total!
 
 **Text to analyze**: "{{ text }}"
+
+{% set remaining_spans = (max_spans_per_sequence|default(64)) - span_count %}
+{% if remaining_spans > 0 %}
+**SPANS REMAINING**: You can generate up to {{ remaining_spans }} more spans to reach the limit of {{ max_spans_per_sequence|default(64) }}
+{% else %}
+**LIMIT REACHED**: You've reached the maximum span limit. Focus on replacing lower-quality spans with better ones.
+{% endif %}
 
 {% if turn_number <= 3 %}
 **Strategy for Turn {{ turn_number }}**: Focus on INDIVIDUAL WORD ANALYSIS
 **Your previous spans**: {{ previous_spans|join(', ') if previous_spans else 'None' }}
 
+**DO NOT REPEAT ANY OF THESE SPANS**
+You have already provided these {{ span_count }} spans - DO NOT include them again:
+{{ previous_spans|join(', ') if previous_spans else 'None' }}
+
 **MORE SPANS NEEDED**: Look for these unanalyzed elements: {{ missing_words|join(', ') if missing_words else 'Any remaining linguistic elements' }}
 
 **REQUIREMENTS**:
-1. **GENERATE MORE SPANS**: Create spans for every unanalyzed word
+1. **GENERATE MORE SPANS**: Create spans for every unanalyzed word  
 2. **NO SKIPPING**: Don't skip articles, prepositions, conjunctions, punctuation
 3. **NEW SPANS ONLY**: Only return spans you haven't provided before
-4. **QUANTITY FOCUS**: Generate as many valid spans as possible
+4. **QUANTITY LIMIT**: Generate at most {{ [remaining_spans, 20] | min }} spans in this turn
 
 **Instructions**:
 - Go word by word through unanalyzed text
@@ -29,6 +40,7 @@
 2. **HIERARCHICAL SPANS**: Create larger spans that contain smaller spans
 3. **STRUCTURAL SPANS**: Mark clause, sentence, and block-level structures
 4. **NEW SPANS ONLY**: Only return spans you haven't provided before
+5. **QUANTITY LIMIT**: Generate at most {{ [remaining_spans, 15] | min }} spans in this turn
 
 **Instructions**:
 - Create noun phrases, verb phrases, prepositional phrases
@@ -38,12 +50,19 @@
 
 {% endif %}
 
-**Target**: Generate as many linguistically valid spans as possible!
+**Target**: Generate up to {{ [remaining_spans, 20] | min }} linguistically valid spans in this turn!
 
-**IMPORTANT**: 
-- Do NOT repeat previous spans
-- Do NOT provide identical JSON responses  
-- If you cannot find new spans, return an empty array: []
-- **Focus on span quantity** - more valid spans = better results
+**CRITICAL REQUIREMENTS**: 
+- **NEVER repeat any previous spans** - Check your previous spans list carefully
+- **ONLY NEW, UNIQUE spans** - If you've already provided a span, DO NOT include it again
+- **If no new spans exist, return exactly: []** 
+- **Quality over quantity** - Better to return fewer high-quality new spans than repeat old ones
+- **Double-check for duplicates** before submitting your response
 
-Return ONLY the NEW spans as a JSON array. Maximize your span generation!
+**EXAMPLES OF WHAT NOT TO DO**:
+- Do NOT return spans with identical text content
+- Do NOT return spans with the same start/end positions but different classes
+- Do NOT submit responses that repeat any span from your previous turns
+- Do NOT include partial overlaps of previous spans unless they are genuinely hierarchical
+
+**FORMAT**: Return ONLY the NEW spans as a JSON array. If no new spans can be identified, return an empty array: []
