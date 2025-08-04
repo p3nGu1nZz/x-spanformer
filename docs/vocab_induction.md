@@ -22,46 +22,56 @@ X-Spanformer's vocabulary induction learns span boundaries **during** training, 
 
 ## 🧭 Algorithm Overview: Adaptive Unigram-LM
 
-The vocabulary induction pipeline follows **Algorithm 1** from Section 3.1, implementing a hybrid Unigram Language Model with EM-based learning and adaptive pruning:
+The vocabulary induction pipeline follows **Section 3.1** from our paper, implementing a hybrid Unigram Language Model with EM-based learning and adaptive pruning:
 
 ### 🔄 **Phase 1: Candidate Generation**
 ```
-U₀ = {top M substrings} ∪ {all single codepoints}
+𝒰₀ = {top M valid substrings} ∪ {all single codepoints}
 ```
 - Extract all substrings up to length `L_max` from the corpus
-- Count frequencies and select top `M` candidates
-- Ensure vocabulary completeness by including all unicode codepoints
+- Apply whitespace-aware tokenization with strict separation principle
+- Select top `M` candidates by frequency while ensuring complete coverage
+- Include all Unicode codepoints for vocabulary completeness
 
-### 🔄 **Phase 2: EM-Based Learning**
+### 🔄 **Phase 2: EM-Based Learning with Viterbi Approximation**
 ```
-E-step: seg*(x) = argmax_seg ∏_{v∈seg} p(v)    (Viterbi decoding)
-M-step: p^(t+1)(u) = freq(u) / total_freq      (Probability updates)
+E-step: seg*(x) = argmax_seg ∏_{v∈seg} p^(t)(v)    (Viterbi decoding)
+M-step: p^(t+1)(u) = Σ_x γ^(t)(u|x) / Σ_x Σ_v γ^(t)(v|x)
 ```
-- Initialize piece probabilities `p^(0)(u) ∝ freq(u)`
-- Alternate between optimal segmentation and probability updates
-- Track perplexity: `PPL^(t) = exp(L^(t) / N_p^(t))`
+- Initialize piece probabilities: `p^(0)(u) = freq(u) / Σ_v freq(v)`
+- E-step: Find optimal segmentation using Viterbi decoding for each sequence
+- M-step: Update probabilities based on usage mass in optimal segmentations
+- Iterate until convergence of log-likelihood
 
-### 🔄 **Phase 3: Adaptive Pruning**
+### 🔄 **Phase 3: Adaptive Pruning with Quality Constraints**
 ```
-Prune piece u if: PPL' - PPL^(t) < τ_ppl AND OOV' ≤ δ_oov
+Prune piece u if: ΔPPLₚᵣᵤₙₑ < τ_ppl AND OOVₚᵣᵤₙₑ ≤ δ_oov
 ```
-- Remove low-probability pieces while monitoring impact
-- Maintain perplexity constraint: `PPL' - PPL^(t) < τ_ppl`
-- Enforce OOV constraint: `OOV' ≤ δ_oov`
-- Iteratively refine vocabulary size vs. coverage tradeoff
+- Remove low-probability pieces while monitoring impact on model quality
+- Maintain perplexity constraint: `ΔPPLₚᵣᵤₙₑ < τ_ppl` (quality preservation)
+- Enforce coverage constraint: `OOVₚᵣᵤₙₑ ≤ δ_oov` (completeness preservation)
+- Apply frequency-based filtering to balance vocabulary size vs. coverage
 
 ---
 
 ## 🧠 Mathematical Foundation
 
-### **Perplexity Calculation**
-The baseline perplexity before any training:
+### **Whitespace-Aware Tokenization**
+The system enforces strict separation between whitespace and content tokens:
 ```
-PPL^(0) = exp(L^(0) / N_p^(0))
+𝒲 = {ws···ws | ws ∈ 𝒞_w, k ≥ 1}    (pure whitespace sequences)
+𝒩 = {sequences containing no characters from 𝒞_w}    (pure non-whitespace)
+```
+Where `𝒞_w` includes all Unicode whitespace control characters: `{' ', '\t', '\n', '\r', '\x0b', '\x0c'}`
+
+### **Perplexity Calculation**
+Corpus perplexity measures segmentation quality:
+```
+PPL^(t) = exp(L^(t) / N_p^(t))
 ```
 Where:
-- `L^(0)` = negative log-likelihood of initial segmentation  
-- `N_p^(0)` = total number of pieces in segmentation
+- `L^(t)` = negative log-likelihood of segmentation at iteration t
+- `N_p^(t)` = total number of pieces in optimal segmentation
 
 ### **Coverage Tracking**
 Out-of-vocabulary rate based on uncovered codepoint positions:
