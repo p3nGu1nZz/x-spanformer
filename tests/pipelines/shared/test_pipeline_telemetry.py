@@ -148,8 +148,13 @@ class TestPipelineTelemetry:
         assert stats["processed_sequences"] == 12
         assert stats["success_rate_percent"] == pytest.approx(83.33, rel=1e-2)
         assert stats["elapsed_time_minutes"] == pytest.approx(5.0)
-        # Processing rate is now based on current session: 3 sequences / 5 minutes = 0.6 seq/min
-        assert stats["processing_rate_per_min"] == pytest.approx(0.6)  # 3 sequences / 5 minutes
+        # Processing rate is now based on improved logic:
+        # - Total processed = 10 (existing) + 3 (current session) = 13
+        # - Overall rate = 13 sequences / 5 minutes = 2.6 seq/min
+        # - Current session rate = 3 sequences / 5 minutes = 0.6 seq/min
+        # - Since total_processed >= 5, uses max(overall_rate, current_session_rate * 0.8)
+        # - max(2.6, 0.6 * 0.8) = max(2.6, 0.48) = 2.6 seq/min
+        assert stats["processing_rate_per_min"] == pytest.approx(2.6)  # Uses improved calculation
         assert stats["average_sequence_time_seconds"] == pytest.approx(6.33, rel=1e-2)
         assert stats["current_session_processed"] == 3  # New field for current session count
     

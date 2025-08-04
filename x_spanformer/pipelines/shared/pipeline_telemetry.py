@@ -133,20 +133,38 @@ class PipelineTelemetry:
                 elapsed_seconds = (current_time - self.telemetry["start_time"]).total_seconds()
                 elapsed_time = elapsed_seconds / 60  # Convert to minutes
             
-                # Calculate processing rate based on current session performance
+                # Calculate processing rate - use total progress for more stable ETA
+                # Use the higher of current session processing rate or overall processing rate
+                sequences_per_min = 0
+                eta_display = "Calculating..."
+                
+                # Current session rate (for immediate feedback)
+                current_session_rate = 0
                 if elapsed_seconds > 0 and current_session_processed > 0:
-                    sequences_per_min = (current_session_processed * 60) / elapsed_seconds
-                    
-                    # Calculate remaining work: 
-                    # - Unprocessed sequences from total corpus
-                    # - Failed sequences that need retry
+                    current_session_rate = (current_session_processed * 60) / elapsed_seconds
+                
+                # Overall rate based on total completed sequences
+                # This provides more stable ETA estimates, especially after restarts
+                total_processed = self.telemetry["completed_sequences"] + current_session_processed
+                overall_rate = 0
+                if elapsed_seconds > 0 and total_processed > 0:
+                    overall_rate = (total_processed * 60) / elapsed_seconds
+                
+                # Use the more reliable rate (prefer overall rate for stability, but use current session if higher)
+                if total_processed >= 5:  # Only use overall rate if we have sufficient data
+                    sequences_per_min = max(overall_rate, current_session_rate * 0.8)  # Slight preference for overall rate
+                elif current_session_processed >= 3:  # Use current session if we have some data
+                    sequences_per_min = current_session_rate
+                
+                # Calculate remaining work and ETA
+                if sequences_per_min > 0:
                     remaining_new_sequences = self.telemetry["total_sequences"] - self.telemetry["completed_sequences"]
                     remaining_work = remaining_new_sequences + self.telemetry["failed_sequences"]
                     
-                    if sequences_per_min > 0 and remaining_work > 0:
+                    if remaining_work > 0:
                         eta_minutes = remaining_work / sequences_per_min
                         eta_display = self._format_eta(eta_minutes)
-                    elif remaining_work == 0:
+                    else:
                         eta_display = "Complete!"
             
             # Calculate span statistics - combine historical and current session data
@@ -176,10 +194,18 @@ class PipelineTelemetry:
             # Show current session performance metrics
             if current_session_processed > 0:
                 logger.info(f"[TELEMETRY] Current Session: {current_session_processed} sequences processed")
-                logger.info(f"[TELEMETRY] Session Processing Rate: {sequences_per_min:.2f} sequences/min")
+                if elapsed_seconds > 0:
+                    current_session_rate = (current_session_processed * 60) / elapsed_seconds
+                    total_processed = self.telemetry["completed_sequences"] + current_session_processed
+                    if total_processed > 0:
+                        overall_rate = (total_processed * 60) / elapsed_seconds
+                        logger.info(f"[TELEMETRY] Current Session Rate: {current_session_rate:.2f} sequences/min")
+                        logger.info(f"[TELEMETRY] Overall Processing Rate: {overall_rate:.2f} sequences/min")
+                    else:
+                        logger.info(f"[TELEMETRY] Current Session Rate: {current_session_rate:.2f} sequences/min")
                 logger.info(f"[TELEMETRY] Session Average Time: {avg_seq_time:.1f} seconds per sequence")
                 logger.info(f"[TELEMETRY] Session Duration: {elapsed_time:.1f} minutes")
-                logger.info(f"[TELEMETRY] ETA (at current rate): {eta_display}")
+                logger.info(f"[TELEMETRY] ETA (based on optimal rate): {eta_display}")
             else:
                 logger.info("[TELEMETRY] Current Session: No sequences processed yet")
                 logger.info(f"[TELEMETRY] Session Duration: {elapsed_time:.1f} minutes")
@@ -226,26 +252,42 @@ class PipelineTelemetry:
         processed_sequences = self.telemetry["completed_sequences"] + self.telemetry["failed_sequences"]
         success_rate = (self.telemetry["completed_sequences"] / max(processed_sequences, 1)) * 100
         
-        # Calculate timing metrics based on current session
+        # Calculate timing metrics with improved ETA logic
         elapsed_time = 0
         sequences_per_min = 0
+        eta_minutes = 0
         current_session_processed = len(self.telemetry["sequence_times"])
         
         if self.telemetry["start_time"]:
             elapsed_seconds = (datetime.now() - self.telemetry["start_time"]).total_seconds()
             elapsed_time = elapsed_seconds / 60
             
-            # Use current session performance for rate calculation
-            if elapsed_seconds > 0 and current_session_processed > 0:
-                sequences_per_min = (current_session_processed * 60) / elapsed_seconds
+            if elapsed_seconds > 0:
+                # Current session rate
+                current_session_rate = 0
+                if current_session_processed > 0:
+                    current_session_rate = (current_session_processed * 60) / elapsed_seconds
+                
+                # Overall rate based on total completed sequences
+                total_processed = self.telemetry["completed_sequences"] + current_session_processed
+                overall_rate = 0
+                if total_processed > 0:
+                    overall_rate = (total_processed * 60) / elapsed_seconds
+                
+                # Use the more reliable rate for ETA calculation
+                if total_processed >= 5:  # Prefer overall rate for stability
+                    sequences_per_min = max(overall_rate, current_session_rate * 0.8)
+                elif current_session_processed >= 3:  # Use current session if we have some data
+                    sequences_per_min = current_session_rate
+                else:
+                    sequences_per_min = current_session_rate  # Use what we have
         
         # Calculate average sequence processing time for current session
         avg_seq_time = 0
         if self.telemetry["sequence_times"]:
             avg_seq_time = sum(self.telemetry["sequence_times"]) / len(self.telemetry["sequence_times"])
         
-        # Calculate ETA based on remaining work and current session rate
-        eta_minutes = 0
+        # Calculate ETA based on remaining work and optimal processing rate
         remaining_new_sequences = self.telemetry["total_sequences"] - self.telemetry["completed_sequences"]
         remaining_work = remaining_new_sequences + self.telemetry["failed_sequences"]
         if sequences_per_min > 0 and remaining_work > 0:
