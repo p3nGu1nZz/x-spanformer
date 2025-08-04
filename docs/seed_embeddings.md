@@ -29,24 +29,23 @@ P[t,i] = (α_t × p(u_i) × β_{t+|u_i|}) / α_T
 - Uses **log-space arithmetic** for numerical stability with long sequences
 - Handles **variable-length pieces** efficiently through dynamic programming
 
-### 🌱 **Phase 2: Vocabulary-Aware Seed Embeddings**
+### 🔄 **Phase 2: Vocabulary-Aware Seed Embeddings**
 ```
-std_i = sqrt(2 / (d × p(u_i)))     // Multi-codepoint pieces
-std_i = sqrt(2 / d)                // Single codepoint pieces  
-H^0 = P × W_emb
+W_emb[i,:] ~ N(0, σ²/√p(u_i))  where σ² = 2/(d + |V|)
+H⁰ = P · W_emb ∈ R^{T×d}
 ```
-- **Probability-adjusted Xavier initialization** gives rare pieces larger initial variance
-- **Soft embedding lookup** using piece probability matrix P
-- Creates **smooth interpolation** between discrete vocabulary choices
+- **Frequency-scaled Xavier initialization**: Rare pieces receive larger variance for meaningful gradients
+- **Soft embedding lookup**: Each position receives weighted combination of piece embeddings 
+- Creates **probabilistic representation** that preserves segmentation uncertainty from Phase 1
 
-### 🔄 **Phase 3: Multi-Scale Contextualization**
+### 🔄 **Phase 3: Multi-Scale Contextual Encoding**
 ```
-H = ConvEncoder(H^0)    // Kernels [3,5,7], Dilations [1,2,4]
+H = ConvEncoder(H⁰)  with RF_{k,d} = 1 + (k-1)·d positions
 ```
-- **Three parallel convolution branches** capture patterns at different scales
-- **Dilated convolutions** provide exponential receptive field growth
-- **Residual connections + LayerNorm** ensure gradient flow and stability
-- **Device flexibility**: CUDA when specified, CPU default with automatic fallback for CI/CD environments
+- **Nine parallel pathways**: Kernels K = {3,5,7} × Dilations D = {1,2,4}
+- **Linear computational cost**: O(T·d²) for efficient sequence processing
+- **Multi-scale receptive fields**: From 3 positions (local) to 25 positions (long-range)
+- **Residual connections + LayerNorm**: Stable gradient flow with length preservation
 
 ### 📍 **Phase 4: Vocabulary-Informed Span Filtering**
 ```
@@ -60,51 +59,56 @@ Accept span s if: VocabAlign(s) ∨ CompPot(s) ∨ WhitespaceCoherent(s)
 
 ## 🧠 Mathematical Foundation
 
-### **Forward-Backward Algorithm Adaptation**
+### **Forward-Backward Algorithm for Variable-Length Pieces**
 
-The soft probability computation extends the classical HMM forward-backward algorithm to handle **variable-length vocabulary pieces**:
+The soft probability computation extends HMM forward-backward to handle **variable-length vocabulary pieces**:
 
 **Forward Pass:**
 ```
-α_0 = 1
-α_{t+|u_i|} += α_t × p(u_i)    ∀i where u_i matches at position t
+α₁ = 1
+α_{t+1} = Σ_{u_i ∈ V: match(x,t,u_i)} α_t · p(u_i)
 ```
 
 **Backward Pass:**  
 ```
-β_T = 1
-β_t += p(u_i) × β_{t+|u_i|}    ∀i where u_i matches at position t
+β_{T+1} = 1
+β_t = Σ_{u_i ∈ V: match(x,t,u_i)} p(u_i) · β_{t+|u_i|}
 ```
 
-**Soft Probabilities:**
+**Soft Probability Matrix:**
 ```
-P[t,i] = α_t × p(u_i) × β_{t+|u_i|} / α_T
+P[t,i] = (α_t · p(u_i) · β_{t+|u_i|}) / α_{T+1}  if match(x,t,u_i), else 0
 ```
 
-This formulation ensures that `∑_i P[t,i] = 1` at each position, creating a **proper probability distribution** over vocabulary pieces.
+This ensures `Σᵢ P[t,i] ≤ 1` for all positions, with equality when complete coverage is achieved.
 
-### **Vocabulary-Aware Xavier Initialization**
+### **Frequency-Scaled Xavier Initialization**
 
-Standard Xavier initialization assumes uniform importance across all embeddings. X-Spanformer adjusts the variance based on piece probability:
+Standard Xavier initialization treats all embeddings uniformly. X-Spanformer adjusts variance based on piece statistics:
 
-**Standard Xavier:** `std = sqrt(2/d)`
-**X-Spanformer:** `std = sqrt(2/(d × p(u)))`
+**Standard Xavier:** `σ² = 2/d`  
+**X-Spanformer:** `W_emb[i,:] ~ N(0, σ²/√p(u_i))` where `σ² = 2/(d + |V|)`
 
-**Intuition:** Rare pieces (low `p(u)`) get **larger initial variance**, allowing them to contribute meaningfully despite infrequent occurrence. High-probability pieces get **smaller variance** for stable gradients.
+**Rationale:** Rare pieces (low `p(u_i)`) receive larger variance to ensure meaningful gradient signals despite infrequent usage.
 
-### **Multi-Scale Dilated Convolutions**
+### **Multi-Scale Dilated Convolution Architecture**
 
-The contextual encoder uses three parallel branches with exponentially growing receptive fields:
+The contextual encoder uses **nine parallel pathways** with different kernel-dilation combinations:
 
-| Branch | Kernel | Dilation | Receptive Field | Pattern Type |
-|--------|---------|----------|-----------------|--------------|
-| 1      | 3       | 1        | 3               | Local dependencies |
-| 2      | 5       | 2        | 9               | Medium-range composition |
-| 3      | 7       | 4        | 25              | Long-range structure |
+| Kernel | Dilation | Receptive Field | Computational Focus |
+|--------|----------|-----------------|-------------------|
+| 3      | 1,2,4    | 3,5,9          | Local patterns |
+| 5      | 1,2,4    | 5,9,17         | Medium-range composition |
+| 7      | 1,2,4    | 7,13,25        | Long-range structure |
 
-**Padding Formula:** `padding = (kernel - 1) × dilation ÷ 2`
+**Receptive Field Formula:** `RF_{k,d} = 1 + (k-1)·d`
 
-This ensures **length preservation** while capturing multi-scale compositional patterns.
+**Dilated Convolution Operation:**
+```
+H^(ℓ+1)[t,:] = Σⱼ₌₀^{k-1} W^(k,d)[j,:,:] · H^(ℓ)[t - j·d,:] + b^(k,d)
+```
+
+This architecture captures **compositional patterns at multiple scales** while maintaining linear computational complexity `O(T·d²)`.
 
 ---
 

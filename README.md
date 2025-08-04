@@ -2,18 +2,18 @@
 
 # 🧠 X-Spanformer
 
-**Tokenizer-free, span-aware transformer grounded in X-bar theory**  
-X-Spanformer learns to segment and fuse overlapping spans directly from raw input—code, natural language, or hybrid strings—without relying on tokenizers. It uses span-induced controller vectors to steer computation and model structure in a linguistically grounded, modality-flexible way.
+**Tokenizer-free, span-aware encoder architecture inspired by X-bar theory**  
+X-Spanformer replaces static tokenization with adaptive, corpus-driven vocabulary induction via expectation-maximization and Viterbi approximation. The system learns to segment and encode overlapping spans directly from raw UTF-8 input—code, natural language, or hybrid text—using factorized pointer networks and controller fusion mechanisms for downstream transformer integration.
 
 ---
 
 ## 🚀 Key Features
 
-- **Tokenizer-Free Encoding** – no subword splits or external segmenters  
-- **Span-Aware Attention Routing** – structure is learned and fused into prefix/control signals  
-- **Multi-Domain Compositionality** – supports code, prose, REPLs, Markdown, etc.  
-- **Entropy-Annealed Training** – spans are initially exploratory, then crystallize over time  
-- **X-Bar Inspired Representation** – spans learned hierarchically, with linguistic roles and projections
+- **Tokenizer-Free Architecture** – adaptive vocabulary induction via hybrid Unigram-LM with EM and Viterbi approximation  
+- **Factorized Pointer Networks** – independent span boundary prediction for start and end positions  
+- **Multi-Domain Compositional Spans** – supports code, prose, mixed content with X-bar hierarchical structure  
+- **Controller Fusion Integration** – multiple injection pathways (bias, prefix, gated-FFN) for downstream transformers  
+- **ONNX-Native Implementation** – fully differentiable with linear-time convolutional contextual encoding
 - **Chunk-Based Storage System** – efficient compressed storage with automatic validation and resume capabilities
 - **Comprehensive Integrity Checking** – ensures no missing sequences with gap detection and repair
 - **Fast Sequence Introspection** – millisecond loading of individual sequences for analysis and debugging  
@@ -64,7 +64,7 @@ uv run -m x_spanformer.pipelines.pdf2jsonl \
 
 ### Stage 2: Vocabulary Induction
 
-Generate a hybrid Unigram-LM vocabulary from the JSONL segments using the **Adaptive Unigram-LM Vocabulary Induction** algorithm:
+Generate a hybrid Unigram-LM vocabulary from the JSONL segments using the **Adaptive Unigram-LM Vocabulary Induction** algorithm (Section 3.1):
 
 ```bash
 # Induce vocabulary from JSONL segments
@@ -73,17 +73,17 @@ uv run -m x_spanformer.pipelines.jsonl2vocab \
   -o data/vocab/out
 ```
 
-This implements the mathematical formulation from Section 3.1 of our paper (Algorithm 1), featuring:
+This implements the mathematical formulation from Section 3.1 of our paper, featuring:
 
-- **EM + Viterbi segmentation** with adaptive pruning based on perplexity and OOV thresholds
-- **Shared text processing utilities** via `x_spanformer.pipelines.shared.text_processor` for consistent corpus loading across all pipelines
-- **Shared text processing utilities** via `x_spanformer.pipelines.shared.text_processor` for consistent corpus loading across all pipelines
-- **Comprehensive statistics output** including baseline/final perplexity, OOV rates, and pruning metrics
+- **EM with Viterbi approximation** for optimal segmentation with adaptive pruning based on perplexity and OOV thresholds
+- **Whitespace-aware tokenization** ensuring strict separation between whitespace and content tokens
+- **Frequency-based candidate filtering** retaining top-M substrings up to maximum length L_max
+- **Statistical validation** with baseline/final perplexity comparison and coverage metrics
 - **Schema-validated vocabulary pieces** using `VocabPiece` and `VocabStats` models
 - **Multi-stage artifact generation** for transparency and debugging
 - **Consolidated corpus output** (`corpus.jsonl`) ready for downstream vocab2embedding processing
 
-### Stage 3: Seed Embeddings & Span Generation
+### Stage 3: Seed Embeddings & Span Candidate Generation
 
 Transform vocabulary into contextualized embeddings and span candidates using Section 3.2 algorithms:
 
@@ -106,14 +106,10 @@ uv run -m x_spanformer.pipelines.vocab2embedding \
 
 This implements the unified algorithm from Section 3.2, featuring:
 
-- **Forward-backward soft probability computation** adapted from HMMs for variable-length pieces
-- **Vocabulary-aware Xavier initialization** with probability-adjusted embedding variance
-- **Multi-scale dilated convolutions** for contextual encoding (kernels [3,5,7], dilations [1,2,4])
-- **Parallel processing support** with multiple worker processes for high-throughput production
-- **Chunk-based storage system** with compressed `.npz` files for efficient processing and resumption
-- **Comprehensive validation and integrity checking** with automatic gap detection and repair
-- **Intelligent device fallback** from CUDA to CPU when GPU unavailable (CI/CD compatible)
-- **Vocabulary-informed span filtering** using alignment, compositional potential, and whitespace coherence
+- **Forward-backward soft probability computation** P[t,i] = (α_t × p(u_i) × β_{t+|u_i|}) / α_{T+1} for probabilistic piece assignment
+- **Vocabulary-aware Xavier initialization** with probability-adjusted embedding variance for rare pieces
+- **Multi-scale dilated convolutional encoding** for contextual representation (kernels [3,5,7], dilations [1,2,4])
+- **Factorized span candidate generation** with vocabulary-informed filtering based on alignment and compositional potential
 
 **Output Structure (Chunk-Based):**
 ```
@@ -171,7 +167,7 @@ Use the output as either raw training strings (for unsupervised Phase I) or comp
 
 This enables X-Spanformer to bootstrap span boundaries from real-world documents with high structural signal, without relying on brittle tokenization.
 
-### Stage 4: Span Annotation for Supervised Training
+### Stage 4: Span Annotation for Boundary Prediction Training
 
 Generate X-bar span annotations for supervised training of the factorized pointer network boundary predictor (Section 3.3):
 
@@ -194,14 +190,12 @@ uv run -m x_spanformer.pipelines.span_annotator \
   --range 1001-2000 &
 ```
 
-This implements **agentic X-bar span annotation** using LLM conversations to generate training data, featuring:
+This implements **agentic X-bar span annotation** for factorized pointer network training, featuring:
 
-- **Comprehensive Classifier Extraction**: Processes each sequence for ALL applicable X-bar classifiers from domain-specific taxonomy
-- **Domain-Aware Processing**: Automatic domain detection (natural/code/mixed) with tailored prompts
-- **Position-wise Alignment**: Character-level spans map directly to embedding positions (1:1 correspondence)
-- **Resumable Processing**: Individual working files enable inspection and continuation from any point
-- **Configuration-Based Logging**: Centralized logging configuration with file output support
-- **Multi-Process Support**: Parallel processing on different sequence ranges for scalability
+- **Independent Boundary Prediction**: Generates training targets for start/end position classification using factorized linear heads
+- **X-bar Hierarchical Structure**: Domain-specific classifier extraction based on linguistic phrase structure theory
+- **Position-wise Binary Classification**: Creates sigmoid-normalized boundary probabilities for BCE loss training
+- **Multi-label Span Support**: Handles overlapping spans at different hierarchical levels (word → phrase → clause)
 
 **Output Structure (Individual Working Files):**
 ```
@@ -571,11 +565,12 @@ Supports retry logic, confidence scoring, and mode switching. Complements our vo
 
 ---
 
-## 🧬 Architectural Inspiration
+## 🧬 Architectural Foundations
 
-- **Linguistics:** X-bar phrase theory, projection-based syntax, span recursion  
-- **Biomimicry:** Mycelial routing, compositional inference, entropy-driven adaptation  
-- **Transformer Augmentation:** Span-aware attention, controller modulation, dropout-driven routing  
+- **Linguistics:** X-bar phrase structure theory for hierarchical span organization and compositional boundaries  
+- **Statistical Methods:** Expectation-maximization with Viterbi approximation for optimal vocabulary segmentation  
+- **Neural Architecture:** Factorized pointer networks with linear-time convolutional contextual encoding  
+- **Integration Mechanisms:** Multiple controller fusion pathways (bias injection, prefix tuning, gated-FFN modulation)
 
 ---
 
