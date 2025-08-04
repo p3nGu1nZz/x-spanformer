@@ -217,8 +217,14 @@ class AnnotationProcessor:
                 end = min(start + 1, len(sequence))
                 issues.append(f"Start position {start} >= end position {original_end}, correcting end to {end}")
             else:
-                issues.append(f"Start position {start} >= end position {end} and cannot be corrected")
+                issues.append(f"Start position {start} >= end position {end} and cannot be corrected - REJECTING SPAN")
                 return False, issues
+        
+        # Final validation: ensure we have a valid span length
+        final_length = end - start
+        if final_length <= 0:
+            issues.append(f"Final span length {final_length} is invalid - REJECTING SPAN")
+            return False, issues
         
         # Check for reasonable span length (not entire text unless it's a sentence-level span)
         span_length = end - start

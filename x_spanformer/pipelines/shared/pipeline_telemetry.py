@@ -5,12 +5,14 @@ Provides centralized telemetry functionality for tracking pipeline progress,
 performance metrics, ETA calculations, and status reporting across different
 pipeline types.
 """
+import json
 import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+# Use the same logger name as the main pipeline for consistent output
+logger = logging.getLogger("Span Annotation Pipeline")
 
 
 class PipelineTelemetry:
@@ -29,6 +31,7 @@ class PipelineTelemetry:
             pipeline_name: Name of the pipeline for display purposes
         """
         self.pipeline_name = pipeline_name
+        self._historical_total_spans = 0  # Total spans from all sessions (loaded from metadata)
         self.telemetry = {
             "start_time": None,
             "completed_sequences": 0,
@@ -79,7 +82,7 @@ class PipelineTelemetry:
         if sequence_start_time:
             sequence_time = (current_time - sequence_start_time).total_seconds()
             self.telemetry["sequence_times"].append(sequence_time)
-            self.telemetry["last_sequence_time"] = sequence_time
+            self.telemetry["last_sequence_time"] = sequence_time  # Store duration in seconds
         
         # Track span statistics if annotation result provided
         if annotation_result and hasattr(annotation_result, 'span_annotations') and annotation_result.span_annotations:
@@ -108,74 +111,110 @@ class PipelineTelemetry:
         if sequence_start_time:
             sequence_time = (current_time - sequence_start_time).total_seconds()
             self.telemetry["sequence_times"].append(sequence_time)
-            self.telemetry["last_sequence_time"] = sequence_time
+            self.telemetry["last_sequence_time"] = sequence_time  # Store duration in seconds
     
     def display_progress_panel(self):
         """Display comprehensive telemetry panel with progress and statistics."""
-        current_time = datetime.now()
-        
-        # Calculate progress metrics
-        processed_sequences = self.telemetry["completed_sequences"] + self.telemetry["failed_sequences"]
-        progress_pct = (self.telemetry["completed_sequences"] / max(self.telemetry["total_sequences"], 1)) * 100
-        success_rate = (self.telemetry["completed_sequences"] / max(processed_sequences, 1)) * 100
-        
-        # Calculate timing metrics
-        elapsed_time = 0
-        sequences_per_min = 0
-        eta_display = "calculating..."
-        
-        if self.telemetry["start_time"]:
-            elapsed_seconds = (current_time - self.telemetry["start_time"]).total_seconds()
-            elapsed_time = elapsed_seconds / 60  # Convert to minutes
+        try:
+            current_time = datetime.now()
             
-            if elapsed_seconds > 0 and processed_sequences > 0:
-                sequences_per_min = (processed_sequences * 60) / elapsed_seconds
+            # Calculate progress metrics
+            processed_sequences = self.telemetry["completed_sequences"] + self.telemetry["failed_sequences"]
+            progress_pct = (self.telemetry["completed_sequences"] / max(self.telemetry["total_sequences"], 1)) * 100
+            success_rate = (self.telemetry["completed_sequences"] / max(processed_sequences, 1)) * 100
+            
+            # Calculate timing metrics
+            elapsed_time = 0
+            sequences_per_min = 0
+            eta_display = "calculating..."
+            current_session_processed = len(self.telemetry["sequence_times"])
+            
+            if self.telemetry["start_time"]:
+                elapsed_seconds = (current_time - self.telemetry["start_time"]).total_seconds()
+                elapsed_time = elapsed_seconds / 60  # Convert to minutes
+            
+                # Calculate processing rate based on current session performance
+                if elapsed_seconds > 0 and current_session_processed > 0:
+                    sequences_per_min = (current_session_processed * 60) / elapsed_seconds
+                    
+                    # Calculate remaining work: 
+                    # - Unprocessed sequences from total corpus
+                    # - Failed sequences that need retry
+                    remaining_new_sequences = self.telemetry["total_sequences"] - self.telemetry["completed_sequences"]
+                    remaining_work = remaining_new_sequences + self.telemetry["failed_sequences"]
+                    
+                    if sequences_per_min > 0 and remaining_work > 0:
+                        eta_minutes = remaining_work / sequences_per_min
+                        eta_display = self._format_eta(eta_minutes)
+                    elif remaining_work == 0:
+                        eta_display = "Complete!"
+            
+            # Calculate span statistics - combine historical and current session data
+            total_spans = sum(self.telemetry["spans_by_type"].values())
+            span_types_summary = self._format_span_summary(self.telemetry["spans_by_type"])
+            modality_summary = self._format_span_summary(self.telemetry["spans_by_modality"])
+            
+            # Calculate average sequence processing time for current session
+            avg_seq_time = 0
+            if self.telemetry["sequence_times"]:
+                avg_seq_time = sum(self.telemetry["sequence_times"]) / len(self.telemetry["sequence_times"])
+            
+            # Calculate remaining work breakdown for display
+            remaining_new_sequences = self.telemetry["total_sequences"] - self.telemetry["completed_sequences"] 
+            total_remaining_work = remaining_new_sequences + self.telemetry["failed_sequences"]
+            
+            # Display telemetry panel
+            logger.info("=" * 80)
+            logger.info(f"[TELEMETRY] {self.pipeline_name} Progress Panel")
+            logger.info("=" * 80)
+            logger.info(f"[TELEMETRY] Overall Progress: {processed_sequences}/{self.telemetry['total_sequences']} sequences ({progress_pct:.1f}%)")
+            logger.info(f"[TELEMETRY] Success Rate: {self.telemetry['completed_sequences']}/{processed_sequences} successful ({success_rate:.1f}%)")
+            logger.info(f"[TELEMETRY] Failed Sequences: {self.telemetry['failed_sequences']} (need retry)")
+            logger.info(f"[TELEMETRY] Remaining Work: {total_remaining_work} sequences ({remaining_new_sequences} new + {self.telemetry['failed_sequences']} retries)")
+            logger.info("-" * 40)
+            
+            # Show current session performance metrics
+            if current_session_processed > 0:
+                logger.info(f"[TELEMETRY] Current Session: {current_session_processed} sequences processed")
+                logger.info(f"[TELEMETRY] Session Processing Rate: {sequences_per_min:.2f} sequences/min")
+                logger.info(f"[TELEMETRY] Session Average Time: {avg_seq_time:.1f} seconds per sequence")
+                logger.info(f"[TELEMETRY] Session Duration: {elapsed_time:.1f} minutes")
+                logger.info(f"[TELEMETRY] ETA (at current rate): {eta_display}")
+            else:
+                logger.info("[TELEMETRY] Current Session: No sequences processed yet")
+                logger.info(f"[TELEMETRY] Session Duration: {elapsed_time:.1f} minutes")
+                logger.info("[TELEMETRY] ETA: Calculating...")
+            
+            logger.info("-" * 40)
+            
+            # Calculate span statistics for display
+            current_session_spans = sum(self.telemetry["spans_by_type"].values())
+            if self._historical_total_spans > 0:
+                # Show both historical total and current session breakdown
+                total_all_sessions = self._historical_total_spans + current_session_spans
+                logger.info(f"[TELEMETRY] Total Spans Extracted (All Sessions): {total_all_sessions}")
+                logger.info(f"[TELEMETRY] Current Session Spans: {current_session_spans}")
+                logger.info(f"[TELEMETRY] Previous Sessions Spans: {self._historical_total_spans}")
+            else:
+                logger.info(f"[TELEMETRY] Total Spans Extracted: {current_session_spans}")
                 
-                # Calculate remaining work: 
-                # - Unprocessed sequences from total corpus
-                # - Failed sequences that need retry
-                remaining_new_sequences = self.telemetry["total_sequences"] - self.telemetry["completed_sequences"]
-                remaining_work = remaining_new_sequences + self.telemetry["failed_sequences"]
-                
-                if sequences_per_min > 0 and remaining_work > 0:
-                    eta_minutes = remaining_work / sequences_per_min
-                    eta_display = self._format_eta(eta_minutes)
-                elif remaining_work == 0:
-                    eta_display = "Complete!"
-        
-        # Calculate span statistics
-        total_spans = sum(self.telemetry["spans_by_type"].values())
-        span_types_summary = self._format_span_summary(self.telemetry["spans_by_type"])
-        modality_summary = self._format_span_summary(self.telemetry["spans_by_modality"])
-        
-        # Calculate average sequence processing time
-        avg_seq_time = 0
-        if self.telemetry["sequence_times"]:
-            avg_seq_time = sum(self.telemetry["sequence_times"]) / len(self.telemetry["sequence_times"])
-        
-        # Calculate remaining work breakdown for display
-        remaining_new_sequences = self.telemetry["total_sequences"] - self.telemetry["completed_sequences"] 
-        total_remaining_work = remaining_new_sequences + self.telemetry["failed_sequences"]
-        
-        # Display telemetry panel
-        logger.info("=" * 80)
-        logger.info(f"TELEMETRY PANEL - {self.pipeline_name} Progress")
-        logger.info("=" * 80)
-        logger.info(f"Progress: {processed_sequences}/{self.telemetry['total_sequences']} sequences ({progress_pct:.1f}%)")
-        logger.info(f"Success Rate: {self.telemetry['completed_sequences']}/{processed_sequences} successful ({success_rate:.1f}%)")
-        logger.info(f"Failed Sequences: {self.telemetry['failed_sequences']} (need retry)")
-        logger.info(f"Remaining Work: {total_remaining_work} sequences ({remaining_new_sequences} new + {self.telemetry['failed_sequences']} retries)")
-        logger.info(f"Processing Rate: {sequences_per_min:.2f} sequences/min")
-        logger.info(f"Elapsed Time: {elapsed_time:.1f} minutes")
-        logger.info(f"ETA: {eta_display}")
-        logger.info(f"Average Sequence Time: {avg_seq_time:.1f} seconds")
-        logger.info("-" * 40)
-        logger.info(f"Total Spans Extracted: {total_spans}")
-        if span_types_summary:
-            logger.info(f"Span Types: {span_types_summary}")
-        if modality_summary:
-            logger.info(f"Modalities: {modality_summary}")
-        logger.info("=" * 80)
+            if span_types_summary:
+                logger.info(f"[TELEMETRY] Span Types (Current Session): {span_types_summary}")
+            if modality_summary:
+                logger.info(f"[TELEMETRY] Modalities (Current Session): {modality_summary}")
+            logger.info("=" * 80)
+            
+        except Exception as e:
+            logger.error(f"[TELEMETRY] Error displaying progress panel: {e}")
+            logger.error(f"[TELEMETRY] Exception type: {type(e).__name__}")
+            logger.error(f"[TELEMETRY] Telemetry data keys: {list(self.telemetry.keys())}")
+            # Display basic fallback information
+            logger.info("=" * 80)
+            logger.info(f"[TELEMETRY] {self.pipeline_name} Progress (Basic View)")
+            logger.info("=" * 80)
+            logger.info(f"[TELEMETRY] Progress: {self.telemetry.get('completed_sequences', 0)} completed, {self.telemetry.get('failed_sequences', 0)} failed")
+            logger.info(f"[TELEMETRY] Total sequences: {self.telemetry.get('total_sequences', 0)}")
+            logger.info("=" * 80)
     
     def get_statistics(self) -> Dict[str, Any]:
         """
@@ -187,21 +226,30 @@ class PipelineTelemetry:
         processed_sequences = self.telemetry["completed_sequences"] + self.telemetry["failed_sequences"]
         success_rate = (self.telemetry["completed_sequences"] / max(processed_sequences, 1)) * 100
         
-        # Calculate timing metrics
+        # Calculate timing metrics based on current session
         elapsed_time = 0
         sequences_per_min = 0
+        current_session_processed = len(self.telemetry["sequence_times"])
         
         if self.telemetry["start_time"]:
             elapsed_seconds = (datetime.now() - self.telemetry["start_time"]).total_seconds()
             elapsed_time = elapsed_seconds / 60
             
-            if elapsed_seconds > 0 and processed_sequences > 0:
-                sequences_per_min = (processed_sequences * 60) / elapsed_seconds
+            # Use current session performance for rate calculation
+            if elapsed_seconds > 0 and current_session_processed > 0:
+                sequences_per_min = (current_session_processed * 60) / elapsed_seconds
         
-        # Calculate average sequence processing time
+        # Calculate average sequence processing time for current session
         avg_seq_time = 0
         if self.telemetry["sequence_times"]:
             avg_seq_time = sum(self.telemetry["sequence_times"]) / len(self.telemetry["sequence_times"])
+        
+        # Calculate ETA based on remaining work and current session rate
+        eta_minutes = 0
+        remaining_new_sequences = self.telemetry["total_sequences"] - self.telemetry["completed_sequences"]
+        remaining_work = remaining_new_sequences + self.telemetry["failed_sequences"]
+        if sequences_per_min > 0 and remaining_work > 0:
+            eta_minutes = remaining_work / sequences_per_min
         
         return {
             "total_sequences": self.telemetry["total_sequences"],
@@ -212,10 +260,219 @@ class PipelineTelemetry:
             "elapsed_time_minutes": elapsed_time,
             "processing_rate_per_min": sequences_per_min,
             "average_sequence_time_seconds": avg_seq_time,
+            "eta_minutes": eta_minutes,
+            "current_session_processed": current_session_processed,
             "total_spans": sum(self.telemetry["spans_by_type"].values()),
+            "historical_total_spans": self._historical_total_spans,
             "spans_by_type": dict(self.telemetry["spans_by_type"]),
             "spans_by_modality": dict(self.telemetry["spans_by_modality"])
         }
+    
+    def save_telemetry_to_metadata(self, metadata_filepath: Path):
+        """
+        Save current telemetry state to the metadata.json file.
+        
+        Args:
+            metadata_filepath: Path to metadata.json file
+        """
+        try:
+            # Load existing metadata
+            if metadata_filepath.exists():
+                with open(metadata_filepath, 'r', encoding='utf-8') as f:
+                    metadata: Dict[str, Any] = json.load(f)
+            else:
+                metadata: Dict[str, Any] = {
+                    "pipeline_version": "1.0",
+                    "started_at": datetime.now().isoformat()
+                }
+            
+            # Update metadata with telemetry data
+            telemetry_data = dict(self.telemetry)
+            
+            # Convert datetime objects to ISO strings for JSON serialization
+            if telemetry_data["start_time"]:
+                if isinstance(telemetry_data["start_time"], datetime):
+                    telemetry_data["start_time"] = telemetry_data["start_time"].isoformat()
+                else:
+                    logger.warning(f"start_time is not datetime: {type(telemetry_data['start_time'])}")
+            
+            if telemetry_data["last_sequence_time"]:
+                if isinstance(telemetry_data["last_sequence_time"], (int, float)):
+                    # last_sequence_time is now stored as duration in seconds, no conversion needed
+                    pass
+                elif isinstance(telemetry_data["last_sequence_time"], datetime):
+                    # Handle legacy case where it was stored as datetime - convert to None
+                    logger.warning("Converting legacy datetime last_sequence_time to None")
+                    telemetry_data["last_sequence_time"] = None
+                else:
+                    logger.warning(f"last_sequence_time is unexpected type: {type(telemetry_data['last_sequence_time'])}")
+                    telemetry_data["last_sequence_time"] = None
+            
+            # Add comprehensive telemetry section
+            metadata["telemetry"] = {
+                "pipeline_name": self.pipeline_name,
+                "session_data": telemetry_data,
+                "current_statistics": self.get_statistics(),
+                "last_updated": datetime.now().isoformat()
+            }
+            
+            # Also update the legacy fields for backward compatibility
+            stats = self.get_statistics()
+            metadata["processed_sequences"] = stats["processed_sequences"]
+            metadata["total_sequences"] = stats["total_sequences"]
+            
+            # Update total spans with combined total (historical + current session)
+            current_session_spans = sum(self.telemetry["spans_by_type"].values())
+            combined_total_spans = self._historical_total_spans + current_session_spans
+            metadata["total_spans"] = combined_total_spans
+            
+            metadata["last_updated"] = datetime.now().isoformat()
+            
+            with open(metadata_filepath, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2)
+                
+            logger.debug(f"Telemetry state saved to {metadata_filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save telemetry state: {e}")
+
+    def save_telemetry_state(self, filepath: Path):
+        """
+        Save current telemetry state to a JSON file (legacy method).
+        
+        Args:
+            filepath: Path to save telemetry state
+        """
+        try:
+            state = {
+                "pipeline_name": self.pipeline_name,
+                "telemetry_snapshot": dict(self.telemetry),
+                "statistics": self.get_statistics(),
+                "saved_at": datetime.now().isoformat()
+            }
+            
+            # Convert datetime objects to ISO strings for JSON serialization
+            if state["telemetry_snapshot"]["start_time"]:
+                state["telemetry_snapshot"]["start_time"] = state["telemetry_snapshot"]["start_time"].isoformat()
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=2)
+                
+            logger.debug(f"Telemetry state saved to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save telemetry state: {e}")
+    
+    def load_telemetry_from_metadata(self, metadata_filepath: Path) -> bool:
+        """
+        Load telemetry state from the metadata.json file.
+        
+        Args:
+            metadata_filepath: Path to metadata.json file
+            
+        Returns:
+            True if loaded successfully, False otherwise
+        """
+        try:
+            if not metadata_filepath.exists():
+                return False
+                
+            with open(metadata_filepath, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            
+            # Check if telemetry data exists in metadata
+            if "telemetry" not in metadata:
+                logger.info("No telemetry data found in metadata.json - starting fresh")
+                return False
+            
+            telemetry_section = metadata["telemetry"]
+            telemetry_data = telemetry_section.get("session_data", {})
+            
+            if not telemetry_data:
+                logger.info("Empty telemetry session data - starting fresh")
+                return False
+            
+            # Convert ISO string back to datetime for start_time
+            if telemetry_data.get("start_time"):
+                telemetry_data["start_time"] = datetime.fromisoformat(telemetry_data["start_time"])
+            
+            # Ensure last_sequence_time is properly typed as float
+            if "last_sequence_time" in telemetry_data:
+                try:
+                    telemetry_data["last_sequence_time"] = float(telemetry_data["last_sequence_time"])
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid last_sequence_time value, removing: {telemetry_data.get('last_sequence_time')}")
+                    telemetry_data.pop("last_sequence_time", None)
+            
+            # Load historical span statistics from metadata root level (legacy compatibility)
+            # This includes the total spans calculated from all working files
+            if "total_spans" in metadata:
+                historical_total_spans = metadata["total_spans"]
+                logger.debug(f"Found total spans in metadata: {historical_total_spans}")
+                
+                # Calculate current session spans from loaded telemetry data
+                current_session_spans = sum(telemetry_data.get("spans_by_type", {}).values())
+                
+                if current_session_spans > 0:
+                    # If we have current session data, the historical total should be
+                    # the metadata total minus the current session spans
+                    self._historical_total_spans = max(0, historical_total_spans - current_session_spans)
+                    logger.debug(f"Calculated historical spans: {self._historical_total_spans} (metadata total: {historical_total_spans} - current session: {current_session_spans})")
+                else:
+                    # If no current session data, all spans are historical
+                    self._historical_total_spans = historical_total_spans
+                    logger.info(f"No current session spans found, treating all {historical_total_spans} spans as historical")
+                    logger.info("Note: Detailed span type breakdown only available for current session")
+            
+            # Restore telemetry data
+            self.telemetry = telemetry_data
+            
+            # Log resume information
+            stats = telemetry_section.get("current_statistics", {})
+            logger.info(f"Telemetry state loaded from {metadata_filepath}")
+            logger.info(f"Resuming from: {stats.get('processed_sequences', 0)} processed sequences")
+            logger.info(f"Previous session success rate: {stats.get('success_rate_percent', 0):.1f}%")
+            
+            # Add historical context to display
+            # Note: _historical_total_spans is already calculated above based on metadata and current session
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to load telemetry state from metadata: {e}")
+            return False
+
+    def load_telemetry_state(self, filepath: Path) -> bool:
+        """
+        Load telemetry state from a JSON file (legacy method).
+        
+        Args:
+            filepath: Path to load telemetry state from
+            
+        Returns:
+            True if loaded successfully, False otherwise
+        """
+        try:
+            if not filepath.exists():
+                return False
+                
+            with open(filepath, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+            
+            # Restore telemetry data
+            telemetry_data = state["telemetry_snapshot"]
+            
+            # Convert ISO string back to datetime
+            if telemetry_data["start_time"]:
+                telemetry_data["start_time"] = datetime.fromisoformat(telemetry_data["start_time"])
+            
+            self.telemetry = telemetry_data
+            
+            logger.info(f"Telemetry state loaded from {filepath}")
+            logger.info(f"Resuming from: {state['statistics']['processed_sequences']} processed sequences")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to load telemetry state: {e}")
+            return False
     
     def _format_eta(self, eta_minutes: float) -> str:
         """Format ETA for display."""
