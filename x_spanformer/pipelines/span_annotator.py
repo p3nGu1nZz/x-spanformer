@@ -51,6 +51,16 @@ class SpanAnnotatorPipeline:
         # Load pipeline configuration
         self.config = load_config(config_path or "config/pipelines/span_annotator.yaml")
         self.annotation_processor = AnnotationProcessor()
+
+        # Log extended logging configuration (migrated from agent config)
+        try:
+            lc = self.config.logging
+            logger.info(
+                "Logging flags -> level=%s track_annotations=%s log_spans=%s log_queries=%s log_responses=%s", 
+                lc.level, lc.track_annotations, lc.log_spans, lc.log_queries, lc.log_responses
+            )
+        except Exception:
+            pass
         
         # Load agent configuration if provided
         agent_config_path = agent_config_path or "config/agents/span_annotator_agent.yaml"
@@ -145,7 +155,7 @@ class SpanAnnotatorPipeline:
         
         Args:
             force: Force display regardless of timing
-            
+            sm
         Returns:
             True if telemetry should be displayed
         """
@@ -209,18 +219,14 @@ class SpanAnnotatorPipeline:
         logger.info("=" * 60)
         self.telemetry.display_progress_panel()
         
-        # Additional pipeline-specific stats
+        # Additional pipeline-specific stats via helper
+        from x_spanformer.pipelines.shared.pipeline_logging import SpanAnnotationLogger
         stats = self.telemetry.get_statistics()
-        logger.info(f"Pipeline Stats:")
-        logger.info(f"  - Total sequences to process: {stats['total_sequences']}")
-        logger.info(f"  - Completed this session: {len(self.telemetry.telemetry['sequence_times'])}")
-        logger.info(f"  - Success rate this session: {stats['success_rate_percent']:.1f}%")
-        logger.info(f"  - Average time per sequence: {stats['average_sequence_time_seconds']:.1f}s")
-        
-        if stats['processing_rate_per_min'] > 0:
-            logger.info(f"  - Current processing rate: {stats['processing_rate_per_min']:.2f} seq/min")
-        
-        logger.info("=" * 60)
+        SpanAnnotationLogger.log_telemetry_summary(
+            logger,
+            stats,
+            session_completed_count=len(self.telemetry.telemetry['sequence_times'])
+        )
     
     def get_all_corpus_sequences(self, corpus_file: Path) -> List[int]:
         """
@@ -248,64 +254,25 @@ class SpanAnnotatorPipeline:
         return sorted(sequence_ids)
     
     def parse_range_specification(self, range_spec: str) -> List[int]:
+        """Parse a user range specification into a list of unique sequence integers.
+
+        Supports:
+          Single: "42"
+          List:   "1,5,10"
+          Range:  "1-100"
+          Mixed:  "1-10,15,20-25"
         """
-        Parse range specification into list of sequence IDs.
-        
-        Supports formats:
-        - Single: "42"
-        - List: "1,5,10"  
-        - Range: "1-100"
-        - Mixed: "1-10,15,20-25"
-        
-        Args:
-            range_spec: Range specification string
-            
-        Returns:
-            List of sequence IDs to process
-        """
-        sequence_ids = []
-        
+        sequence_ids: List[int] = []
         for part in range_spec.split(','):
             part = part.strip()
-            
+            if not part:
+                continue
             if '-' in part:
-                # Range specification
                 start, end = part.split('-', 1)
                 sequence_ids.extend(range(int(start), int(end) + 1))
             else:
-                # Single sequence ID
                 sequence_ids.append(int(part))
-        
-        return sorted(list(set(sequence_ids)))  # Remove duplicates and sort
-        """
-        Parse range specification into list of sequence IDs.
-        
-        Supports formats:
-        - Single: "42"
-        - List: "1,5,10"  
-        - Range: "1-100"
-        - Mixed: "1-10,15,20-25"
-        
-        Args:
-            range_spec: Range specification string
-            
-        Returns:
-            List of sequence IDs to process
-        """
-        sequence_ids = []
-        
-        for part in range_spec.split(','):
-            part = part.strip()
-            
-            if '-' in part:
-                # Range specification
-                start, end = part.split('-', 1)
-                sequence_ids.extend(range(int(start), int(end) + 1))
-            else:
-                # Single sequence ID
-                sequence_ids.append(int(part))
-        
-        return sorted(list(set(sequence_ids)))  # Remove duplicates and sort
+        return sorted(set(sequence_ids))
     
     def load_all_sequences(self, corpus_file: Path) -> List[PretrainRecord]:
         """
@@ -496,45 +463,20 @@ class SpanAnnotatorPipeline:
         return existing_results
     
     def find_missing_sequences(self, target_sequences: List[PretrainRecord], existing_results: Dict[int, str]) -> List[int]:
-        """
-        Find sequences that are missing within the processed range (gaps).
-        Only considers sequences as missing if they fall within the range of processed sequences.
-        
-        Args:
-            target_sequences: List of all sequences to process
-            existing_results: Dict mapping sequence_id -> status for sequences with working files
-            
-        Returns:
-            List of sequence numbers that represent gaps in processing
-        """
+        """Return list of sequence IDs missing within already processed range (gap recovery)."""
         if not existing_results:
-            # Fresh run - no sequences are "missing", they're just unprocessed
             logger.info("Fresh run detected - no existing working files found")
             return []
-        
-        # Find the highest processed sequence ID
         max_processed_id = max(existing_results.keys()) if existing_results else 0
-        
-        # Get all target sequence IDs within the processed range
-        target_sequence_ids = {record.sequence_number for record in target_sequences 
-                             if record.sequence_number is not None and record.sequence_number <= max_processed_id}
-        
-        # Find gaps: sequences within processed range that don't have working files
-        missing_sequence_numbers = []
-        for seq_id in target_sequence_ids:
-            if seq_id not in existing_results:
-                missing_sequence_numbers.append(seq_id)
-        
-        if missing_sequence_numbers:
-            logger.info(f"Found {len(missing_sequence_numbers)} gap sequences (within processed range 1-{max_processed_id})")
-            if len(missing_sequence_numbers) <= 20:
-                logger.info(f"Gap sequences: {sorted(missing_sequence_numbers)}")
-            else:
-                sample = sorted(missing_sequence_numbers)[:10]
-                logger.info(f"Gap sequences (sample): {sample}... and {len(missing_sequence_numbers) - 10} more")
-        else:
-            logger.info(f"No gaps found within processed range (1-{max_processed_id})")
-        
+        target_sequence_ids = {
+            record.sequence_number for record in target_sequences
+            if record.sequence_number is not None and record.sequence_number <= max_processed_id
+        }
+        missing_sequence_numbers: List[int] = [
+            seq_id for seq_id in target_sequence_ids if seq_id not in existing_results
+        ]
+        from x_spanformer.pipelines.shared.pipeline_logging import SpanAnnotationLogger
+        SpanAnnotationLogger.log_gap_sequences(logger, missing_sequence_numbers, max_processed_id)
         return missing_sequence_numbers
     
     def save_working_file(
@@ -1091,7 +1033,8 @@ class SpanAnnotatorPipeline:
                                     
                                     # Display telemetry panel conditionally (time-based or sequence-count-based)
                                     self.display_telemetry_if_needed(output_dir=output_dir)
-                                    logger.info(f"[COMPLETED] Sequence {sequence_id} - {len(annotation_record.span_annotations)} spans extracted")
+                                    if self.config.logging.track_annotations:
+                                        logger.info(f"[COMPLETED] Sequence {sequence_id} - {len(annotation_record.span_annotations)} spans extracted")
                                 else:
                                     # Sequence marked as completed but no spans extracted - treat as failed
                                     self.save_working_file(output_dir, record, error_message="No spans extracted despite completion", status="failed")
@@ -1166,7 +1109,8 @@ class SpanAnnotatorPipeline:
                         # Update telemetry for failure
                         sequence_start_time = sequence_start_times.get(record.sequence_number)
                         self.telemetry.update_on_failure(sequence_start_time)
-                        logger.warning(f"Sequence {record.sequence_number} failed: batch processing incomplete (consecutive failures: {self.stats['consecutive_failures']})")
+                        if self.config.logging.track_annotations:
+                            logger.warning(f"Sequence {record.sequence_number} failed: batch processing incomplete (consecutive failures: {self.stats['consecutive_failures']})")
                 
                 # Check for consecutive failure exit condition
                 if self.stats["consecutive_failures"] >= self.stats["max_consecutive_failures"]:

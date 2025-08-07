@@ -19,3 +19,7 @@ logging:
   level: INFO
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   log_to_file: true
+  track_annotations: true
+  log_spans: true
+  log_queries: true
+  log_responses: false

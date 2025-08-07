@@ -38,6 +38,11 @@ class LoggingConfig:
     level: str = "INFO"
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     log_to_file: bool = True
+    # Extended flags migrated from agent config (verbosity removed as redundant with level)
+    track_annotations: bool = True
+    log_spans: bool = True
+    log_queries: bool = True
+    log_responses: bool = False
 
 
 @dataclass
@@ -137,7 +142,11 @@ def save_config(config: SpanAnnotatorConfig, config_path: str):
         "logging": {
             "level": config.logging.level,
             "format": config.logging.format,
-            "log_to_file": config.logging.log_to_file
+            "log_to_file": config.logging.log_to_file,
+            "track_annotations": config.logging.track_annotations,
+            "log_spans": config.logging.log_spans,
+            "log_queries": config.logging.log_queries,
+            "log_responses": config.logging.log_responses
         }
     }
     

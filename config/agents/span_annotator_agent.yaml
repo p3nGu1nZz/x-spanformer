@@ -2,10 +2,10 @@ agent_type: span_annotator
 
 # Agent-specific model settings (detailed configuration)
 model:
-  name: phi4-mini
+  name: llama3.2:3b
   temperature: 0.2
   max_context_tokens: 131072
-  max_turn_tokens: 4096
+  max_turn_tokens: 2048
 
 # Text processor settings for agent
 processor:
@@ -33,10 +33,3 @@ format:
   expected_fields: [ text, start_char, end_char, xbar_class, confidence ]
   strict_json: true
   parse_strategy: json
-
-logging:
-  verbosity: info
-  track_annotations: true
-  log_spans: true
-  log_queries: true
-  log_responses: false

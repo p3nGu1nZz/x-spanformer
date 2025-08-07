@@ -287,6 +287,35 @@ class SpanAnnotationLogger:
         success_rate = corrected_stats.get('successful_count', 0) / max(corrected_stats.get('total_files', 1), 1)
         logger.info(f"  - Success rate: {success_rate:.1%}")
 
+    @staticmethod
+    def log_gap_sequences(logger: logging.Logger, missing_sequence_numbers, max_processed_id: int):
+        """Log gap sequence information in a consistent format."""
+        if missing_sequence_numbers:
+            logger.info(f"Found {len(missing_sequence_numbers)} gap sequences (within processed range 1-{max_processed_id})")
+            ordered = sorted(missing_sequence_numbers)
+            if len(ordered) <= 20:
+                logger.info(f"Gap sequences: {ordered}")
+            else:
+                sample = ordered[:10]
+                logger.info(f"Gap sequences (sample): {sample}... and {len(ordered) - 10} more")
+        else:
+            logger.info(f"No gaps found within processed range (1-{max_processed_id})")
+
+    @staticmethod
+    def log_telemetry_summary(logger: logging.Logger, stats: dict, session_completed_count: int):
+        """Log a compact telemetry summary block."""
+        logger.info("Pipeline Stats:")
+        logger.info(f"  - Total sequences to process: {stats.get('total_sequences')}")
+        logger.info(f"  - Completed this session: {session_completed_count}")
+        if 'success_rate_percent' in stats:
+            logger.info(f"  - Success rate this session: {stats['success_rate_percent']:.1f}%")
+        if 'average_sequence_time_seconds' in stats:
+            logger.info(f"  - Average time per sequence: {stats['average_sequence_time_seconds']:.1f}s")
+        rate = stats.get('processing_rate_per_min', 0)
+        if rate and rate > 0:
+            logger.info(f"  - Current processing rate: {rate:.2f} seq/min")
+        logger.info("=" * 60)
+
 
 # Convenience function for quick pipeline logging setup
 def setup_logging(config, pipeline_name: str) -> logging.Logger:
