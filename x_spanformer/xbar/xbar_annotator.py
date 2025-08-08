@@ -250,11 +250,22 @@ Use these labels: {", ".join(label_names)}"""
         
         for annotation in json_annotations:
             try:
-                # Extract required fields
-                span_text = annotation.get('text', '').strip()
-                xbar_label = annotation.get('xbar_label', annotation.get('label', annotation.get('xbar_class', annotation.get('class', '')))).strip()
+                # Extract required fields with proper null handling
+                span_text = annotation.get('text', '') or ''
+                span_text = span_text.strip() if span_text else ''
+                
+                # Handle potential null values in xbar_label fields
+                xbar_label_raw = (
+                    annotation.get('xbar_label') or 
+                    annotation.get('label') or 
+                    annotation.get('xbar_class') or 
+                    annotation.get('class') or 
+                    ''
+                )
+                xbar_label = xbar_label_raw.strip() if xbar_label_raw else ''
                 
                 if not span_text or not xbar_label:
+                    logger.debug(f"Skipping annotation with empty text='{span_text}' or label='{xbar_label}'")
                     continue
                 
                 # Use regex to find all occurrences of this text in the original text
@@ -436,15 +447,19 @@ Use these labels: {", ".join(label_names)}"""
         
         for annotation in annotations:
             if isinstance(annotation, dict):
-                # Create key for deduplication
-                text = annotation.get('text', '')
-                xbar_label = annotation.get('xbar_label', '')
-                xbar_class = annotation.get('label', annotation.get('xbar_class', xbar_label))
-                key = (text.strip(), xbar_class.strip())
+                # Create key for deduplication with proper null handling
+                text = annotation.get('text', '') or ''
+                xbar_label = annotation.get('xbar_label', '') or ''
+                xbar_class = annotation.get('label', annotation.get('xbar_class', xbar_label)) or xbar_label or ''
+                
+                # Safe key creation with null checking
+                text_safe = text.strip() if text else ''
+                class_safe = xbar_class.strip() if xbar_class else ''
+                key = (text_safe, class_safe)
                 
                 # Enhanced validation to filter out empty/invalid annotations
-                text_stripped = text.strip() if text else ''
-                label_stripped = xbar_class.strip() if xbar_class else ''
+                text_stripped = text_safe
+                label_stripped = class_safe
                 
                 # Count empty objects for monitoring
                 if not text_stripped or not label_stripped:
@@ -556,6 +571,10 @@ Use these labels: {", ".join(label_names)}"""
         # CRITICAL FIX: Handle the specific production error pattern
         # {"text","xbar_label":"literal"} - missing colon after "text"
         # This is the exact pattern causing the repetitive failures in production
+        
+        # Pattern 0: Convert null values to empty strings to prevent NoneType errors
+        # "xbar_label":null -> "xbar_label":""
+        json_str = re.sub(r'"(text|label|xbar_label|xbar_class|class)"\s*:\s*null\b', r'"\1": ""', json_str)
         
         # Pattern 1: Fix missing colon after "text" specifically
         # {"text","xbar_label":"value"} -> {"text":"","xbar_label":"value"}
