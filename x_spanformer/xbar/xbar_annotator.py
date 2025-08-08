@@ -631,8 +631,11 @@ Use these labels: {", ".join(label_names)}"""
             logger.info(f"Validating {len(all_spans)} total spans")
             valid_spans = self._validate_and_filter_span_labels(all_spans, text)
             
+            # Apply final deduplication across all turns (boundary conflict resolution)
+            deduplicated_spans = self._deduplicate_spans(valid_spans)
+            
             # Convert to SpanAnnotation objects
-            span_annotations = self._convert_span_labels_to_annotations(valid_spans, text)
+            span_annotations = self._convert_span_labels_to_annotations(deduplicated_spans, text)
             
             # Create annotation record
             annotation_record = AnnotationRecord(
@@ -648,7 +651,8 @@ Use these labels: {", ".join(label_names)}"""
                     "word_spans": len(word_spans),
                     "phrase_spans": len(phrase_spans),
                     "clause_spans": len(clause_spans),
-                    "total_valid_spans": len(valid_spans)
+                    "total_valid_spans": len(valid_spans),
+                    "total_deduplicated_spans": len(deduplicated_spans)
                 }
             )
             
@@ -694,9 +698,8 @@ Use these labels: {", ".join(label_names)}"""
                 if len(span_text) == 1 and span_text.isspace():
                     continue
                 
-                # Check for duplicates - allow multiple labels on same position, but not identical spans
-                # Note: Main deduplication is handled by _deduplicate_spans, this is just basic filtering
-                span_key = (start_pos, end_pos, xbar_label)
+                # Check for exact duplicates only - boundary duplicates handled by _deduplicate_spans
+                span_key = (start_pos, end_pos, span_text, xbar_label)
                 if span_key not in seen_spans:
                     seen_spans.add(span_key)
                     valid_spans.append(span)

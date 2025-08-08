@@ -308,28 +308,40 @@ def find_anomalies(annotations):
                     'severity': 'medium'
                 })
         
-        # New: Check for gaps in annotation coverage
-        if seq_anns_sorted:
-            raw_text = seq_anns_sorted[0].get('raw', '')
-            if raw_text:
-                covered_positions = set()
-                for ann in seq_anns:
-                    for pos in range(ann['start_pos'], ann['end_pos']):
-                        covered_positions.add(pos)
-                
-                total_chars = len(raw_text)
-                covered_chars = len(covered_positions)
-                coverage_ratio = covered_chars / total_chars if total_chars > 0 else 0
-                
-                if coverage_ratio < 0.5:  # Less than 50% coverage
-                    anomalies.append({
-                        'type': 'low_coverage',
-                        'sequence': seq_num,
-                        'coverage_ratio': coverage_ratio,
-                        'covered_chars': covered_chars,
-                        'total_chars': total_chars,
-                        'severity': 'medium'
-                    })
+        # Check for insufficient hierarchical coverage
+        word_level = [a for a in seq_anns if a['xbar_label'] in 
+                     ['noun', 'verb', 'adjective', 'adverb', 'determiner', 
+                      'preposition', 'pronoun', 'conjunction', 'keyword', 
+                      'identifier', 'operator', 'literal', 'inline_code', 'punctuation']]
+        
+        phrase_level = [a for a in seq_anns if a['xbar_label'] in 
+                       ['noun_phrase', 'verb_phrase', 'expression', 
+                        'function_call', 'code_block', 'documentation_comment', 'adverb_phrase']]
+        
+        clause_level = [a for a in seq_anns if a['xbar_label'] in 
+                       ['main_clause', 'subordinate_clause', 'if_statement', 
+                        'loop_statement', 'function_definition', 'relative_clause']]
+        
+        # Flag sequences with insufficient hierarchical coverage
+        missing_levels = []
+        if len(word_level) < 1:
+            missing_levels.append('word')
+        if len(phrase_level) < 1:
+            missing_levels.append('phrase')
+        if len(clause_level) < 1:
+            missing_levels.append('clause')
+        
+        if missing_levels:
+            anomalies.append({
+                'type': 'insufficient_hierarchical_coverage',
+                'sequence': seq_num,
+                'missing_levels': missing_levels,
+                'word_count': len(word_level),
+                'phrase_count': len(phrase_level),
+                'clause_count': len(clause_level),
+                'total_spans': len(seq_anns),
+                'severity': 'low'
+            })
     
     return anomalies
 
@@ -644,8 +656,6 @@ def main():
                     print(f"  🏷️  Boundary duplicate in seq {anomaly['sequence']}: '{anomaly['text']}' @ {anomaly['positions']} has labels {anomaly['labels']}")
                 elif anomaly['type'] == 'inconsistent_labeling':
                     print(f"  🏷️  Inconsistent labels in seq {anomaly['sequence']}: '{anomaly['text']}' -> {anomaly['labels']} ({anomaly['occurrences']} occurrences)")
-                elif anomaly['type'] == 'low_coverage':
-                    print(f"  📊 Low coverage in seq {anomaly['sequence']}: {anomaly['coverage_ratio']:.1%} ({anomaly['covered_chars']}/{anomaly['total_chars']} chars)")
                 elif anomaly['type'] == 'repetitive_text':
                     severity_marker = "📊" if anomaly.get('severity') == 'medium' else "🔁"
                     print(f"  {severity_marker} Repetitive in seq {anomaly['sequence']}: '{anomaly['text']}' appears {anomaly['count']} times")
@@ -659,6 +669,10 @@ def main():
                     print(f"  ⚠️  Short span in seq {anomaly['sequence']}: '{anomaly['span']['text']}' ({anomaly['span']['xbar_label']})")
                 elif anomaly['type'] == 'repetitive_text':
                     print(f"  🔁 Repetitive in seq {anomaly['sequence']}: '{anomaly['text']}' appears {anomaly['count']} times")
+                elif anomaly['type'] == 'insufficient_hierarchical_coverage':
+                    missing_levels_str = ', '.join(anomaly['missing_levels'])
+                    print(f"  🏗️  Insufficient hierarchical coverage in seq {anomaly['sequence']}: missing {missing_levels_str} level spans")
+                    print(f"      Word: {anomaly['word_count']}, Phrase: {anomaly['phrase_count']}, Clause: {anomaly['clause_count']} (Total: {anomaly['total_spans']})")
             if len(low_severity) > 3:
                 print(f"  ... and {len(low_severity) - 3} more low severity anomalies")
     print()
