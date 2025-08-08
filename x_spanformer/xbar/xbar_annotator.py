@@ -571,14 +571,26 @@ Use these labels: {", ".join(label_names)}"""
                 span_text = (span.text or "").strip()
                 xbar_label = (span.xbar_label or "").strip()
                 
-                # Basic validation
+                # Basic validation - filter out empty text, empty labels, and unknown labels
                 if (start_pos < 0 or end_pos >= len(text) or start_pos > end_pos or 
-                    not span_text or not xbar_label or
-                    span_text in ['text', 'label', 'xbar_label'] or 
-                    xbar_label in ['text', 'label', 'xbar_label']):
+                    not span_text or not xbar_label or xbar_label.lower() == 'unknown' or
+                    span_text in ['text', 'label', 'xbar_label', 'unknown'] or 
+                    xbar_label in ['text', 'label', 'xbar_label', 'unknown']):
                     continue
                 
-                # Check for duplicates
+                # Filter repetitive/hallucinated patterns
+                if len(set(span_text)) == 1 and len(span_text) > 3:
+                    continue
+                    
+                # Filter repetitive punctuation patterns (LLM hallucination)
+                if len(span_text) > 1 and all(c in '.,;:!?-_()[]{}' for c in span_text):
+                    continue
+                    
+                # Filter single-character whitespace
+                if len(span_text) == 1 and span_text.isspace():
+                    continue
+                
+                # Check for duplicates - allow multiple labels on same position, but not identical spans
                 span_key = (start_pos, end_pos, xbar_label)
                 if span_key not in seen_spans:
                     seen_spans.add(span_key)

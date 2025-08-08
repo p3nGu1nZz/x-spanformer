@@ -208,11 +208,6 @@ class SpanAnnotatorSession:
                 processing_time=processing_time
             )
             
-        except ValueError as e:
-            # Re-raise ValueError (JSON parsing errors) to allow pipeline-level sequence skipping
-            logger.error(f"JSON parsing error for sequence {pretrain_record.sequence_number or 0}: {str(e)}")
-            raise
-            
         except Exception as e:
             processing_time = asyncio.get_event_loop().time() - start_time
             error_msg = f"Failed to annotate sequence {pretrain_record.sequence_number or 0}: {str(e)}"
