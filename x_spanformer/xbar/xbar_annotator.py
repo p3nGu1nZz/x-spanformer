@@ -375,9 +375,11 @@ Use these labels: {", ".join(label_names)}"""
                         annotations.append(parsed_data)
                 except json.JSONDecodeError as e:
                     logger.debug(f"JSON parsing failed: {e}")
+                    logger.debug(f"Problematic JSON snippet: {match[:200]}...")  # Log first 200 chars
                     # Try fixing malformed JSON
                     try:
                         fixed_json = self._fix_malformed_json(match)
+                        logger.debug(f"Fixed JSON attempt: {fixed_json[:200]}...")  # Log fix attempt
                         parsed_data = json.loads(fixed_json)
                         if isinstance(parsed_data, list):
                             annotations.extend(parsed_data)
@@ -385,8 +387,13 @@ Use these labels: {", ".join(label_names)}"""
                             annotations.append(parsed_data)
                     except json.JSONDecodeError as e2:
                         logger.debug(f"JSON fix failed: {e2}")
+                        # Log the specific failure position for debugging
+                        logger.debug(f"Fix failure at position {e2.pos}: {fixed_json[max(0, e2.pos-20):e2.pos+20]}")
+                        logger.debug(f"Full fixed JSON: {fixed_json}")
                         # Try regex recovery as last resort
                         recovered_annotations = self._recover_malformed_json(match)
+                        if recovered_annotations:
+                            logger.debug(f"Successfully recovered {len(recovered_annotations)} annotations")
                         annotations.extend(recovered_annotations)
         
         # Deduplicate annotations based on key fields
@@ -408,7 +415,9 @@ Use these labels: {", ".join(label_names)}"""
         return unique_annotations
     
     def _fix_malformed_json(self, json_str: str) -> str:
-        """Fix common JSON formatting issues."""
+        """Fix common JSON formatting issues with comprehensive pattern matching."""
+        original_str = json_str
+        
         # Handle truncated JSON - if it ends with incomplete objects
         if json_str.strip().endswith(('"}', '"}}')):
             if not json_str.strip().endswith((']}', ')]')):
@@ -422,52 +431,269 @@ Use these labels: {", ".join(label_names)}"""
         # Remove trailing commas before closing brackets
         json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
         
-        # Fix missing quotes around keys
-        json_str = re.sub(r'(\w+)(?=\s*:)', r'"\1"', json_str)
+        # ENHANCED: Fix all variations of missing colons after field names
         
-        # Fix missing commas between objects in arrays
+        # Pattern 1: "text" "value" -> "text": "value" (most common)
+        json_str = re.sub(r'"(text|label|xbar_label|xbar_class|class|start|end|start_pos|end_pos)"\s+"([^"]*)"', r'"\1": "\2"', json_str)
+        
+        # Pattern 2: More general quoted field followed by quoted value
+        json_str = re.sub(r'"([^"]+)"\s+"([^"]*)"(?=\s*[,}\]])', r'"\1": "\2"', json_str)
+        
+        # Pattern 3: Unquoted field names followed by quoted values
+        json_str = re.sub(r'(\w+)\s+"([^"]*)"', r'"\1": "\2"', json_str)
+        
+        # Pattern 4: Handle multiple missing colons in sequence
+        # "text" "value", "label" "type" -> "text": "value", "label": "type"
+        json_str = re.sub(r'"([^"]+)"\s+"([^"]*)",\s*"([^"]+)"\s+"([^"]*)"', r'"\1": "\2", "\3": "\4"', json_str)
+        
+        # Pattern 5: Fix cases like: {"text" "word"} -> {"text": "word"}
+        json_str = re.sub(r'\{\s*"([^"]+)"\s+"([^"]*)"', r'{"text": "\2"', json_str)
+        
+        # Pattern 6: Fix missing colons in object definitions
+        # {text "word", label "noun"} -> {"text": "word", "label": "noun"}
+        json_str = re.sub(r'\{\s*(\w+)\s+"([^"]*)"', r'{"text": "\2"', json_str)
+        
+        # ENHANCED: Fix missing commas between key-value pairs
+        
+        # Pattern 7: "key": "value" "key2": "value2" -> "key": "value", "key2": "value2"
+        json_str = re.sub(r'"\s+"([^"]+)"\s*:', r'", "\1":', json_str)
+        
+        # Pattern 8: Missing comma between objects in arrays
         json_str = re.sub(r'}\s*{', '}, {', json_str)
         
-        # Fix incomplete objects at the end of arrays
-        # If we have pattern like: [{"text":"word"}{"text": without closing
-        if re.search(r'\}\s*\{\s*"[^"]*":\s*"[^"]*"\s*$', json_str):
-            # Complete the incomplete object and close array
-            json_str = re.sub(r'(\}\s*\{\s*"[^"]*":\s*"[^"]*")\s*$', r'\1"}]', json_str)
+        # Pattern 9: Missing comma after string values before next field
+        # "value" "field": -> "value", "field":
+        json_str = re.sub(r'"\s+"([^"]+)"\s*:', r'", "\1":', json_str)
+        
+        # ENHANCED: Fix property name issues
+        
+        # Pattern 10: Missing quotes around property names
+        json_str = re.sub(r'(\w+)(?=\s*:)', r'"\1"', json_str)
+        
+        # Pattern 11: Fix incomplete objects and arrays
+        
+        # Handle cases where opening brace/bracket exists but object is malformed
+        if '{' in json_str and '}' not in json_str:
+            # Try to complete the object
+            if '"' in json_str:
+                json_str += '"}'
+            else:
+                json_str += '}'
+                
+        if '[' in json_str and ']' not in json_str:
+            # Try to complete the array
+            json_str += ']'
+        
+        # Pattern 12: Fix extra data issues - remove text after valid JSON
+        # Look for pattern like: [{"text":"word"}] extra text
+        match = re.search(r'(\[.*?\]|\{.*?\})', json_str)
+        if match:
+            potential_json = match.group(1)
+            try:
+                # Test if this parses successfully
+                import json
+                json.loads(potential_json)
+                json_str = potential_json  # Use only the valid JSON part
+            except:
+                pass  # Continue with other fixes
+        
+        # Pattern 13: Fix quotes around string values when missing
+        # "field": value -> "field": "value" (where value isn't a number/boolean)
+        json_str = re.sub(r'"([^"]+)":\s*([^",\s{}\[\]]+)(?=[,}\]])', r'"\1": "\2"', json_str)
+        
+        # Pattern 14: Handle malformed arrays of objects
+        # Fix patterns like: [{"text":"word""label":"noun"}] -> [{"text":"word","label":"noun"}]
+        json_str = re.sub(r'""', '","', json_str)
+        
+        # Pattern 15: Fix concatenated JSON objects
+        # {"text":"word"}{"label":"noun"} -> {"text":"word","label":"noun"}
+        json_str = re.sub(r'}\s*{', ',', json_str)
+        
+        # If all else fails and we have basic structure, try to reconstruct
+        if original_str != json_str:
+            logger.debug(f"JSON transformation: {original_str[:100]} -> {json_str[:100]}")
         
         return json_str
     
     def _recover_malformed_json(self, malformed_str: str) -> List[Dict[str, Any]]:
-        """Attempt to recover data from malformed JSON using pattern matching."""
+        """Attempt to recover data from malformed JSON using enhanced pattern matching."""
         recovered = []
         
         try:
-            # Look for text/class pairs using regex
-            text_pattern = r'"text":\s*"([^"]*)"'
-            class_pattern = r'"(?:label|xbar_class|class)":\s*"([^"]*)"'
-            start_pattern = r'"(?:start|start_char)":\s*(\d+)'
-            end_pattern = r'"(?:end|end_char)":\s*(\d+)'
+            # ENHANCED: Multiple recovery strategies
             
-            text_matches = re.findall(text_pattern, malformed_str)
-            class_matches = re.findall(class_pattern, malformed_str)
-            start_matches = re.findall(start_pattern, malformed_str)
-            end_matches = re.findall(end_pattern, malformed_str)
+            # Strategy 1: Enhanced patterns to handle missing colons and various field name variations
+            text_patterns = [
+                r'"text"\s*:\s*"([^"]*)"',           # Standard: "text": "value"
+                r'"text"\s+"([^"]*)"',               # Missing colon: "text" "value"
+                r'text\s*:\s*"([^"]*)"',             # Missing quotes on key: text: "value"
+                r'text\s+"([^"]*)"',                 # Missing quotes and colon: text "value"
+                r'\{\s*"([^"]*)"(?:\s*[,}])',        # Extract first quoted string in object
+            ]
             
-            # Try to pair them up
-            for i, text in enumerate(text_matches):
-                annotation = {'text': text}
-                
-                if i < len(class_matches):
-                    annotation['label'] = class_matches[i]
-                if i < len(start_matches):
-                    annotation['start'] = int(start_matches[i])
-                if i < len(end_matches):
-                    annotation['end'] = int(end_matches[i])
-                
-                if 'label' in annotation:  # Only add if we have both text and label
-                    recovered.append(annotation)
+            # Enhanced label field patterns
+            label_patterns = [
+                r'"(?:label|xbar_label|xbar_class|class)"\s*:\s*"([^"]*)"',    # Standard
+                r'"(?:label|xbar_label|xbar_class|class)"\s+"([^"]*)"',        # Missing colon
+                r'(?:label|xbar_label|xbar_class|class)\s*:\s*"([^"]*)"',      # Missing quotes on key
+                r'(?:label|xbar_label|xbar_class|class)\s+"([^"]*)"',          # Missing quotes and colon
+                r'"([^"]*)"(?:\s*[,}])\s*$',          # Last quoted string (likely label)
+            ]
+            
+            # Strategy 2: Try to parse as key-value pairs separated by spaces
+            # Pattern: "text" "word" "label" "noun" -> {"text": "word", "label": "noun"}
+            space_separated = re.findall(r'"([^"]*)"', malformed_str)
+            if len(space_separated) >= 2:
+                # Process in pairs
+                for i in range(0, len(space_separated) - 1, 2):
+                    key = space_separated[i].strip()
+                    value = space_separated[i + 1].strip()
                     
+                    # Check if this looks like a valid key-value pair
+                    if key.lower() in ['text', 'label', 'xbar_label', 'class', 'xbar_class'] and value:
+                        # Find or create annotation for this pair
+                        if not recovered or key.lower() == 'text':
+                            # Start new annotation
+                            recovered.append({key.lower(): value})
+                        else:
+                            # Add to last annotation
+                            if key.lower() in ['label', 'xbar_label', 'class', 'xbar_class']:
+                                recovered[-1]['label'] = value
+                            else:
+                                recovered[-1][key.lower()] = value
+            
+            # Strategy 3: Pattern matching with enhanced regex
+            text_matches = []
+            for pattern in text_patterns:
+                matches = re.findall(pattern, malformed_str, re.IGNORECASE)
+                text_matches.extend(matches)
+            
+            label_matches = []
+            for pattern in label_patterns:
+                matches = re.findall(pattern, malformed_str, re.IGNORECASE)
+                label_matches.extend(matches)
+            
+            # Strategy 4: Try to extract from malformed object structure
+            # Look for patterns like: {text word label noun} or {"text" word "label" noun}
+            object_content = re.search(r'\{([^}]*)\}', malformed_str)
+            if object_content:
+                content = object_content.group(1)
+                # Split by potential separators and try to pair them
+                parts = re.split(r'[,\s]+', content.strip())
+                parts = [p.strip('"') for p in parts if p.strip()]
+                
+                if len(parts) >= 2:
+                    # Try to identify text and label pairs
+                    text_val = None
+                    label_val = None
+                    
+                    for i, part in enumerate(parts):
+                        if part.lower() in ['text'] and i + 1 < len(parts):
+                            text_val = parts[i + 1]
+                        elif part.lower() in ['label', 'xbar_label', 'class', 'xbar_class'] and i + 1 < len(parts):
+                            label_val = parts[i + 1]
+                    
+                    if text_val and label_val:
+                        recovered.append({'text': text_val, 'label': label_val})
+            
+            # Strategy 5: Try to match text with labels when counts match
+            if text_matches and label_matches:
+                max_pairs = min(len(text_matches), len(label_matches))
+                for i in range(max_pairs):
+                    if text_matches[i].strip() and label_matches[i].strip():
+                        recovered.append({
+                            'text': text_matches[i].strip(),
+                            'label': label_matches[i].strip()
+                        })
+            
+            # Strategy 6: Position patterns (if present)
+            start_patterns = [
+                r'"(?:start|start_char|start_pos)"\s*:\s*(\d+)',
+                r'"(?:start|start_char|start_pos)"\s+(\d+)',
+                r'(?:start|start_char|start_pos)\s*:\s*(\d+)',
+                r'(?:start|start_char|start_pos)\s+(\d+)',
+            ]
+            
+            end_patterns = [
+                r'"(?:end|end_char|end_pos)"\s*:\s*(\d+)',
+                r'"(?:end|end_char|end_pos)"\s+(\d+)', 
+                r'(?:end|end_char|end_pos)\s*:\s*(\d+)',
+                r'(?:end|end_char|end_pos)\s+(\d+)',
+            ]
+            
+            start_matches = []
+            for pattern in start_patterns:
+                start_matches.extend(re.findall(pattern, malformed_str, re.IGNORECASE))
+            
+            end_matches = []
+            for pattern in end_patterns:
+                end_matches.extend(re.findall(pattern, malformed_str, re.IGNORECASE))
+            
+            # Add positions to existing annotations if available
+            for i, annotation in enumerate(recovered):
+                if i < len(start_matches):
+                    try:
+                        annotation['start'] = int(start_matches[i])
+                    except (ValueError, IndexError):
+                        pass
+                        
+                if i < len(end_matches):
+                    try:
+                        annotation['end'] = int(end_matches[i])
+                    except (ValueError, IndexError):
+                        pass
+            
+            # Strategy 7: Fallback - extract any meaningful quoted strings
+            if not recovered:
+                quoted_strings = re.findall(r'"([^"]+)"', malformed_str)
+                # Heuristic: if we have exactly 2 strings, assume text/label pair
+                if len(quoted_strings) == 2:
+                    text_candidate = quoted_strings[0].strip()
+                    label_candidate = quoted_strings[1].strip()
+                    
+                    # Basic validation: label should look like a category
+                    common_labels = {'noun', 'verb', 'adjective', 'literal', 'identifier', 'operator', 
+                                   'noun_phrase', 'verb_phrase', 'main_clause', 'code_block', 'determiner',
+                                   'preposition', 'conjunction', 'adverb', 'pronoun'}
+                    
+                    if (label_candidate.lower() in common_labels or 
+                        any(label_word in label_candidate.lower() for label_word in ['phrase', 'clause', 'block', '_'])):
+                        recovered.append({
+                            'text': text_candidate,
+                            'label': label_candidate
+                        })
+                
+                # If more than 2 strings, try to pair them intelligently
+                elif len(quoted_strings) > 2:
+                    for i in range(0, len(quoted_strings) - 1, 2):
+                        if i + 1 < len(quoted_strings):
+                            text_candidate = quoted_strings[i].strip()
+                            label_candidate = quoted_strings[i + 1].strip()
+                            
+                            if text_candidate and label_candidate:
+                                recovered.append({
+                                    'text': text_candidate,
+                                    'label': label_candidate
+                                })
+            
+            # Remove duplicates
+            seen = set()
+            unique_recovered = []
+            for annotation in recovered:
+                if isinstance(annotation, dict) and 'text' in annotation and 'label' in annotation:
+                    key = (annotation['text'], annotation['label'])
+                    if key not in seen:
+                        seen.add(key)
+                        unique_recovered.append(annotation)
+            
+            recovered = unique_recovered
+            
         except Exception as e:
-            logger.debug(f"Recovery attempt failed: {e}")
+            logger.debug(f"Enhanced recovery attempt failed: {e}")
+            
+        logger.debug(f"Recovered {len(recovered)} annotations from malformed JSON using enhanced patterns")
+        if recovered:
+            logger.debug(f"Sample recovered annotation: {recovered[0]}")
             
         return recovered
     
