@@ -2,11 +2,12 @@
 Comprehensive test suite for x_spanformer configuration system.
 
 Tests all configuration files in /config directory:
-- Agent configs: judge_agent.yaml, span_annotator_agent.yaml  
-- Pipeline configs: span_annotator.yaml, vocab2embedding.yaml, etc.
-- Config loaders: judge_config_loader, span_annotator_config_loader
+- Agent configs: judge_agent.yaml  
+- Pipeline configs: vocab2embedding.yaml, etc.
+- Config loaders: judge_config_loader
 - Validation, error handling, and defaults
 
+Note: span_annotator configs removed - now handled directly in pipeline.
 Designed to work reliably in local development and GitHub Actions.
 """
 
@@ -17,7 +18,6 @@ from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
 
 from x_spanformer.config.judge_config_loader import load_judge_config
-from x_spanformer.config.span_annotator_config_loader import load_config, SpanAnnotatorConfig
 
 
 class TestActualConfigFiles:
@@ -40,10 +40,7 @@ class TestActualConfigFiles:
         assert agents_dir.exists(), "agents directory missing"
         
         judge_config = agents_dir / "judge_agent.yaml"
-        span_config = agents_dir / "span_annotator_agent.yaml"
-        
         assert judge_config.exists(), "judge_agent.yaml missing"
-        assert span_config.exists(), "span_annotator_agent.yaml missing"
     
     def test_pipeline_configs_exist(self, config_root):
         """Test that pipeline config files exist."""
@@ -90,21 +87,6 @@ class TestActualConfigFiles:
         assert isinstance(judge["judges"], int)
         assert isinstance(judge["threshold"], (int, float))
         assert isinstance(judge["max_retries"], int)
-    
-    def test_span_annotator_agent_yaml_valid(self, config_root):
-        """Test that span_annotator_agent.yaml is valid YAML with expected structure."""
-        span_config_path = config_root / "agents" / "span_annotator_agent.yaml"
-        
-        with open(span_config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-        
-        # Test required top-level keys
-        assert "agent_type" in config
-        assert config["agent_type"] == "span_annotator"
-        
-        # Test model section exists
-        assert "model" in config
-        assert "name" in config["model"]
     
     def test_span_annotator_pipeline_yaml_valid(self, config_root):
         """Test that span_annotator.yaml pipeline config is valid."""
@@ -181,169 +163,37 @@ class TestJudgeConfigLoader:
             assert result["agent_type"] == "judge"
 
 
-class TestSpanAnnotatorConfigLoader:
-    """Test span_annotator_config_loader functionality."""
-    
-    def test_load_config_defaults(self):
-        """Test loading config with defaults when file doesn't exist."""
-        with patch("pathlib.Path.exists", return_value=False):
-            with patch("x_spanformer.config.span_annotator_config_loader.logger"):
-                config = load_config()
-                
-                assert isinstance(config, SpanAnnotatorConfig)
-                assert config.processing.max_retries == 3
-                assert config.processing.conversation_timeout == 30.0
-                assert config.processing.batch_size == 64
-                assert config.output.save_working_files is True
-                assert config.output.consolidate_on_completion is True
-    
-    def test_load_config_from_yaml(self):
-        """Test loading config from custom YAML content."""
-        config_data = {
-            "processing": {
-                "max_retries": 5,
-                "conversation_timeout": 45.0,
-                "batch_size": 128
-            },
-            "output": {
-                "save_working_files": False,
-                "save_failed_requests": True
-            }
-        }
-        
-        yaml_content = yaml.dump(config_data)
-        
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("builtins.open", mock_open(read_data=yaml_content)):
-                with patch("x_spanformer.config.span_annotator_config_loader.logger"):
-                    config = load_config("test.yaml")
-                    
-                    assert config.processing.max_retries == 5
-                    assert config.processing.conversation_timeout == 45.0  
-                    assert config.processing.batch_size == 128
-                    assert config.output.save_working_files is False
-    
-    def test_load_config_actual_file(self):
-        """Test loading the actual span_annotator.yaml pipeline config."""
-        # This should work with the real config file
-        with patch("x_spanformer.config.span_annotator_config_loader.logger"):
-            config = load_config("span_annotator.yaml")
-            
-            assert isinstance(config, SpanAnnotatorConfig)
-            # Test that we get valid default or loaded values
-            assert config.processing.max_retries > 0
-            assert config.processing.batch_size > 0
-            assert isinstance(config.output.save_working_files, bool)
-
 
 class TestConfigStructureValidation:
     """Test configuration structure and validation."""
     
-    def test_span_annotator_config_dataclass(self):
-        """Test SpanAnnotatorConfig dataclass structure."""
-        config = SpanAnnotatorConfig()
+    def test_judge_config_structure(self):
+        """Test that judge config has expected structure."""
+        # This is a basic test that judge config can be loaded
+        # without specific validation since we focus on judge_config_loader
+        config = load_judge_config("judge_agent.yaml")
         
-        # Test that it has the expected attributes
-        assert hasattr(config, 'processing')
-        assert hasattr(config, 'output')
-        
-        # Test processing config
-        assert hasattr(config.processing, 'max_retries')
-        assert hasattr(config.processing, 'conversation_timeout')
-        assert hasattr(config.processing, 'batch_size')
-        
-        # Test output config  
-        assert hasattr(config.output, 'save_working_files')
-        assert hasattr(config.output, 'save_failed_requests')
-        assert hasattr(config.output, 'consolidate_on_completion')
-        assert hasattr(config.output, 'include_metadata')
-        
-        # Test default values
-        assert config.processing.max_retries == 3
-        assert config.processing.conversation_timeout == 30.0
-        assert config.processing.batch_size == 64
-        assert config.output.save_working_files is True
-    
-    def test_environment_variable_substitution(self):
-        """Test environment variable substitution functionality."""
-        from x_spanformer.config.span_annotator_config_loader import substitute_env_vars
-        
-        # Set up test environment variable
-        test_env_key = "X_SPANFORMER_TEST_VAR"
-        test_env_value = "test_substitution_value"
-        os.environ[test_env_key] = test_env_value
-        
-        try:
-            test_data = {
-                "simple": f"${{{test_env_key}}}",
-                "alternative": f"${test_env_key}",
-                "nested": {
-                    "key": f"${{{test_env_key}}}"
-                }
-            }
-            
-            result = substitute_env_vars(test_data)
-            
-            assert result["simple"] == test_env_value
-            assert result["alternative"] == test_env_value
-            assert result["nested"]["key"] == test_env_value
-            
-        finally:
-            # Clean up environment variable
-            if test_env_key in os.environ:
-                del os.environ[test_env_key]
+        # Basic structure test - judge config has nested structure
+        assert "agent_type" in config
+        assert config["agent_type"] == "judge"
+        assert "judge" in config
+        assert "model_name" in config["judge"]
 
 
 class TestErrorHandling:
     """Test error handling and edge cases."""
     
-    def test_invalid_yaml_content(self):
-        """Test handling of invalid YAML content."""
-        invalid_yaml = "invalid: yaml: content: ["
-        
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("builtins.open", mock_open(read_data=invalid_yaml)):
-                with patch("x_spanformer.config.span_annotator_config_loader.logger"):
-                    # Should fall back to defaults on YAML parse error
-                    config = load_config("invalid.yaml")
-                    
-                    assert isinstance(config, SpanAnnotatorConfig)
-                    # Should have default values when YAML parsing fails
-                    assert config.processing.max_retries == 3
-                    assert config.processing.batch_size == 64
-    
-    def test_partial_config_merging(self):
-        """Test merging partial config with defaults."""
-        partial_config = {
-            "processing": {
-                "max_retries": 10  # Override just this value
-            }
-        }
-        
-        yaml_content = yaml.dump(partial_config)
-        
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("builtins.open", mock_open(read_data=yaml_content)):
-                with patch("x_spanformer.config.span_annotator_config_loader.logger"):
-                    config = load_config("partial.yaml")
-                    
-                    # Should have overridden value
-                    assert config.processing.max_retries == 10
-                    # Should have defaults for missing values
-                    assert config.processing.conversation_timeout == 30.0
-                    assert config.processing.batch_size == 64
-                    assert config.output.save_working_files is True
-    
-    def test_empty_config_file(self):
-        """Test handling of empty config file."""
-        with patch("pathlib.Path.exists", return_value=True):
-            with patch("builtins.open", mock_open(read_data="")):
-                with patch("x_spanformer.config.span_annotator_config_loader.logger"):
-                    config = load_config("empty.yaml")
-                    
-                    # Should fall back to defaults
-                    assert isinstance(config, SpanAnnotatorConfig)
-                    assert config.processing.max_retries == 3
+    def test_invalid_judge_config(self):
+        """Test handling of invalid judge config."""
+        # Test that judge config loader handles errors gracefully
+        with patch("pathlib.Path.exists", return_value=False):
+            # This should work with defaults or raise appropriate error
+            try:
+                config = load_judge_config("nonexistent.yaml")
+                assert isinstance(config, dict)
+            except Exception as e:
+                # Acceptable if it raises a specific config error
+                assert "config" in str(e).lower() or "file" in str(e).lower()
 
 
 class TestConfigIntegration:
@@ -354,7 +204,7 @@ class TestConfigIntegration:
         config_root = Path(__file__).parent.parent.parent / "config"
         
         # Test agent configs
-        for agent_file in ["judge_agent.yaml", "span_annotator_agent.yaml"]:
+        for agent_file in ["judge_agent.yaml"]:
             agent_path = config_root / "agents" / agent_file
             assert agent_path.exists(), f"Agent config missing: {agent_file}"
             
@@ -380,13 +230,6 @@ class TestConfigIntegration:
     def test_config_loaders_work_with_actual_files(self):
         """Test that config loaders work with actual config files."""
         # Test judge config loader
-        with patch("x_spanformer.config.judge_config_loader.c"):
-            judge_config = load_judge_config("judge_agent.yaml", quiet=True)
-            assert isinstance(judge_config, dict)
-            assert judge_config["agent_type"] == "judge"
-        
-        # Test span annotator config loader
-        with patch("x_spanformer.config.span_annotator_config_loader.logger"):
-            span_config = load_config("span_annotator.yaml")
-            assert isinstance(span_config, SpanAnnotatorConfig)
-            assert span_config.processing.max_retries > 0
+        judge_config = load_judge_config("judge_agent.yaml", quiet=True)
+        assert isinstance(judge_config, dict)
+        assert judge_config["agent_type"] == "judge"

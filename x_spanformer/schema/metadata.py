@@ -9,6 +9,11 @@ class RecordMeta(BaseModel):
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Optional confidence or fluency estimate")
     source_file: Optional[str] = Field(None, description="Original filename or source document ID (e.g. from adjacent metadata file)")
     notes: Optional[str] = Field(None, description="Optional textual explanation or scoring justification (e.g. from judge)")
+    
+    # Additional fields for sequence tracking
+    sequence_number: Optional[int] = Field(None, description="Sequential position in corpus for tracking and reference")
+    timestamp: Optional[str] = Field(None, description="Timestamp of record creation or processing")
+    source: Optional[str] = Field(None, description="Source corpus or dataset identifier")
 
     model_config = ConfigDict(
         json_schema_extra = {
