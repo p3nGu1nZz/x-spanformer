@@ -331,8 +331,8 @@ plus "text":"fox" with "xbar_label":"noun"'''
         recovered = annotator._recover_malformed_json(malformed)
         assert len(recovered) >= 1
         
-        # Should find at least one complete text/label pair
-        complete_annotations = [ann for ann in recovered if 'text' in ann and 'label' in ann]
+        # Should find at least one complete text/xbar_label pair
+        complete_annotations = [ann for ann in recovered if 'text' in ann and 'xbar_label' in ann]
         assert len(complete_annotations) >= 1
     
     def test_parse_json_missing_colon_errors(self, annotator):
