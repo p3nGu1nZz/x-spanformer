@@ -145,14 +145,20 @@ class XBarLabelMap:
         Returns:
             Normalized full label name
         """
+        if not xbar_class or not xbar_class.strip():
+            return "unknown"
+            
         normalized = xbar_class.strip().lower()
         
         # Check if it's an abbreviation
         if normalized in cls.ABBREVIATION_MAP:
             return cls.ABBREVIATION_MAP[normalized]
         
-        # Return original if no mapping found
-        return xbar_class.strip()
+        # Replace spaces with underscores and lowercase
+        normalized = normalized.replace(" ", "_")
+        
+        # Return normalized form
+        return normalized
     
     @classmethod
     def get_labels_for_domain(cls, domain: DomainType) -> Dict[str, str]:

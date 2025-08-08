@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
-Unified Span Annotator Pipeline for X-Spanformer
+X-Spanformer Span Annotator Pipeline
 
-Production-ready implementation combining three-turn hierarchical annotation
-with robust async session management and comprehensive error handling.
+Three-turn hierarchical annotation pipeline with robust async session management.
 
 Usage:
-    python -m x_spanformer.pipelines.unified_span_annotator_pipeline \
+    python -m x_spanformer.pipelines.span_annotator \
         --corpus data/vocab/corpus.jsonl \
         --output data/annotations \
         --range 1-100
 
 Key Features:
-    - Three-turn conversation strategy: word-level → phrase-level → clause-level
+    - Three-turn conversation strategy: word-level -> phrase-level -> clause-level
     - Async batch processing with concurrency control
     - Resume capability and progress tracking
     - Comprehensive validation and error handling
@@ -43,10 +42,10 @@ logger = logging.getLogger(__name__)
 
 class SpanAnnotatorPipeline:
     """
-    Production-ready unified span annotation pipeline.
+    Three-turn span annotation pipeline with robust session management.
     
-    Combines the three-turn annotation strategy with robust session management,
-    error handling, and comprehensive progress tracking.
+    Combines hierarchical annotation strategy with comprehensive
+    error handling and progress tracking.
     """
     
     def __init__(
@@ -56,7 +55,7 @@ class SpanAnnotatorPipeline:
         conversation_timeout: float = 180.0,
         max_retries: int = 3
     ):
-        """Initialize the unified pipeline."""
+        """Initialize the span annotation pipeline."""
         self.model_name = model_name
         self.temperature = temperature
         self.conversation_timeout = conversation_timeout
@@ -113,7 +112,7 @@ class SpanAnnotatorPipeline:
         """Load sequences from corpus file with optional filtering."""
         sequences = []
         
-        logger.info(f"Loading sequences from {corpus_file}")
+        logger.info(f"Loading corpus: {corpus_file}")
         
         with open(corpus_file, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
@@ -122,14 +121,14 @@ class SpanAnnotatorPipeline:
                     sequence = PretrainRecord(**data)
                     sequences.append(sequence)
                 except Exception as e:
-                    logger.warning(f"Failed to parse line {line_num}: {e}")
+                    logger.warning(f"Parse error line {line_num}: {e}")
         
-        logger.info(f"Loaded {len(sequences)} total sequences")
+        logger.info(f"Loaded {len(sequences)} sequences")
         
         # Apply range filtering if specified
         if range_spec:
             target_sequence_ids = self.parse_range_specification(range_spec)
-            logger.info(f"Filtering for sequence numbers: {target_sequence_ids}")
+            original_count = len(sequences)
             
             filtered_sequences = []
             for seq in sequences:
@@ -143,9 +142,8 @@ class SpanAnnotatorPipeline:
                 
                 if seq_num and seq_num in target_sequence_ids:
                     filtered_sequences.append(seq)
-                    logger.debug(f"Included sequence {seq_num}: {seq.id.id if seq.id else 'unknown'}")
             
-            logger.info(f"Filtered to {len(filtered_sequences)} sequences")
+            logger.info(f"Filtered to {len(filtered_sequences)}/{original_count} sequences")
             sequences = filtered_sequences
         
         return sequences
@@ -164,7 +162,7 @@ class SpanAnnotatorPipeline:
             return existing_results
         
         working_files = list(working_dir.glob("*.json"))
-        logger.info(f"Loading existing results from {len(working_files)} working files")
+        logger.info(f"Checking {len(working_files)} existing results")
         
         for working_file in working_files:
             try:
@@ -176,9 +174,10 @@ class SpanAnnotatorPipeline:
                 existing_results[sequence_number] = status
                 
             except Exception as e:
-                logger.warning(f"Failed to load working file {working_file}: {e}")
+                logger.warning(f"Load error {working_file.name}: {e}")
         
-        logger.info(f"Found {len(existing_results)} existing results")
+        if existing_results:
+            logger.info(f"Found {len(existing_results)} completed sequences")
         return existing_results
     
     def save_working_file(
@@ -223,7 +222,7 @@ class SpanAnnotatorPipeline:
         with open(working_file, 'w', encoding='utf-8') as f:
             json.dump(working_data, f, indent=2, ensure_ascii=False)
         
-        logger.debug(f"Saved working file for sequence {sequence_number}")
+        logger.debug(f"Saved working file: sequence {sequence_number}")
     
     def consolidate_results(self, output_dir: Path):
         """Consolidate working files into final annotation format with one span per record."""
@@ -233,55 +232,106 @@ class SpanAnnotatorPipeline:
         working_files = list(working_dir.glob("*.json"))
         logger.info(f"Consolidating {len(working_files)} working files")
         
-        total_annotations = 0
-        with open(annotations_file, 'w', encoding='utf-8') as outf:
-            for working_file in sorted(working_files):
-                try:
-                    with open(working_file, 'r', encoding='utf-8') as inf:
-                        data = json.load(inf)
-                    
-                    if data.get("status") == "completed" and data.get("span_annotations"):
-                        # Write one record per span annotation (flattened)
-                        for span_annotation in data["span_annotations"]:
-                            # Validate span positions before writing
-                            start_pos = span_annotation["start_pos"]
-                            end_pos = span_annotation["end_pos"]
-                            expected_text = span_annotation["text"]
-                            raw_text = data["raw_text"]
-                            
-                            # Check if positions are valid and match expected text
-                            if start_pos >= 0 and end_pos <= len(raw_text) and start_pos < end_pos:
-                                # Check if the extracted text matches (use exclusive end for extraction)
-                                actual_text = raw_text[start_pos:end_pos]
-                                if actual_text == expected_text:
-                                    flattened_record = {
-                                        "sequence_number": data["sequence_number"],
-                                        "raw": data["raw_text"],
-                                        "domain_type": data["domain_type"],
-                                        "start_pos": span_annotation["start_pos"],
-                                        "end_pos": span_annotation["end_pos"],
-                                        "xbar_label": span_annotation["xbar_label"],
-                                        "text": span_annotation["text"],
-                                        "metadata": {
-                                            "annotation_strategy": "three_turn_unified",
-                                            "model": self.model_name,
-                                            "timestamp": data["timestamp"]
-                                        }
-                                    }
-                                    
-                                    outf.write(json.dumps(flattened_record, ensure_ascii=False) + '\n')
-                                    total_annotations += 1
-                                else:
-                                    logger.warning(f"Position validation failed for sequence {data['sequence_number']}: "
-                                                 f"expected '{expected_text}' at {start_pos}-{end_pos}, got '{actual_text}'")
-                            else:
-                                logger.warning(f"Invalid span bounds for sequence {data['sequence_number']}: "
-                                             f"{start_pos}-{end_pos} for text length {len(raw_text)}")
-                
-                except Exception as e:
-                    logger.warning(f"Failed to consolidate {working_file}: {e}")
+        # Define label hierarchy for deduplication (higher value = more specific)
+        label_hierarchy = {
+            # Clause-level (most specific)
+            "main_clause": 3, "subordinate_clause": 3, "relative_clause": 3,
+            "if_statement": 3, "loop_statement": 3, "function_definition": 3,
+            "class_definition": 3, "import_statement": 3, "return_statement": 3,
+            "sentence": 3, "fragment": 3,
+            
+            # Phrase-level (medium specificity)
+            "noun_phrase": 2, "verb_phrase": 2, "adjective_phrase": 2, "adverb_phrase": 2,
+            "prepositional_phrase": 2, "expression": 2, "function_call": 2, "assignment": 2,
+            "parameter_list": 2, "argument_list": 2, "code_block": 2, "documentation_comment": 2,
+            
+            # Word-level (least specific)
+            "noun": 1, "verb": 1, "adjective": 1, "adverb": 1, "preposition": 1,
+            "determiner": 1, "pronoun": 1, "conjunction": 1, "keyword": 1, "identifier": 1,
+            "operator": 1, "literal": 1, "inline_code": 1, "punctuation": 1, "proper_noun": 1
+        }
         
-        logger.info(f"Consolidated {total_annotations} total annotations to {annotations_file}")
+        # Collect all valid annotations with deduplication
+        all_annotations = {}  # Key: (sequence_number, start_pos, end_pos, text) -> annotation
+        
+        for working_file in sorted(working_files):
+            try:
+                with open(working_file, 'r', encoding='utf-8') as inf:
+                    data = json.load(inf)
+                
+                if data.get("status") == "completed" and data.get("span_annotations"):
+                    for span_annotation in data["span_annotations"]:
+                        # Validate span positions before processing
+                        start_pos = span_annotation["start_pos"]
+                        end_pos = span_annotation["end_pos"]
+                        expected_text = span_annotation["text"]
+                        raw_text = data["raw_text"]
+                        
+                        # Check if positions are valid and match expected text
+                        if start_pos >= 0 and end_pos <= len(raw_text) and start_pos < end_pos:
+                            # Check if the extracted text matches (use exclusive end for extraction)
+                            actual_text = raw_text[start_pos:end_pos]
+                            if actual_text == expected_text:
+                                # Create deduplication key
+                                dup_key = (data["sequence_number"], start_pos, end_pos, expected_text)
+                                
+                                # Create flattened record with id first (will be set during output)
+                                flattened_record = {
+                                    "sequence_number": data["sequence_number"],
+                                    "raw": data["raw_text"],
+                                    "domain_type": data["domain_type"],
+                                    "start_pos": start_pos,
+                                    "end_pos": end_pos,
+                                    "xbar_label": span_annotation["xbar_label"],
+                                    "text": expected_text,
+                                    "model": self.model_name,
+                                    "timestamp": data["timestamp"]
+                                }
+                                
+                                # Apply deduplication logic
+                                if dup_key in all_annotations:
+                                    # Keep the annotation with higher hierarchy (more specific label)
+                                    existing_label = all_annotations[dup_key]["xbar_label"]
+                                    new_label = span_annotation["xbar_label"]
+                                    
+                                    existing_priority = label_hierarchy.get(existing_label, 0)
+                                    new_priority = label_hierarchy.get(new_label, 0)
+                                    
+                                    if new_priority > existing_priority:
+                                        all_annotations[dup_key] = flattened_record
+                                        logger.debug(f"Updated {existing_label}->{new_label}: '{expected_text[:20]}...'")
+                                    else:
+                                        logger.debug(f"Kept {existing_label} over {new_label}: '{expected_text[:20]}...'")
+                                else:
+                                    all_annotations[dup_key] = flattened_record
+                            else:
+                                logger.warning(f"Text mismatch seq {data['sequence_number']}: expected '{expected_text}' at {start_pos}-{end_pos}")
+                        else:
+                            logger.warning(f"Invalid span bounds seq {data['sequence_number']}: {start_pos}-{end_pos} (text len {len(raw_text)})")
+            
+            except Exception as e:
+                logger.warning(f"Consolidation error {working_file.name}: {e}")
+        
+        # Write deduplicated annotations to file with unique IDs
+        total_annotations = len(all_annotations)
+        with open(annotations_file, 'w', encoding='utf-8') as outf:
+            for span_id, annotation in enumerate(all_annotations.values()):
+                # Create ordered record with id first
+                ordered_record = {
+                    "id": span_id,
+                    "sequence_number": annotation["sequence_number"],
+                    "raw": annotation["raw"],
+                    "domain_type": annotation["domain_type"],
+                    "start_pos": annotation["start_pos"],
+                    "end_pos": annotation["end_pos"],
+                    "xbar_label": annotation["xbar_label"],
+                    "text": annotation["text"],
+                    "model": annotation["model"],
+                    "timestamp": annotation["timestamp"]
+                }
+                outf.write(json.dumps(ordered_record, ensure_ascii=False) + '\n')
+        
+        logger.info(f"Consolidated {total_annotations} spans -> {annotations_file.name}")
     
     def update_metadata(self, output_dir: Path):
         """Update global metadata file."""
@@ -353,7 +403,7 @@ class SpanAnnotatorPipeline:
         self.pipeline_stats["total_sequences"] = len(sequences)
         
         if not sequences:
-            logger.warning("No sequences to process")
+            logger.warning("No sequences found to process")
             return self.pipeline_stats
         
         # Load existing results for resume (always enabled)
@@ -368,13 +418,15 @@ class SpanAnnotatorPipeline:
             if seq_id not in existing_results or existing_results[seq_id] != "completed":
                 sequences_to_process.append(seq)
         
-        logger.info(f"Processing {len(sequences_to_process)} sequences (skipped {len(sequences) - len(sequences_to_process)} completed)")
+        skipped_count = len(sequences) - len(sequences_to_process)
+        if skipped_count > 0:
+            logger.info(f"Processing {len(sequences_to_process)} sequences (skipped {skipped_count} completed)")
+        else:
+            logger.info(f"Processing {len(sequences_to_process)} sequences")
         
         # Progress tracking
         async def progress_callback(progress_info):
-            logger.info(f"[PROGRESS] Sequence {progress_info['sequence_number']}: {progress_info.get('phase', 'unknown')}")
-            if progress_info.get('total_spans'):
-                logger.info(f"[PROGRESS] Total spans: {progress_info['total_spans']}")
+            pass  # Simplified - main progress logging handled in loop
         
         # Process sequences individually (sequential processing)
         successful_count = 0
@@ -385,7 +437,7 @@ class SpanAnnotatorPipeline:
             # Get sequence number using consistent helper method
             seq_id = self.get_sequence_number(sequence)
             
-            logger.info(f"Processing sequence {i+1}/{len(sequences_to_process)}: ID {seq_id}")
+            logger.info(f"Processing {i+1}/{len(sequences_to_process)}: sequence {seq_id}")
             
             try:
                 # Annotate single sequence
@@ -397,7 +449,7 @@ class SpanAnnotatorPipeline:
                     successful_count += 1
                     
                     span_count = len(annotation_record.span_annotations)
-                    logger.info(f"Successfully annotated sequence {seq_id} with {span_count} spans")
+                    logger.info(f"SUCCESS: Sequence {seq_id}: {span_count} spans annotated")
                     
                     # Calculate and log progress summary
                     current_time = datetime.now()
@@ -405,21 +457,22 @@ class SpanAnnotatorPipeline:
                     completed_count = successful_count + failed_count
                     remaining_count = len(sequences_to_process) - completed_count
                     
-                    if completed_count > 0:
+                    if completed_count > 0 and elapsed_seconds > 0:
                         avg_time_per_sequence = elapsed_seconds / completed_count
+                        sequences_per_minute = (completed_count / elapsed_seconds) * 60
                         eta_seconds = remaining_count * avg_time_per_sequence
                         eta_minutes = eta_seconds / 60
                         
                         logger.info("=" * 80)
                         logger.info(f"{completed_count}/{len(sequences_to_process)} sequences completed | "
-                                  f"Avg: {avg_time_per_sequence:.1f}s/seq | "
+                                  f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_minutes:.1f} min")
                         logger.info("=" * 80)
                 else:
-                    error_msg = result.error_message or "Annotation returned None"
+                    error_msg = result.error_message or "Annotation failed"
                     self.save_working_file(output_dir, sequence, error_message=error_msg)
                     failed_count += 1
-                    logger.warning(f"Failed to annotate sequence {seq_id}: {error_msg}")
+                    logger.warning(f"FAILED: Sequence {seq_id}: {error_msg}")
                     
                     # Calculate and log progress summary
                     current_time = datetime.now()
@@ -427,21 +480,22 @@ class SpanAnnotatorPipeline:
                     completed_count = successful_count + failed_count
                     remaining_count = len(sequences_to_process) - completed_count
                     
-                    if completed_count > 0:
+                    if completed_count > 0 and elapsed_seconds > 0:
                         avg_time_per_sequence = elapsed_seconds / completed_count
+                        sequences_per_minute = (completed_count / elapsed_seconds) * 60
                         eta_seconds = remaining_count * avg_time_per_sequence
                         eta_minutes = eta_seconds / 60
                         
                         logger.info("=" * 80)
                         logger.info(f"{completed_count}/{len(sequences_to_process)} sequences completed | "
-                                  f"Avg: {avg_time_per_sequence:.1f}s/seq | "
+                                  f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_minutes:.1f} min")
                         logger.info("=" * 80)
                     
             except Exception as e:
                 self.save_working_file(output_dir, sequence, error_message=str(e))
                 failed_count += 1
-                logger.error(f"Failed to annotate sequence {seq_id}: {e}", exc_info=True)
+                logger.error(f"ERROR: Sequence {seq_id}: {str(e)}")
                 
                 # Calculate and log progress summary
                 current_time = datetime.now()
@@ -449,14 +503,15 @@ class SpanAnnotatorPipeline:
                 completed_count = successful_count + failed_count
                 remaining_count = len(sequences_to_process) - completed_count
                 
-                if completed_count > 0:
+                if completed_count > 0 and elapsed_seconds > 0:
                     avg_time_per_sequence = elapsed_seconds / completed_count
+                    sequences_per_minute = (completed_count / elapsed_seconds) * 60
                     eta_seconds = remaining_count * avg_time_per_sequence
                     eta_minutes = eta_seconds / 60
                     
                     logger.info("=" * 80)
                     logger.info(f"{completed_count}/{len(sequences_to_process)} sequences completed | "
-                              f"Avg: {avg_time_per_sequence:.1f}s/seq | "
+                              f"Avg: {sequences_per_minute:.1f} seq/min | "
                               f"ETA: {eta_minutes:.1f} min")
                     logger.info("=" * 80)
         
@@ -478,7 +533,7 @@ class SpanAnnotatorPipeline:
 
 async def main():
     """Main CLI entry point."""
-    parser = argparse.ArgumentParser(description="Unified X-bar Span Annotator Pipeline")
+    parser = argparse.ArgumentParser(description="X-Spanformer Span Annotator Pipeline")
     parser.add_argument("--corpus", type=Path, required=True, help="Path to corpus.jsonl file")
     parser.add_argument("--output", type=Path, required=True, help="Output directory for annotations")
     parser.add_argument("--range", type=str, help="Range specification (e.g., '1-100', '5,10,15')")
@@ -491,7 +546,7 @@ async def main():
     
     # Configure logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    log_file = args.output / "annotation_pipeline.log" if args.output else "annotation_pipeline.log"
+    log_file = args.output / "annotations.log" if args.output else "annotations.log"
     
     # Ensure output directory exists for log file
     if args.output:
@@ -507,7 +562,7 @@ async def main():
     )
     
     logger.info("="*60)
-    logger.info("UNIFIED X-SPANFORMER SPAN ANNOTATOR PIPELINE")
+    logger.info("X-SPANFORMER SPAN ANNOTATOR PIPELINE")
     logger.info("="*60)
     logger.info(f"Model: {args.model}")
     logger.info(f"Corpus: {args.corpus}")
@@ -515,16 +570,16 @@ async def main():
     logger.info(f"Range: {args.range or 'ALL SEQUENCES'}")
     logger.info(f"Temperature: {args.temperature}")
     logger.info(f"Timeout: {args.timeout}s")
-    logger.info(f"Resume: ENABLED (always)")
+    logger.info(f"Resume: ENABLED")
     
     try:
         # Check Ollama connection
         logger.info("Checking Ollama connection...")
         if not await check_ollama_connection(DEFAULT_MODEL):
-            logger.error("ERROR: Ollama service not available at http://localhost:11434")
+            logger.error("ERROR: Ollama service unavailable at http://localhost:11434")
             logger.error("Please ensure Ollama is running and try again.")
             sys.exit(1)
-        logger.info("SUCCESS: Ollama connection successful")
+        logger.info("Ollama connection successful")
         
         # Initialize pipeline
         pipeline = SpanAnnotatorPipeline(
@@ -544,23 +599,23 @@ async def main():
         logger.info("="*60)
         logger.info("PIPELINE COMPLETION SUMMARY")
         logger.info("="*60)
-        logger.info(f"SUCCESS: Total sequences: {stats['total_sequences']}")
-        logger.info(f"SUCCESS: Processed: {stats['processed_sequences']}")
-        logger.info(f"SUCCESS: Successful: {stats['successful_annotations']}")
-        logger.info(f"ERROR: Failed: {stats['failed_annotations']}")
+        logger.info(f"Total sequences: {stats['total_sequences']}")
+        logger.info(f"Processed: {stats['processed_sequences']}")
+        logger.info(f"Successful: {stats['successful_annotations']}")
+        logger.info(f"Failed: {stats['failed_annotations']}")
         
         session_stats = pipeline.session.get_statistics()
-        logger.info(f"STATS: Total spans: {session_stats.get('total_spans', 0)}")
-        logger.info(f"STATS: Success rate: {session_stats.get('success_rate', 0):.2%}")
-        logger.info(f"STATS: Avg spans/sequence: {session_stats.get('avg_spans_per_sequence', 0):.1f}")
+        logger.info(f"Total spans: {session_stats.get('total_spans', 0)}")
+        logger.info(f"Success rate: {session_stats.get('success_rate', 0):.2%}")
+        logger.info(f"Avg spans/sequence: {session_stats.get('avg_spans_per_sequence', 0):.1f}")
         
-        logger.info(f"OUTPUT: Results: {args.output}")
-        logger.info(f"OUTPUT: Working files: {args.output / 'working'}")
-        logger.info(f"OUTPUT: Annotations: {args.output / 'annotations.jsonl'}")
+        logger.info(f"Results: {args.output}")
+        logger.info(f"Working files: {args.output / 'working'}")
+        logger.info(f"Annotations: {args.output / 'annotations.jsonl'}")
         
         logger.info("Pipeline completed successfully!")
         logger.info(f"Stats: {stats['successful_annotations']}/{stats['total_sequences']} sequences annotated")
-        logger.info(f"Results saved to: {args.output}")
+        logger.info(f"Output: {args.output}")
         
     except KeyboardInterrupt:
         logger.info("Pipeline interrupted by user")

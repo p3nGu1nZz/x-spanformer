@@ -225,7 +225,7 @@ class TestSpanParsing:
         
         spans = annotator._parse_spans_from_response(response, text)
         assert len(spans) == 1
-        assert spans[0].text == "THE"
+        assert spans[0].text == "The"  # Should use actual text from source, not annotation text
         assert spans[0].span == (0, 2)  # Should find "The" despite case difference
     
     def test_parse_spans_fallback_text_format(self, annotator):
@@ -434,10 +434,18 @@ class TestAnnotationPipeline:
         with patch('x_spanformer.agents.ollama_client.chat', new_callable=AsyncMock) as mock_chat:
             mock_chat.side_effect = Exception("Connection error")
             
+            # Create a mock pretrain record
+            pretrain_record = PretrainRecord(
+                raw="The fox runs",
+                sequence_number=1,
+                type="natural"
+            )
+            
             spans = await annotator._extract_spans_via_dialogue(
                 "The fox runs", 
                 DomainType.NATURAL, 
-                "word_level"
+                "word_level",
+                pretrain_record
             )
             
             # Should return empty list on error but not raise
