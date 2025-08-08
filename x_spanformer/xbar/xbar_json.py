@@ -57,17 +57,16 @@ class XBarJsonParser:
                     return self.filter_valid_annotations(annotations)
                     
                 except json.JSONDecodeError as e:
-                    logger.warning(f"JSON parsing failed, skipping sequence: {e}")
+                    logger.warning(f"JSON parsing failed for match '{match[:100]}...': {e}")
                     continue
         
         logger.warning("No valid JSON found in response, skipping sequence")
         return []
     
     def filter_valid_annotations(self, annotations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Filter and deduplicate annotations with greedy label selection."""
-        from collections import Counter
+        """Filter annotations for basic validity - no deduplication at this level."""
         
-        # First pass: collect all valid annotations
+        # Only do basic filtering - deduplication happens at sequence level
         valid_annotations = []
         
         for annotation in annotations:
@@ -92,7 +91,7 @@ class XBarJsonParser:
             # Convert to string and strip
             text = str(text).strip()
             xbar_label = str(xbar_label).strip()
-                
+            
             # Skip empty entries and unknown labels
             if not text or not xbar_label or xbar_label.lower() == 'unknown':
                 continue
@@ -123,43 +122,8 @@ class XBarJsonParser:
             
             valid_annotations.append({'text': text, 'xbar_label': xbar_label})
         
-        # Second pass: implement greedy deduplication for same text with different labels
-        # Count label frequency for greedy selection
-        label_counts = Counter(ann['xbar_label'] for ann in valid_annotations)
-        
-        # Group by text (case-insensitive)
-        text_groups = {}
-        for i, annotation in enumerate(valid_annotations):
-            text_key = annotation['text'].lower()
-            if text_key not in text_groups:
-                text_groups[text_key] = []
-            text_groups[text_key].append((annotation, i))  # Store annotation with original index
-        
-        # Apply greedy selection for each text group
-        unique_annotations = []
-        for text_key, annotations_with_indices in text_groups.items():
-            if len(annotations_with_indices) == 1:
-                # Only one annotation for this text, keep it
-                unique_annotations.append(annotations_with_indices[0][0])
-            else:
-                # Multiple labels for same text - apply greedy selection
-                # Sort by: 1) label frequency (descending), 2) original order (ascending)
-                def greedy_sort_key(ann_with_index):
-                    annotation, original_index = ann_with_index
-                    label_freq = label_counts[annotation['xbar_label']]
-                    return (-label_freq, original_index)  # Negative for descending frequency
-                
-                sorted_annotations = sorted(annotations_with_indices, key=greedy_sort_key)
-                winner = sorted_annotations[0][0]  # Take the annotation, not the index
-                unique_annotations.append(winner)
-                
-                if len(annotations_with_indices) > 1:
-                    logger.debug(f"Greedy selection for '{winner['text']}': kept '{winner['xbar_label']}' (freq: {label_counts[winner['xbar_label']]}), removed {len(annotations_with_indices) - 1} alternatives")
-        
-        logger.debug(f"Filtered to {len(unique_annotations)} unique valid annotations")
-        return unique_annotations
-
-
+        logger.debug(f"Filtered to {len(valid_annotations)} valid annotations (no deduplication at turn level)")
+        return valid_annotations
 # Create a global instance for convenience
 default_parser = XBarJsonParser()
 
