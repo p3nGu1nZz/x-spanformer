@@ -192,7 +192,9 @@ class SpanAnnotatorPipeline:
                 logger.info(f"Selected sequence {seq_nums[0]}")
             else:
                 seq_nums = sorted([seq.meta.sequence_number if hasattr(seq.meta, 'sequence_number') else seq.meta.get('sequence_number', '?') for seq in filtered_sequences])
-                logger.info(f"Selected sequences: {seq_nums}")
+                min_seq = min(seq_nums) if seq_nums else None
+                max_seq = max(seq_nums) if seq_nums else None
+                logger.info(f"Selected {len(seq_nums)} sequences ({min_seq} to {max_seq}) out of {len(target_sequence_ids)} requested")
             sequences = filtered_sequences
         
         return sequences
