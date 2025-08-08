@@ -470,12 +470,17 @@ class SpanAnnotatorPipeline:
         successful_count = 0
         failed_count = 0
         session_start_time = datetime.now()
+        total_completed_already = len(existing_results)
         
         for i, sequence in enumerate(sequences_to_process):
             # Get sequence number using consistent helper method
             seq_id = self.get_sequence_number(sequence)
             
-            logger.info(f"Processing {i+1}/{len(sequences_to_process)}: sequence {seq_id}")
+            # Calculate current position in total sequences (already completed + current position)
+            current_position = total_completed_already + i + 1
+            total_sequences = len(sequences)
+            
+            logger.info(f"Processing {current_position}/{total_sequences}: sequence {seq_id}")
             
             try:
                 # Annotate single sequence
@@ -494,6 +499,7 @@ class SpanAnnotatorPipeline:
                     elapsed_seconds = (current_time - session_start_time).total_seconds()
                     completed_count = successful_count + failed_count
                     remaining_count = len(sequences_to_process) - completed_count
+                    total_completed_overall = total_completed_already + completed_count
                     
                     if completed_count > 0 and elapsed_seconds > 0:
                         avg_time_per_sequence = elapsed_seconds / completed_count
@@ -503,7 +509,7 @@ class SpanAnnotatorPipeline:
                         eta_formatted = format_eta_time(eta_minutes)
                         
                         logger.info("=" * 80)
-                        logger.info(f"{completed_count}/{len(sequences_to_process)} sequences completed | "
+                        logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_formatted}")
                         logger.info("=" * 80)
@@ -518,6 +524,7 @@ class SpanAnnotatorPipeline:
                     elapsed_seconds = (current_time - session_start_time).total_seconds()
                     completed_count = successful_count + failed_count
                     remaining_count = len(sequences_to_process) - completed_count
+                    total_completed_overall = total_completed_already + completed_count
                     
                     if completed_count > 0 and elapsed_seconds > 0:
                         avg_time_per_sequence = elapsed_seconds / completed_count
@@ -527,7 +534,7 @@ class SpanAnnotatorPipeline:
                         eta_formatted = format_eta_time(eta_minutes)
                         
                         logger.info("=" * 80)
-                        logger.info(f"{completed_count}/{len(sequences_to_process)} sequences completed | "
+                        logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_formatted}")
                         logger.info("=" * 80)
@@ -542,6 +549,7 @@ class SpanAnnotatorPipeline:
                 elapsed_seconds = (current_time - session_start_time).total_seconds()
                 completed_count = successful_count + failed_count
                 remaining_count = len(sequences_to_process) - completed_count
+                total_completed_overall = total_completed_already + completed_count
                 
                 if completed_count > 0 and elapsed_seconds > 0:
                     avg_time_per_sequence = elapsed_seconds / completed_count
@@ -551,7 +559,7 @@ class SpanAnnotatorPipeline:
                     eta_formatted = format_eta_time(eta_minutes)
                     
                     logger.info("=" * 80)
-                    logger.info(f"{completed_count}/{len(sequences_to_process)} sequences completed | "
+                    logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
                               f"Avg: {sequences_per_minute:.1f} seq/min | "
                               f"ETA: {eta_formatted}")
                     logger.info("=" * 80)
