@@ -151,6 +151,10 @@ class XBarJsonParser:
         # Remove any obvious formatting issues
         cleaned = cleaned.strip()
         
+        # Fix unquoted property names - add quotes around common property names
+        # Match property names that are not already quoted
+        cleaned = re.sub(r'\b(text|xbar_label|label|class|xbar_class)\s*:', r'"\1":', cleaned)
+        
         # Fix common trailing comma issues
         cleaned = re.sub(r',\s*}', '}', cleaned)
         cleaned = re.sub(r',\s*]', ']', cleaned)
