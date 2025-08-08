@@ -159,7 +159,7 @@ class TestOutputStructure:
             
             assert output_dir.exists()
             assert (output_dir / "working").exists()
-            assert (output_dir / "consolidated").exists()
+            # Note: "consolidated" directory is no longer created - annotations.jsonl saves directly in output_dir
     
     def test_load_existing_results_empty(self):
         """Test loading existing results from empty directory."""
@@ -182,6 +182,7 @@ class TestOutputStructure:
             test_sequence = PretrainRecord(
                 id=RecordID(id="seq1"),
                 raw="This is a test sequence.",
+                sequence_number=1,
                 meta=RecordMeta(
                     sequence_number=1,
                     timestamp="2025-01-01T00:00:00",

@@ -142,7 +142,6 @@ class SpanAnnotatorPipeline:
         """Ensure output directory structure exists."""
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "working").mkdir(exist_ok=True)
-        (output_dir / "consolidated").mkdir(exist_ok=True)
     
     def load_existing_results(self, output_dir: Path) -> Dict[int, str]:
         """Load existing annotation results for resume capability."""
@@ -160,9 +159,9 @@ class SpanAnnotatorPipeline:
                 with open(working_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
-                sequence_id = data.get("sequence_id", 0)
+                sequence_number = data.get("sequence_number", 0)
                 status = "completed" if data.get("span_annotations") else "failed"
-                existing_results[sequence_id] = status
+                existing_results[sequence_number] = status
                 
             except Exception as e:
                 logger.warning(f"Failed to load working file {working_file}: {e}")
@@ -180,18 +179,13 @@ class SpanAnnotatorPipeline:
         """Save annotation result to working file."""
         working_dir = output_dir / "working"
         
-        # Get sequence number from meta field
-        sequence_id = 0
-        if hasattr(sequence, 'meta') and sequence.meta:
-            if hasattr(sequence.meta, 'sequence_number'):
-                sequence_id = sequence.meta.sequence_number
-            elif isinstance(sequence.meta, dict) and 'sequence_number' in sequence.meta:
-                sequence_id = sequence.meta['sequence_number']
+        # Get sequence number directly from the sequence
+        sequence_number = sequence.sequence_number or 0
         
-        working_file = working_dir / f"sequence-{sequence_id:08d}.json"
+        working_file = working_dir / f"sequence-{sequence_number:08d}.json"
         
         working_data = {
-            "sequence_number": sequence_id,
+            "sequence_number": sequence_number,
             "raw_text": sequence.raw,
             "domain_type": getattr(sequence, 'type', 'unknown'),
             "timestamp": datetime.now().isoformat(),
@@ -205,8 +199,7 @@ class SpanAnnotatorPipeline:
                     {
                         "start_pos": span.start_pos,
                         "end_pos": span.end_pos,
-                        "xbar_class": span.xbar_class,
-                        "confidence": span.confidence,
+                        "xbar_label": span.xbar_label,
                         "text": getattr(span, 'linguistic_features', {}).get('extracted_text', '')
                     }
                     for span in annotation_record.span_annotations
@@ -218,13 +211,12 @@ class SpanAnnotatorPipeline:
         with open(working_file, 'w', encoding='utf-8') as f:
             json.dump(working_data, f, indent=2, ensure_ascii=False)
         
-        logger.debug(f"Saved working file for sequence {sequence_id}")
+        logger.debug(f"Saved working file for sequence {sequence_number}")
     
     def consolidate_results(self, output_dir: Path):
         """Consolidate working files into final annotation format."""
         working_dir = output_dir / "working"
-        consolidated_dir = output_dir / "consolidated"
-        annotations_file = consolidated_dir / "annotations.jsonl"
+        annotations_file = output_dir / "annotations.jsonl"  # Save in same dir as metadata.json
         
         working_files = list(working_dir.glob("*.json"))
         logger.info(f"Consolidating {len(working_files)} working files")
@@ -239,7 +231,7 @@ class SpanAnnotatorPipeline:
                     if data.get("status") == "completed" and data.get("span_annotations"):
                         # Write consolidated annotation record
                         consolidated_record = {
-                            "sequence_id": data["sequence_id"],
+                            "sequence_number": data["sequence_number"],
                             "raw": data["raw_text"],
                             "domain_type": data["domain_type"],
                             "span_annotations": data["span_annotations"],
@@ -305,8 +297,7 @@ class SpanAnnotatorPipeline:
         self,
         corpus_file: Path,
         output_dir: Path,
-        range_spec: Optional[str] = None,
-stream: bool = False
+        range_spec: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Process sequences with comprehensive annotation.
@@ -339,28 +330,17 @@ stream: bool = False
         # Filter sequences to process
         sequences_to_process = []
         for seq in sequences:
-            # Get sequence number from meta field
-            seq_id = 0
-            if hasattr(seq, 'meta') and seq.meta:
-                if hasattr(seq.meta, 'sequence_number'):
-                    seq_id = seq.meta.sequence_number
-                elif isinstance(seq.meta, dict) and 'sequence_number' in seq.meta:
-                    seq_id = seq.meta['sequence_number']
+            # Get sequence number directly from the sequence
+            seq_id = seq.sequence_number or 0
                     
             if seq_id not in existing_results or existing_results[seq_id] != "completed":
                 sequences_to_process.append(seq)
         
         logger.info(f"Processing {len(sequences_to_process)} sequences (skipped {len(sequences) - len(sequences_to_process)} completed)")
         
-        # Stream initial message if enabled
-        if stream:
-            print("Starting span annotation with real-time streaming...")
-            print(f"Processing {len(sequences_to_process)} sequences")
-            print("=" * 60)
-        
         # Progress tracking
         async def progress_callback(progress_info):
-            logger.info(f"[PROGRESS] Sequence {progress_info['sequence_id']}: {progress_info.get('phase', 'unknown')}")
+            logger.info(f"[PROGRESS] Sequence {progress_info['sequence_number']}: {progress_info.get('phase', 'unknown')}")
             if progress_info.get('total_spans'):
                 logger.info(f"[PROGRESS] Total spans: {progress_info['total_spans']}")
         
@@ -369,13 +349,8 @@ stream: bool = False
         failed_count = 0
         
         for i, sequence in enumerate(sequences_to_process):
-            # Get sequence number from meta field  
-            seq_id = 0
-            if hasattr(sequence, 'meta') and sequence.meta:
-                if hasattr(sequence.meta, 'sequence_number'):
-                    seq_id = sequence.meta.sequence_number
-                elif isinstance(sequence.meta, dict) and 'sequence_number' in sequence.meta:
-                    seq_id = sequence.meta['sequence_number']
+            # Get sequence number directly from the sequence
+            seq_id = sequence.sequence_number or 0
             
             logger.info(f"Processing sequence {i+1}/{len(sequences_to_process)}: ID {seq_id}")
             
@@ -390,36 +365,16 @@ stream: bool = False
                     
                     span_count = len(annotation_record.span_annotations)
                     logger.info(f"Successfully annotated sequence {seq_id} with {span_count} spans")
-                    
-                    # Stream to console if enabled
-                    if stream:
-                        print(f"SUCCESS: Sequence {seq_id}: {span_count} spans extracted")
-                        for span in annotation_record.span_annotations[:3]:  # Show first 3 spans
-                            span_text = sequence.raw[span.start_pos:span.end_pos] if span.end_pos <= len(sequence.raw) else "..."
-                            print(f"   - {span.xbar_class}: '{span_text}' [{span.start_pos}:{span.end_pos}]")
-                        if span_count > 3:
-                            print(f"   ... and {span_count - 3} more spans")
-                        print()
                 else:
                     error_msg = result.error_message or "Annotation returned None"
                     self.save_working_file(output_dir, sequence, error_message=error_msg)
                     failed_count += 1
                     logger.warning(f"Failed to annotate sequence {seq_id}: {error_msg}")
                     
-                    # Stream to console if enabled
-                    if stream:
-                        print(f"FAILED: Sequence {seq_id}: Failed - {error_msg}")
-                        print()
-                    
             except Exception as e:
                 self.save_working_file(output_dir, sequence, error_message=str(e))
                 failed_count += 1
                 logger.error(f"Failed to annotate sequence {seq_id}: {e}", exc_info=True)
-                
-                # Stream to console if enabled
-                if stream:
-                    print(f"ERROR: Sequence {seq_id}: Exception - {str(e)}")
-                    print()
         
         # Update statistics
         self.pipeline_stats["processed_sequences"] = len(sequences_to_process)
@@ -447,7 +402,6 @@ async def main():
     parser.add_argument("--temperature", type=float, default=0.2, help="Model temperature")
     parser.add_argument("--timeout", type=float, default=180.0, help="Conversation timeout (seconds)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
-    parser.add_argument("--stream", "-s", action="store_true", help="Stream results to console in real-time")
     
     args = parser.parse_args()
     
@@ -499,8 +453,7 @@ async def main():
         stats = await pipeline.process_sequences(
             corpus_file=args.corpus,
             output_dir=args.output,
-            range_spec=args.range,
-            stream=args.stream
+            range_spec=args.range
         )
         
         # Display final results
@@ -519,18 +472,18 @@ async def main():
         
         logger.info(f"OUTPUT: Results: {args.output}")
         logger.info(f"OUTPUT: Working files: {args.output / 'working'}")
-        logger.info(f"OUTPUT: Consolidated: {args.output / 'consolidated' / 'annotations.jsonl'}")
+        logger.info(f"OUTPUT: Annotations: {args.output / 'annotations.jsonl'}")
         
-        print(f"\nPipeline completed successfully!")
-        print(f"Stats: {stats['successful_annotations']}/{stats['total_sequences']} sequences annotated")
-        print(f"Results saved to: {args.output}")
+        logger.info("Pipeline completed successfully!")
+        logger.info(f"Stats: {stats['successful_annotations']}/{stats['total_sequences']} sequences annotated")
+        logger.info(f"Results saved to: {args.output}")
         
     except KeyboardInterrupt:
         logger.info("Pipeline interrupted by user")
         sys.exit(1)
     except Exception as e:
         logger.error(f"Pipeline failed: {e}", exc_info=True)
-        print(f"\nPipeline failed: {e}")
+        logger.error(f"Pipeline failed: {e}")
         sys.exit(1)
 
 

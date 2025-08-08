@@ -34,6 +34,9 @@ class TestSchemaComprehensive(unittest.TestCase):
             extracted_by="test",
             source_file="test.txt",
             notes="test note",
+            sequence_number=1,
+            timestamp="2025-01-01T00:00:00",
+            source="test"
         )
         self.assertEqual(meta.tags, ["test"])
         self.assertEqual(meta.doc_language, "en")
@@ -45,7 +48,10 @@ class TestSchemaComprehensive(unittest.TestCase):
             extracted_by=None, 
             confidence=None,
             source_file=None,
-            notes=None
+            notes=None,
+            sequence_number=0,
+            timestamp="2025-01-01T00:00:00",
+            source="test"
         )
         self.assertEqual(meta_minimal.tags, [])
         self.assertIsNone(meta_minimal.confidence)
@@ -57,9 +63,9 @@ class TestSchemaComprehensive(unittest.TestCase):
         self.assertIsInstance(record.meta, metadata.RecordMeta)
 
     def test_span_label(self):
-        label = span.SpanLabel(span=(0, 1), label="noun", text="test", role="token")
+        label = span.SpanLabel(span=(0, 1), xbar_label="noun", text="test")
         self.assertEqual(label.span, (0, 1))
-        self.assertEqual(label.label, "noun")
+        self.assertEqual(label.xbar_label, "noun")
 
     def test_xp_span(self):
         xp = xbar.XPSpan(
@@ -151,7 +157,10 @@ class TestSchemaComprehensive(unittest.TestCase):
             extracted_by="pdf2seg",
             confidence=0.95,
             source_file="test.pdf",
-            notes="Excellent code example"
+            notes="Excellent code example",
+            sequence_number=1,
+            timestamp="2025-01-01T00:00:00",
+            source="test"
         )
         self.assertEqual(len(meta2.tags), 3)
         self.assertIn("keep", meta2.tags)
@@ -166,7 +175,10 @@ class TestSchemaComprehensive(unittest.TestCase):
                 extracted_by="pdf2seg v1.0",
                 confidence=0.98,
                 source_file="python_tutorial.pdf",
-                notes="Clean function definition"
+                notes="Clean function definition",
+                sequence_number=1,
+                timestamp="2025-01-01T00:00:00",
+                source="test"
             )
         )
         
@@ -206,14 +218,12 @@ class TestSchemaComprehensive(unittest.TestCase):
         """Test SpanLabel schema"""
         span = SpanLabel(
             span=(0, 2),
-            label="noun_phrase",
-            role="subject",
+            xbar_label="noun_phrase",
             text="the dog"
         )
         
         self.assertEqual(span.span, (0, 2))
-        self.assertEqual(span.label, "noun_phrase")
-        self.assertEqual(span.role, "subject")
+        self.assertEqual(span.xbar_label, "noun_phrase")
     
     def test_type_literals_exist(self):
         """Test that all the new type literals are properly defined"""
@@ -234,7 +244,10 @@ class TestSchemaComprehensive(unittest.TestCase):
             extracted_by="pdf2seg v1.0",
             confidence=0.87,
             source_file="linguistics_paper.pdf",
-            notes="Contains interrogative structure"
+            notes="Contains interrogative structure",
+            sequence_number=1,
+            timestamp="2025-01-01T00:00:00",
+            source="test"
         )
         
         record = PretrainRecord(

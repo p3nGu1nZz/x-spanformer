@@ -23,8 +23,7 @@ class SpanAnnotation(BaseModel):
     """
     start_pos: int = Field(..., description="Start position index in sequence (0-based)")
     end_pos: int = Field(..., description="End position index in sequence (exclusive)")
-    xbar_class: str = Field(..., description="X-bar classifier: X, X', XP, or specialized linguistic label")
-    confidence: float = Field(default=1.0, description="Annotation confidence score [0.0, 1.0]")
+    xbar_label: str = Field(..., description="X-bar label: noun, verb, noun_phrase, etc.")
     linguistic_features: Optional[Dict[str, Any]] = Field(default=None, description="Optional linguistic analysis from LLM agent")
 
 
@@ -60,22 +59,19 @@ class AnnotationRecord(BaseModel):
                     {
                         "start_pos": 0,
                         "end_pos": 3,
-                        "xbar_class": "DP",
-                        "confidence": 0.95,
+                        "xbar_label": "determiner",
                         "linguistic_features": {"determiner": "the", "definiteness": "definite"}
                     },
                     {
                         "start_pos": 4,
                         "end_pos": 19,
-                        "xbar_class": "NP",
-                        "confidence": 0.88,
+                        "xbar_label": "noun_phrase",
                         "linguistic_features": {"head": "fox", "modifiers": ["quick", "brown"]}
                     },
                     {
                         "start_pos": 20,
                         "end_pos": 25,
-                        "xbar_class": "VP",
-                        "confidence": 0.92,
+                        "xbar_label": "verb_phrase",
                         "linguistic_features": {"verb": "jumps", "tense": "present"}
                     }
                 ],
@@ -101,7 +97,6 @@ class AnnotationRecord(BaseModel):
                     "tags": ["annotation", "xbar", "natural"],
                     "doc_language": "en",
                     "extracted_by": "span_annotator",
-                    "confidence": 0.92,
                     "source_file": "corpus.jsonl",
                     "sequence_number": 1,
                     "status": "annotated"

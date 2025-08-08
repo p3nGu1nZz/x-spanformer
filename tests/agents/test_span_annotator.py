@@ -81,8 +81,7 @@ class TestAnnotationResult(unittest.TestCase):
         span_annotation = SpanAnnotation(
             start_pos=0,
             end_pos=4,
-            xbar_class="N",
-            confidence=0.85,
+            xbar_label="N",
             linguistic_features={"extracted_text": "Test"}
         )
         

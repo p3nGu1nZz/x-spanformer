@@ -16,9 +16,8 @@ from dataclasses import dataclass
 
 from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.annotation_record import AnnotationRecord, SpanAnnotation
-from x_spanformer.xbar.position_mapper import PositionMapper, CharacterSpan, PositionSpan
-from x_spanformer.xbar.xbar_map import XBarClassifierMap, DomainType
-from x_spanformer.xbar.span_validator import SpanValidator
+from x_spanformer.schema.span import SpanLabel
+from x_spanformer.xbar.xbar_map import XBarLabelMap, DomainType
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +40,6 @@ class XBarAnnotator:
     
     def __init__(self, model_config: ModelConfig):
         self.model_config = model_config
-        self.validator = SpanValidator()
     
     def _detect_domain_from_record(self, pretrain_record: PretrainRecord) -> DomainType:
         """Detect domain type from the pretrain record."""
@@ -59,14 +57,25 @@ class XBarAnnotator:
     
     def _build_system_prompt(self, domain: DomainType) -> str:
         """Build comprehensive system prompt for domain-specific annotation."""
-        return XBarClassifierMap.build_system_prompt(domain)
+        labels = XBarLabelMap.get_labels_for_domain(domain)
+        label_descriptions = []
+        
+        for label, description in labels.items():
+            label_descriptions.append(f"- {label}: {description}")
+        
+        return f"""You are a linguistic annotator specializing in {domain.value} text analysis.
+
+Available labels for {domain.value} domain:
+{chr(10).join(label_descriptions)}
+
+Extract spans and classify them using only the labels above. Focus on accuracy and consistency."""
     
     async def _extract_spans_via_dialogue(
         self, 
         text: str, 
         domain: DomainType,
         turn_focus: str
-    ) -> List[CharacterSpan]:
+    ) -> List[SpanLabel]:
         """
         Extract spans via dialogue with LLM using focused turn strategy.
         
@@ -79,107 +88,124 @@ class XBarAnnotator:
             List of character-level spans from LLM
         """
         try:
-            # Import chat function locally to avoid circular imports
+            # Import chat function and DialogueManager locally to avoid circular imports
             from x_spanformer.agents.ollama_client import chat
+            from x_spanformer.agents.dialogue import DialogueManager
             
-            # Build focused prompt for this turn
-            system_prompt = self._build_system_prompt(domain)
-            user_prompt = f"""
-Please analyze the following text for {turn_focus} X-bar spans:
-
-Text: "{text}"
-
-Focus on {turn_focus} structures and provide comprehensive span annotations.
-Return a JSON array with all identified spans using the format specified in the system prompt.
-"""
+            # Build focused prompt for this turn - use shorter text to avoid timeouts
+            text_snippet = text[:100] if len(text) > 100 else text
             
-            # Get response from ollama
-            conversation = [{"role": "user", "content": user_prompt}]
+            # Create turn-specific prompts
+            if turn_focus == "word_level":
+                system_prompt = "You are a linguistic annotator specializing in word-level analysis. Extract individual words and classify them grammatically."
+                user_prompt = f"""Analyze this text and identify individual WORDS with their grammatical classes:
+"{text_snippet}"
+
+Return a JSON array with this exact format:
+[{{"text":"word","xbar_label":"noun"}}]
+
+Use these labels: noun, verb, adjective, adverb, preposition, determiner, pronoun, conjunction, punctuation"""
+                
+            elif turn_focus == "phrase_level":
+                system_prompt = "You are a linguistic annotator specializing in phrase-level analysis. Extract meaningful phrases and classify them."
+                user_prompt = f"""Analyze this text and identify PHRASES (groups of related words):
+"{text_snippet}"
+
+Return a JSON array with this exact format:
+[{{"text":"noun phrase","xbar_label":"noun_phrase"}}]
+
+Use these labels: noun_phrase, verb_phrase, prepositional_phrase, adjective_phrase, adverb_phrase"""
+                
+            else:  # clause_level
+                system_prompt = "You are a linguistic annotator specializing in clause-level analysis. Extract clauses and major syntactic units."
+                user_prompt = f"""Analyze this text and identify CLAUSES and major syntactic structures:
+"{text_snippet}"
+
+Return a JSON array with this exact format:
+[{{"text":"main clause","xbar_label":"main_clause"}}]
+
+Use these labels: main_clause, subordinate_clause, relative_clause, sentence, fragment"""
+            
+            # Use DialogueManager for proper conversation handling
+            dm = DialogueManager(system_prompt=system_prompt, max_turns=1)
+            dm.add("user", user_prompt)
+            
+            # Get response from ollama with increased timeout for complex text
             response = await chat(
                 model=self.model_config.name,
-                conversation=conversation,
-                system=system_prompt,
-                temperature=self.model_config.temperature
+                conversation=dm.as_messages(),
+                temperature=0.1,
+                timeout=90.0
             )
             
-            # Parse character spans from response
-            char_spans = self._parse_spans_from_response(response, text)
+            # Parse spans from response
+            spans = self._parse_spans_from_response(response, text)
             
-            logger.info(f"Extracted {len(char_spans)} spans for {turn_focus} from dialogue")
-            return char_spans
+            logger.info(f"Extracted {len(spans)} spans for {turn_focus} from dialogue")
+            return spans
             
         except Exception as e:
             logger.error(f"Failed to extract spans via dialogue: {e}")
             return []
     
-    def _parse_spans_from_response(self, response: str, text: str) -> List[CharacterSpan]:
+    def _parse_spans_from_response(self, response: str, text: str) -> List[SpanLabel]:
         """
-        Parse character spans from LLM response with robust error recovery.
+        Parse spans from LLM response using regex-based text matching.
         
         Args:
             response: Raw LLM response
             text: Original text for validation
             
         Returns:
-            List of parsed and validated character spans
+            List of parsed and validated span labels
         """
         spans = []
         
-        # First try robust JSON parsing with multiple patterns
+        # Parse JSON annotations from response
         json_annotations = self._parse_json_response(response)
         
         for annotation in json_annotations:
             try:
-                # Extract required fields with flexible field names
-                span_text = annotation.get('text', '')
-                xbar_class = annotation.get('label', annotation.get('xbar_class', annotation.get('class', '')))
-                confidence = float(annotation.get('confidence', 1.0))
+                # Extract required fields
+                span_text = annotation.get('text', '').strip()
+                xbar_label = annotation.get('xbar_label', annotation.get('label', annotation.get('xbar_class', annotation.get('class', '')))).strip()
                 
-                # Try to get positions if available
-                start_char = annotation.get('start', annotation.get('start_char'))
-                end_char = annotation.get('end', annotation.get('end_char'))
+                if not span_text or not xbar_label:
+                    continue
                 
-                # If positions available, use them directly
-                if start_char is not None and end_char is not None:
-                    start_char = int(start_char)
-                    end_char = int(end_char)
+                # Use regex to find all occurrences of this text in the original text
+                # Escape special regex characters in the span text
+                escaped_text = re.escape(span_text)
+                
+                # Find all matches (case-sensitive first, then case-insensitive)
+                matches = list(re.finditer(escaped_text, text))
+                if not matches:
+                    # Try case-insensitive
+                    matches = list(re.finditer(escaped_text, text, re.IGNORECASE))
+                
+                if matches:
+                    # Use the first match for now
+                    match = matches[0]
+                    start_pos = match.start()
+                    end_pos = match.end() - 1  # Convert to inclusive end
                     
-                    # Validate bounds and text match
-                    is_valid, corrected_start, corrected_end = self._validate_span_boundaries(
-                        text, start_char, end_char, span_text
+                    # Create SpanLabel object
+                    span_label = SpanLabel(
+                        span=(start_pos, end_pos),
+                        xbar_label=xbar_label,
+                        text=span_text
                     )
+                    spans.append(span_label)
+                else:
+                    logger.debug(f"Could not find text '{span_text}' in source text")
                     
-                    if is_valid:
-                        char_span = CharacterSpan(
-                            start_char=corrected_start,
-                            end_char=corrected_end,
-                            xbar_class=self._normalize_xbar_class(xbar_class),
-                            confidence=confidence,
-                            text=span_text
-                        )
-                        spans.append(char_span)
-                
-                # If no positions, use text-based boundary extraction
-                elif span_text and span_text.strip():
-                    boundaries = self._extract_text_boundaries(text, span_text)
-                    for start_char, end_char in boundaries:
-                        char_span = CharacterSpan(
-                            start_char=start_char,
-                            end_char=end_char - 1,  # Convert to inclusive end
-                            xbar_class=self._normalize_xbar_class(xbar_class),
-                            confidence=confidence,
-                            text=span_text
-                        )
-                        spans.append(char_span)
-                        break  # Use first occurrence
-                        
             except Exception as e:
                 logger.debug(f"Failed to parse annotation: {annotation}, error: {e}")
                 continue
         
         # Fallback: parse from text format if no JSON found
         if not spans:
-            pattern = r'"([^"]*?)"\s*\((\d+)-(\d+)\)\s*->\s*(\w+)(?:\s*\[confidence:\s*([\d.]+)\])?'
+            pattern = r'"([^"]*?)"\s*\((\d+)-(\d+)\)\s*->\s*(\w+)'
             matches = re.finditer(pattern, response)
             
             for match in matches:
@@ -187,31 +213,26 @@ Return a JSON array with all identified spans using the format specified in the 
                     span_text = match.group(1)
                     start_char = int(match.group(2))
                     end_char_inclusive = int(match.group(3))
-                    xbar_class = match.group(4)
-                    confidence = float(match.group(5)) if match.group(5) else 1.0
+                    xbar_label = match.group(4)
                     
-                    is_valid, corrected_start, corrected_end = self._validate_span_boundaries(
-                        text, start_char, end_char_inclusive, span_text
+                    # Create SpanLabel object
+                    span_label = SpanLabel(
+                        span=(start_char, end_char_inclusive),
+                        xbar_label=xbar_label,
+                        text=span_text
                     )
-                    
-                    if is_valid:
-                        spans.append(CharacterSpan(
-                            start_char=corrected_start,
-                            end_char=corrected_end,
-                            xbar_class=self._normalize_xbar_class(xbar_class),
-                            confidence=confidence,
-                            text=span_text
-                        ))
+                    spans.append(span_label)
                 except Exception as e:
                     logger.debug(f"Failed to parse text format span: {match.group(0)}, error: {e}")
                     continue
         
-        # Remove duplicates based on position and class
+        # Remove duplicates based on position and label
         unique_spans = []
         seen_spans = set()
         
         for span in spans:
-            span_key = (span.start_char, span.end_char, span.xbar_class)
+            start_pos, end_pos = span.span
+            span_key = (start_pos, end_pos, span.xbar_label)
             if span_key not in seen_spans:
                 seen_spans.add(span_key)
                 unique_spans.append(span)
@@ -305,13 +326,11 @@ Return a JSON array with all identified spans using the format specified in the 
             # Look for text/class pairs using regex
             text_pattern = r'"text":\s*"([^"]*)"'
             class_pattern = r'"(?:label|xbar_class|class)":\s*"([^"]*)"'
-            conf_pattern = r'"confidence":\s*([0-9.]+)'
             start_pattern = r'"(?:start|start_char)":\s*(\d+)'
             end_pattern = r'"(?:end|end_char)":\s*(\d+)'
             
             text_matches = re.findall(text_pattern, malformed_str)
             class_matches = re.findall(class_pattern, malformed_str)
-            conf_matches = re.findall(conf_pattern, malformed_str)
             start_matches = re.findall(start_pattern, malformed_str)
             end_matches = re.findall(end_pattern, malformed_str)
             
@@ -321,8 +340,6 @@ Return a JSON array with all identified spans using the format specified in the 
                 
                 if i < len(class_matches):
                     annotation['label'] = class_matches[i]
-                if i < len(conf_matches):
-                    annotation['confidence'] = float(conf_matches[i])
                 if i < len(start_matches):
                     annotation['start'] = int(start_matches[i])
                 if i < len(end_matches):
@@ -512,90 +529,6 @@ Return a JSON array with all identified spans using the format specified in the 
         # Return original if no mapping found
         return normalized
     
-    def _validate_and_filter_spans(
-        self, 
-        char_spans: List[CharacterSpan], 
-        text: str
-    ) -> List[CharacterSpan]:
-        """
-        Validate and filter character spans using span validator.
-        
-        Args:
-            char_spans: Raw character spans from LLM
-            text: Original text
-            
-        Returns:
-            Validated and filtered character spans
-        """
-        valid_spans = []
-        
-        for char_span in char_spans:
-            # Create annotation record for validation
-            annotation = {
-                'span_annotation': {
-                    'text': char_span.text,
-                    'start_pos': char_span.start_char,
-                    'end_pos': char_span.end_char,
-                    'length': char_span.end_char - char_span.start_char + 1,
-                    'xbar_class': char_span.xbar_class
-                },
-                'raw': text
-            }
-            
-            is_valid, reason = self.validator.validate_span(annotation)
-            if is_valid:
-                valid_spans.append(char_span)
-            else:
-                logger.debug(f"Filtered invalid span '{char_span.text}': {reason}")
-        
-        logger.info(f"Validated {len(valid_spans)}/{len(char_spans)} spans")
-        return valid_spans
-    
-    def _convert_to_position_spans(
-        self, 
-        char_spans: List[CharacterSpan], 
-        position_mapper: PositionMapper
-    ) -> List[SpanAnnotation]:
-        """
-        Convert character spans to position spans and create SpanAnnotation objects.
-        
-        Args:
-            char_spans: Validated character spans
-            position_mapper: Position mapper for the text
-            
-        Returns:
-            List of SpanAnnotation objects for annotation record
-        """
-        span_annotations = []
-        
-        for char_span in char_spans:
-            # Convert to position span
-            pos_span = position_mapper.char_span_to_position_span(char_span)
-            
-            # Create SpanAnnotation object
-            span_annotation = SpanAnnotation(
-                start_pos=pos_span.start_pos,
-                end_pos=pos_span.end_pos,
-                xbar_class=pos_span.xbar_class,
-                confidence=pos_span.confidence,
-                linguistic_features={
-                    'extracted_text': char_span.text,
-                    'character_span': {
-                        'start_char': char_span.start_char,
-                        'end_char': char_span.end_char
-                    },
-                    'position_span': {
-                        'start_pos': pos_span.start_pos,
-                        'end_pos': pos_span.end_pos,
-                        'positions': pos_span.positions
-                    }
-                }
-            )
-            
-            span_annotations.append(span_annotation)
-        
-        return span_annotations
-    
     async def annotate_sequence(self, pretrain_record: PretrainRecord) -> Optional[AnnotationRecord]:
         """
         Annotate a sequence using comprehensive X-bar theory analysis.
@@ -618,39 +551,36 @@ Return a JSON array with all identified spans using the format specified in the 
             logger.info(f"Starting X-bar annotation for domain: {domain.value}")
             logger.info(f"Text length: {len(text)} characters")
             
-            # Initialize position mapper
-            position_mapper = PositionMapper(text)
-            
             # Three-turn annotation strategy
-            all_char_spans = []
+            all_spans = []
             
             # Turn 1: Word-level spans
             logger.info("Turn 1: Extracting word-level spans")
             word_spans = await self._extract_spans_via_dialogue(text, domain, "word_level")
-            all_char_spans.extend(word_spans)
+            all_spans.extend(word_spans)
             
             # Turn 2: Phrase-level spans
             logger.info("Turn 2: Extracting phrase-level spans")
             phrase_spans = await self._extract_spans_via_dialogue(text, domain, "phrase_level")
-            all_char_spans.extend(phrase_spans)
+            all_spans.extend(phrase_spans)
             
             # Turn 3: Clause-level spans
             logger.info("Turn 3: Extracting clause-level spans")
             clause_spans = await self._extract_spans_via_dialogue(text, domain, "clause_level")
-            all_char_spans.extend(clause_spans)
+            all_spans.extend(clause_spans)
             
             # Validate and filter spans
-            logger.info(f"Validating {len(all_char_spans)} total spans")
-            valid_char_spans = self._validate_and_filter_spans(all_char_spans, text)
+            logger.info(f"Validating {len(all_spans)} total spans")
+            valid_spans = self._validate_and_filter_span_labels(all_spans, text)
             
-            # Convert to position spans
-            span_annotations = self._convert_to_position_spans(valid_char_spans, position_mapper)
+            # Convert to SpanAnnotation objects
+            span_annotations = self._convert_span_labels_to_annotations(valid_spans, text)
             
             # Create annotation record
             annotation_record = AnnotationRecord(
                 raw=text,
-                sequence_number=getattr(pretrain_record.meta, 'sequence_number', 0) if pretrain_record.meta else 0,
-                total_positions=position_mapper.get_text_length(),
+                sequence_number=pretrain_record.sequence_number or 0,
+                total_positions=len(text),
                 span_annotations=span_annotations,
                 agent_metadata={
                     "strategy": "three_turn_xbar",
@@ -660,8 +590,7 @@ Return a JSON array with all identified spans using the format specified in the 
                     "word_spans": len(word_spans),
                     "phrase_spans": len(phrase_spans),
                     "clause_spans": len(clause_spans),
-                    "validated_spans": len(valid_char_spans),
-                    "final_spans": len(span_annotations)
+                    "total_valid_spans": len(valid_spans)
                 }
             )
             
@@ -671,3 +600,85 @@ Return a JSON array with all identified spans using the format specified in the 
         except Exception as e:
             logger.error(f"Failed to annotate sequence: {e}", exc_info=True)
             return None
+    
+    def _validate_and_filter_span_labels(self, spans: List[SpanLabel], text: str) -> List[SpanLabel]:
+        """
+        Validate and filter span labels removing duplicates and invalid spans.
+        
+        Args:
+            spans: List of SpanLabel objects to validate
+            text: Original text for validation
+            
+        Returns:
+            List of valid, deduplicated SpanLabel objects
+        """
+        valid_spans = []
+        seen_spans = set()
+        
+        for span in spans:
+            try:
+                start_pos, end_pos = span.span
+                span_text = span.text or ""
+                xbar_label = span.xbar_label
+                
+                # Basic validation
+                if start_pos < 0 or end_pos >= len(text) or start_pos > end_pos:
+                    logger.debug(f"Invalid span positions: {span.span} for text length {len(text)}")
+                    continue
+                
+                if not span_text or not xbar_label:
+                    logger.debug(f"Missing text or label: {span}")
+                    continue
+                
+                # Check for duplicates
+                span_key = (start_pos, end_pos, xbar_label)
+                if span_key in seen_spans:
+                    continue
+                
+                seen_spans.add(span_key)
+                valid_spans.append(span)
+                
+            except Exception as e:
+                logger.debug(f"Error validating span {span}: {e}")
+                continue
+        
+        logger.info(f"Validated {len(valid_spans)}/{len(spans)} spans")
+        return valid_spans
+    
+    def _convert_span_labels_to_annotations(self, spans: List[SpanLabel], text: str) -> List[SpanAnnotation]:
+        """
+        Convert SpanLabel objects to SpanAnnotation objects.
+        
+        Args:
+            spans: List of validated SpanLabel objects
+            text: Original text
+            
+        Returns:
+            List of SpanAnnotation objects
+        """
+        annotations = []
+        
+        for span in spans:
+            try:
+                start_pos, end_pos = span.span
+                
+                # Create SpanAnnotation
+                annotation = SpanAnnotation(
+                    start_pos=start_pos,
+                    end_pos=end_pos + 1,  # Convert to exclusive end
+                    xbar_label=span.xbar_label,
+                    linguistic_features={
+                        'extracted_text': span.text,
+                        'character_span': {
+                            'start_char': start_pos,
+                            'end_char': end_pos
+                        }
+                    }
+                )
+                annotations.append(annotation)
+                
+            except Exception as e:
+                logger.debug(f"Error converting span {span}: {e}")
+                continue
+        
+        return annotations

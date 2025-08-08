@@ -27,14 +27,12 @@ class TestSpanAnnotation(unittest.TestCase):
         annotation = SpanAnnotation(
             start_pos=4,
             end_pos=19,
-            xbar_class="NP",
-            confidence=0.95
+            xbar_label="NP"
         )
         
         self.assertEqual(annotation.start_pos, 4)
         self.assertEqual(annotation.end_pos, 19)
-        self.assertEqual(annotation.xbar_class, "NP")
-        self.assertEqual(annotation.confidence, 0.95)
+        self.assertEqual(annotation.xbar_label, "NP")
         self.assertIsNone(annotation.linguistic_features)
     
     def test_span_annotation_with_features(self):
@@ -48,8 +46,7 @@ class TestSpanAnnotation(unittest.TestCase):
         annotation = SpanAnnotation(
             start_pos=0,
             end_pos=18,
-            xbar_class="NP",
-            confidence=1.0,
+            xbar_label="NP",
             linguistic_features=features
         )
         
@@ -58,24 +55,22 @@ class TestSpanAnnotation(unittest.TestCase):
     def test_span_annotation_validation(self):
         """Test span annotation validation."""
         # Valid annotation
-        SpanAnnotation(start_pos=0, end_pos=5, xbar_class="VP")
+        SpanAnnotation(start_pos=0, end_pos=5, xbar_label="VP")
         
-        # Test confidence bounds (should be caught by application logic)
+        # Test with various labels
         annotation = SpanAnnotation(
             start_pos=0, 
             end_pos=5, 
-            xbar_class="NP", 
-            confidence=1.5  # Out of bounds but Pydantic allows it
+            xbar_label="NP"
         )
-        self.assertEqual(annotation.confidence, 1.5)
+        self.assertEqual(annotation.xbar_label, "NP")
     
     def test_span_annotation_serialization(self):
         """Test JSON serialization/deserialization."""
         annotation = SpanAnnotation(
             start_pos=10,
             end_pos=25,
-            xbar_class="VP",
-            confidence=0.85,
+            xbar_label="VP",
             linguistic_features={"tense": "past", "voice": "active"}
         )
         
@@ -96,10 +91,10 @@ class TestAnnotationRecord(unittest.TestCase):
     def setUp(self):
         """Set up test data."""
         self.sample_annotations = [
-            SpanAnnotation(start_pos=0, end_pos=3, xbar_class="Det"),
-            SpanAnnotation(start_pos=4, end_pos=9, xbar_class="Adj"),
-            SpanAnnotation(start_pos=10, end_pos=15, xbar_class="N"),
-            SpanAnnotation(start_pos=0, end_pos=15, xbar_class="NP")
+            SpanAnnotation(start_pos=0, end_pos=3, xbar_label="Det"),
+            SpanAnnotation(start_pos=4, end_pos=9, xbar_label="Adj"),
+            SpanAnnotation(start_pos=10, end_pos=15, xbar_label="N"),
+            SpanAnnotation(start_pos=0, end_pos=15, xbar_label="NP")
         ]
         
         self.sample_conversation = [
@@ -161,9 +156,9 @@ class TestAnnotationRecord(unittest.TestCase):
         
         # Test that overlapping spans are allowed (hierarchical structure)
         overlapping_spans = [
-            SpanAnnotation(start_pos=0, end_pos=5, xbar_class="NP"),
-            SpanAnnotation(start_pos=2, end_pos=8, xbar_class="VP"),  # Overlaps
-            SpanAnnotation(start_pos=0, end_pos=8, xbar_class="S")    # Contains both
+            SpanAnnotation(start_pos=0, end_pos=5, xbar_label="NP"),
+            SpanAnnotation(start_pos=2, end_pos=8, xbar_label="VP"),  # Overlaps
+            SpanAnnotation(start_pos=0, end_pos=8, xbar_label="S")    # Contains both
         ]
         
         record_with_overlaps = AnnotationRecord(
@@ -223,13 +218,13 @@ class TestPretrainRecord(unittest.TestCase):
         meta = RecordMeta(
             tags=["test", "natural"],
             doc_language="en",
-            confidence=0.95,
             extracted_by="test_pipeline",
             source_file="test_corpus.jsonl",
             notes="Test metadata",
             sequence_number=1,
             timestamp="2025-01-01T00:00:00",
-            source="test"
+            source="test",
+            confidence=None
         )
         
         record = PretrainRecord(
@@ -241,7 +236,6 @@ class TestPretrainRecord(unittest.TestCase):
         )
         
         self.assertEqual(record.meta.tags, ["test", "natural"])
-        self.assertEqual(record.meta.confidence, 0.95)
     
     def test_pretrain_record_serialization(self):
         """Test pretrain record serialization."""
@@ -281,9 +275,9 @@ class TestSchemaIntegration(unittest.TestCase):
             raw=pretrain.raw,
             sequence_number=pretrain.sequence_number or 123,
             span_annotations=[
-                SpanAnnotation(start_pos=0, end_pos=11, xbar_class="NP"),
-                SpanAnnotation(start_pos=12, end_pos=16, xbar_class="N"),
-                SpanAnnotation(start_pos=17, end_pos=25, xbar_class="N")
+                SpanAnnotation(start_pos=0, end_pos=11, xbar_label="NP"),
+                SpanAnnotation(start_pos=12, end_pos=16, xbar_label="N"),
+                SpanAnnotation(start_pos=17, end_pos=25, xbar_label="N")
             ],
             total_positions=26
         )
@@ -299,9 +293,9 @@ class TestSchemaIntegration(unittest.TestCase):
         
         # Valid spans
         valid_annotations = [
-            SpanAnnotation(start_pos=0, end_pos=5, xbar_class="Det"),
-            SpanAnnotation(start_pos=5, end_pos=15, xbar_class="N"),
-            SpanAnnotation(start_pos=15, end_pos=20, xbar_class="V")
+            SpanAnnotation(start_pos=0, end_pos=5, xbar_label="Det"),
+            SpanAnnotation(start_pos=5, end_pos=15, xbar_label="N"),
+            SpanAnnotation(start_pos=15, end_pos=20, xbar_label="V")
         ]
         
         record = AnnotationRecord(

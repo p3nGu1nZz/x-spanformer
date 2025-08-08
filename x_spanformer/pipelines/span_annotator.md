@@ -42,7 +42,8 @@ python -m x_spanformer.pipelines.span_annotator \
     --model llama3.2:3b \
     --temperature 0.2 \
     --timeout 180.0 \
-    --verbose
+    --verbose \
+    --stream
 ```
 
 ### Arguments
@@ -56,6 +57,7 @@ python -m x_spanformer.pipelines.span_annotator \
 | `--temperature` | float | `0.2` | Model temperature |
 | `--timeout` | float | `180.0` | Conversation timeout (seconds) |
 | `--verbose` | flag | False | Enable verbose logging |
+| `--stream` | flag | False | Stream results to console in real-time |
 
 ### Programmatic Usage
 
@@ -76,7 +78,7 @@ stats = await pipeline.process_sequences(
     corpus_file=Path("data/vocab/corpus.jsonl"),
     output_dir=Path("data/annotations"),
     range_spec="1-100",
-    resume=True
+    stream=True
 )
 ```
 
@@ -126,7 +128,7 @@ Individual sequence results in `working/` directory:
 
 ```json
 {
-    "sequence_id": 1,
+    "sequence_number": 1,
     "raw_text": "The quick brown fox jumps over the lazy dog.",
     "domain_type": "natural",
     "timestamp": "2025-08-07T12:00:00.000Z",

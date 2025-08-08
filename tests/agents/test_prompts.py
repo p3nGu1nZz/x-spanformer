@@ -1,11 +1,8 @@
 """
 Test suite for x_spanformer.agents.prompts module.
 
-Tests Jinja2 template rendering for span annotator system prompts and 
-annotation requests with domain-specific classifier integration.
-
-NOTE: These tests verify the fallback behavior when template files don't exist.
-The span annotator functions use the template name as a literal string when files are missing.
+Tests basic Jinja2 template rendering functionality used by the judge agent.
+The span annotation functionality has been moved to XBarAnnotator.
 """
 
 import pytest
@@ -13,11 +10,8 @@ from pathlib import Path
 
 from x_spanformer.agents.prompts import (
     render_prompt,
-    get_system_prompt,
-    render_span_annotator_system_prompt,
-    render_span_annotation_request
+    get_system_prompt
 )
-from x_spanformer.xbar.xbar_map import DomainType
 
 
 class TestTemplateRendering:
@@ -29,12 +23,16 @@ class TestTemplateRendering:
         result = render_prompt("Hello {{ name }}", name="World")
         assert "Hello World" in result
     
-    def test_render_prompt_with_file_template(self):
-        """Test rendering with actual template file."""
-        # This should load an actual template file
-        result = render_prompt("judge_system", domain="test")
-        assert isinstance(result, str)
-        assert len(result) > 0
+    def test_render_prompt_with_variables(self):
+        """Test template rendering with multiple variables."""
+        template = "{{ greeting }} {{ name }}! Today is {{ day }}."
+        result = render_prompt(template, greeting="Hi", name="Alice", day="Monday")
+        assert "Hi Alice! Today is Monday." in result
+    
+    def test_render_prompt_empty_template(self):
+        """Test rendering empty template."""
+        result = render_prompt("", name="test")
+        assert result == ""
     
     def test_get_system_prompt_default(self):
         """Test getting default system prompt."""
@@ -47,239 +45,57 @@ class TestTemplateRendering:
         result = get_system_prompt("judge_system", context="test")
         assert isinstance(result, str)
         assert len(result) > 0
+    
+    def test_get_system_prompt_with_kwargs(self):
+        """Test system prompt with additional kwargs."""
+        result = get_system_prompt("test_template", 
+                                   variable1="value1", 
+                                   variable2="value2")
+        assert isinstance(result, str)
 
 
-class TestSpanAnnotatorSystemPrompt:
-    """Test span annotator system prompt rendering."""
+class TestTemplateFileHandling:
+    """Test template file handling behavior."""
     
-    def test_render_natural_domain_prompt(self):
-        """Test rendering system prompt for natural language domain."""
-        result = render_span_annotator_system_prompt(domain_type="natural")
-        
-        # Since template file doesn't exist, it returns the literal template name
-        assert isinstance(result, str)
-        assert result == "span_annotator_system"
+    def test_template_not_found_fallback(self):
+        """Test that missing template files fall back to string templates."""
+        template_name = "nonexistent_template_{{ variable }}"
+        result = render_prompt(template_name, variable="test")
+        assert "nonexistent_template_test" in result
     
-    def test_render_code_domain_prompt(self):
-        """Test rendering system prompt for code domain."""
-        result = render_span_annotator_system_prompt(domain_type="code")
+    def test_template_with_jinja_syntax(self):
+        """Test template with various Jinja2 syntax."""
+        template = "{% if condition %}Yes{% else %}No{% endif %}: {{ value }}"
+        result = render_prompt(template, condition=True, value="success")
+        assert "Yes: success" in result
         
-        # Since template file doesn't exist, it returns the literal template name
-        assert isinstance(result, str)
-        assert result == "span_annotator_system"
+        result = render_prompt(template, condition=False, value="failure")
+        assert "No: failure" in result
     
-    def test_render_mixed_domain_prompt(self):
-        """Test rendering system prompt for mixed domain."""
-        result = render_span_annotator_system_prompt(domain_type="mixed")
-        
-        # Since template file doesn't exist, it returns the literal template name
-        assert isinstance(result, str)
-        assert result == "span_annotator_system"
-    
-    def test_render_invalid_domain_fallback(self):
-        """Test rendering with invalid domain falls back to natural."""
-        result = render_span_annotator_system_prompt(domain_type="invalid")
-        
-        # Since template file doesn't exist, it returns the literal template name
-        assert isinstance(result, str)
-        assert result == "span_annotator_system"
-    
-    def test_render_with_additional_kwargs(self):
-        """Test rendering with additional template variables."""
-        result = render_span_annotator_system_prompt(
-            domain_type="natural",
-            custom_var="test_value"
-        )
-        
-        # Since template file doesn't exist, it returns the literal template name
-        assert isinstance(result, str)
-        assert result == "span_annotator_system"
+    def test_template_with_loops(self):
+        """Test template with loop syntax."""
+        template = "Items: {% for item in items %}{{ item }}{% if not loop.last %}, {% endif %}{% endfor %}"
+        result = render_prompt(template, items=["apple", "banana", "cherry"])
+        assert "Items: apple, banana, cherry" in result
 
 
-class TestSpanAnnotationRequest:
-    """Test span annotation request rendering."""
-    
-    def test_render_basic_request(self):
-        """Test rendering basic annotation request."""
-        text = "The quick brown fox jumps over the lazy dog."
-        result = render_span_annotation_request(text=text)
-        
-        # Since template file doesn't exist, it returns the literal template name
-        assert isinstance(result, str)
-        assert result == "span_annotation_request"
-    
-    def test_render_natural_domain_request(self):
-        """Test rendering request for natural language domain."""
-        text = "The cat sat on the mat."
-        result = render_span_annotation_request(
-            text=text,
-            domain_type="natural"
-        )
-        
-        # Since template file doesn't exist, it returns the literal template name
-        assert isinstance(result, str)
-        assert result == "span_annotation_request"
-    
-    def test_render_code_domain_request(self):
-        """Test rendering request for code domain."""
-        text = "def function_name(param):"
-        result = render_span_annotation_request(
-            text=text,
-            domain_type="code"
-        )
-        
-        # Since template file doesn't exist, it returns the literal template name
-        assert isinstance(result, str)
-        assert result == "span_annotation_request"
-    
-    def test_render_mixed_domain_request(self):
-        """Test rendering request for mixed domain."""
-        text = "Use the `print()` function to display output."
-        result = render_span_annotation_request(
-            text=text,
-            domain_type="mixed"
-        )
-        
-        # Since template file doesn't exist, it returns the literal template name
-        assert isinstance(result, str)
-        assert result == "span_annotation_request"
-    
-    def test_render_with_turn_information(self):
-        """Test rendering with turn number and focus area."""
-        text = "Hello world"
-        result = render_span_annotation_request(
-            text=text,
-            turn_number=2,
-            max_turns=5,
-            focus_area="detailed phrase analysis"
-        )
-        
-        # Since template file doesn't exist, it returns the literal template name
-        assert isinstance(result, str)
-        assert result == "span_annotation_request"
-    
-    def test_render_invalid_domain_fallback(self):
-        """Test rendering with invalid domain falls back gracefully."""
-        text = "Test text"
-        result = render_span_annotation_request(
-            text=text,
-            domain_type="invalid_domain"
-        )
-        
-        # Since template file doesn't exist, it returns the literal template name
-        assert isinstance(result, str)
-        assert result == "span_annotation_request"
-    
-    def test_render_with_additional_kwargs(self):
-        """Test rendering with additional template variables."""
-        text = "Test text"
-        result = render_span_annotation_request(
-            text=text,
-            custom_instruction="Focus on specific patterns",
-            analysis_depth="comprehensive"
-        )
-        
-        # Since template file doesn't exist, it returns the literal template name
-        assert isinstance(result, str)
-        assert result == "span_annotation_request"
-
-
-class TestTemplateIntegration:
-    """Test integration between different template functions."""
-    
-    def test_system_and_request_consistency(self):
-        """Test that system prompt and request return template names."""
-        domain_type = "natural"
-        
-        system_prompt = render_span_annotator_system_prompt(domain_type=domain_type)
-        request = render_span_annotation_request(
-            text="Test sentence.",
-            domain_type=domain_type
-        )
-        
-        # Both should return the template names since files don't exist
-        assert system_prompt == "span_annotator_system"
-        assert request == "span_annotation_request"
-    
-    def test_all_domains_work(self):
-        """Test that all domain types work for both functions."""
-        domains = ["natural", "code", "mixed"]
-        text = "Sample text for analysis."
-        
-        for domain in domains:
-            system_prompt = render_span_annotator_system_prompt(domain_type=domain)
-            request = render_span_annotation_request(
-                text=text,
-                domain_type=domain
-            )
-            
-            # Both should return template names since files don't exist
-            assert system_prompt == "span_annotator_system"
-            assert request == "span_annotation_request"
-    
-    def test_template_variables_propagation(self):
-        """Test that template variables are handled even when files don't exist."""
-        result = render_span_annotator_system_prompt(
-            domain_type="natural",
-            special_instruction="Use careful analysis"
-        )
-        
-        # Should return template name since file doesn't exist
-        assert result == "span_annotator_system"
-
-
-class TestTemplateErrorHandling:
+class TestErrorHandling:
     """Test error handling in template rendering."""
     
-    def test_missing_template_fallback(self):
-        """Test fallback when template file is missing."""
-        # This should use the fallback string template mechanism
-        result = render_prompt("nonexistent_template", test_var="value")
-        
-        # Should return the template name as literal string since file doesn't exist
+    def test_missing_variable_in_template(self):
+        """Test behavior when template variable is missing."""
+        template = "Hello {{ missing_variable }}"
+        # Should not raise error, might render empty or default value
+        result = render_prompt(template)
         assert isinstance(result, str)
-        assert result == "nonexistent_template"
     
-    def test_empty_text_handling(self):
-        """Test handling of empty text in annotation request."""
-        result = render_span_annotation_request(text="")
-        
-        # Should return template name since file doesn't exist
-        assert isinstance(result, str)
-        assert result == "span_annotation_request"
-    
-    def test_none_values_handling(self):
-        """Test handling of None values in template variables."""
-        result = render_span_annotation_request(
-            text="Test",
-            focus_area=None
-        )
-        
-        # Should return template name since file doesn't exist
-        assert isinstance(result, str)
-        assert result == "span_annotation_request"
-
-
-class TestTemplateContentValidation:
-    """Test validation of template content behavior."""
-    
-    def test_system_prompt_fallback_behavior(self):
-        """Test that system prompt returns template name when file missing."""
-        result = render_span_annotator_system_prompt(domain_type="natural")
-        
-        # Should return template name since file doesn't exist
-        assert result == "span_annotator_system"
-    
-    def test_request_fallback_behavior(self):
-        """Test that annotation request returns template name when file missing."""
-        text = "Analyze this text."
-        result = render_span_annotation_request(text=text)
-        
-        # Should return template name since file doesn't exist
-        assert result == "span_annotation_request"
-    
-    def test_basic_template_rendering(self):
-        """Test that basic template rendering works with string templates."""
-        # This should work since it uses a string template directly
-        result = render_prompt("Hello {{ name }}", name="World")
-        assert result == "Hello World"
+    def test_invalid_jinja_syntax(self):
+        """Test behavior with invalid Jinja syntax."""
+        template = "Hello {{ unclosed_variable"
+        # Should handle gracefully
+        try:
+            result = render_prompt(template)
+            assert isinstance(result, str)
+        except Exception:
+            # Acceptable to raise exception for invalid syntax
+            pass
