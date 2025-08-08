@@ -180,7 +180,7 @@ class TestSpanParsing:
         assert annotations[0]["xbar_label"] == "verb"
     
     def test_parse_json_response_malformed(self, annotator):
-        """Test parsing malformed JSON with recovery."""
+        """Test parsing malformed JSON - should raise ValueError."""
         response = '''```json
 [
     {"text": "The", "xbar_label": "determiner",},
@@ -188,45 +188,35 @@ class TestSpanParsing:
 ]
 ```'''
         
-        annotations = annotator._parse_json_response(response)
-        assert len(annotations) >= 1  # Should recover at least some data
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response)
     
     def test_parse_json_response_truncated_array(self, annotator):
-        """Test parsing truncated JSON array response (missing closing bracket)."""
+        """Test parsing truncated JSON array response - may not match pattern."""
         response = '''```json
 [
     {"text": "The", "xbar_label": "determiner"},
     {"text": "fox", "xbar_label": "noun"}
 ```'''
         
+        # This pattern might not match any regex pattern, so returns empty list
         annotations = annotator._parse_json_response(response)
-        # The current implementation detects truncated responses and falls back to regex recovery
-        # Adjust expectation based on actual behavior
-        assert len(annotations) >= 0  # Should not crash, may recover some data
-        if len(annotations) >= 2:
-            assert annotations[0]["text"] == "The"
-            assert annotations[0]["xbar_label"] == "determiner"
-            assert annotations[1]["text"] == "fox"
-            assert annotations[1]["xbar_label"] == "noun"
+        assert isinstance(annotations, list)  # Should not crash
     
     def test_parse_json_response_incomplete_object(self, annotator):
-        """Test parsing response with incomplete object at the end."""
+        """Test parsing response with incomplete object - may not match pattern."""
         response = '''```json
 [
     {"text": "The", "xbar_label": "determiner"},
     {"text": "ti:j"}}
 ```'''
         
+        # This pattern might not match any regex pattern, so returns empty list
         annotations = annotator._parse_json_response(response)
-        # Should not crash and may recover some data
-        assert isinstance(annotations, list)
-        # If it recovers data, check the first complete annotation
-        if len(annotations) >= 1:
-            assert annotations[0]["text"] == "The"
-            assert annotations[0]["xbar_label"] == "determiner"
+        assert isinstance(annotations, list)  # Should not crash
     
     def test_parse_json_response_trailing_comma(self, annotator):
-        """Test parsing JSON with trailing comma."""
+        """Test parsing JSON with trailing comma - should raise ValueError."""
         response = '''```json
 [
     {"text": "The", "xbar_label": "determiner"},
@@ -234,13 +224,12 @@ class TestSpanParsing:
 ]
 ```'''
         
-        annotations = annotator._parse_json_response(response)
-        assert len(annotations) == 2
-        assert annotations[0]["text"] == "The"
-        assert annotations[1]["text"] == "fox"
+        # This WILL match the pattern and fail to parse, so raises ValueError
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response)
     
     def test_parse_json_response_missing_quotes_on_keys(self, annotator):
-        """Test parsing JSON with missing quotes on keys."""
+        """Test parsing JSON with missing quotes on keys - should raise ValueError."""
         response = '''```json
 [
     {text: "The", xbar_label: "determiner"},
@@ -248,11 +237,11 @@ class TestSpanParsing:
 ]
 ```'''
         
-        annotations = annotator._parse_json_response(response)
-        assert len(annotations) >= 1  # Should recover some data
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response)
     
     def test_parse_json_response_missing_commas(self, annotator):
-        """Test parsing JSON with missing commas between objects."""
+        """Test parsing JSON with missing commas - should raise ValueError."""
         response = '''```json
 [
     {"text": "The", "xbar_label": "determiner"}
@@ -260,37 +249,32 @@ class TestSpanParsing:
 ]
 ```'''
         
-        annotations = annotator._parse_json_response(response)
-        assert len(annotations) >= 1  # Should recover some data
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response)
     
     def test_parse_json_response_regex_recovery(self, annotator):
-        """Test regex-based recovery when JSON parsing completely fails."""
+        """Test that malformed JSON without proper structure returns empty list."""
         response = '''Complete malformed response but has:
 "text":"The" and "xbar_label":"determiner" somewhere
 plus "text":"fox" with "xbar_label":"noun"'''
         
+        # This doesn't match any pattern, so returns empty list
         annotations = annotator._parse_json_response(response)
-        # Note: The current implementation may not recover from this format
-        # This test validates that it doesn't crash and returns a list
-        assert isinstance(annotations, list)
-        # If regex recovery works, we should find annotations
-        if len(annotations) > 0:
-            text_found = any(ann.get('text') for ann in annotations)
-            assert text_found
+        assert annotations == []
     
     def test_parse_json_response_empty_or_invalid(self, annotator):
         """Test parsing completely empty or invalid responses."""
         # Test empty response
         annotations = annotator._parse_json_response("")
-        assert len(annotations) == 0
+        assert annotations == []
         
-        # Test response with no JSON at all
+        # Test response with no JSON at all  
         annotations = annotator._parse_json_response("No JSON here at all")
-        assert len(annotations) == 0
+        assert annotations == []
         
         # Test response with only partial JSON fragments
         annotations = annotator._parse_json_response("Just some {broken json")
-        assert len(annotations) == 0
+        assert annotations == []
     
     def test_parse_json_response_duplicate_handling(self, annotator):
         """Test handling of duplicate annotations."""
@@ -311,114 +295,85 @@ plus "text":"fox" with "xbar_label":"noun"'''
         assert "fox" in texts
         assert texts.count("The") == 1  # Should only appear once
     
-    def test_fix_malformed_json_edge_cases(self, annotator):
-        """Test the _fix_malformed_json method directly with various edge cases."""
-        # Test incomplete object - should be left as-is (recovery happens at higher level)
-        malformed = '[{"text":"word"}{"text":'
-        fixed = annotator._fix_malformed_json(malformed)
-        # Should add comma between objects but not necessarily complete the incomplete one
-        assert '}, {' in fixed
-        
-        # Test trailing comma removal
-        malformed = '[{"text":"word","label":"noun"},]'
-        fixed = annotator._fix_malformed_json(malformed)
-        assert '"}]' in fixed
-        assert ',]' not in fixed
-        
-        # Test missing commas between objects
-        malformed = '[{"text":"a"}{"text":"b"}]'
-        fixed = annotator._fix_malformed_json(malformed)
-        assert '}, {' in fixed
-    
-    def test_recover_malformed_json_patterns(self, annotator):
-        """Test the _recover_malformed_json method directly."""
-        malformed = '''Some broken JSON with "text":"hello" and "label":"noun" plus "text":"world" "class":"verb"'''
-        
-        recovered = annotator._recover_malformed_json(malformed)
-        assert len(recovered) >= 1
-        
-        # Should find at least one complete text/xbar_label pair
-        complete_annotations = [ann for ann in recovered if 'text' in ann and 'xbar_label' in ann]
-        assert len(complete_annotations) >= 1
-    
     def test_parse_json_missing_colon_errors(self, annotator):
-        """Test parsing JSON with missing colon delimiter errors (production scenarios)."""
+        """Test parsing JSON with missing colon delimiter errors - should raise ValueError."""
         # Scenario 1: Missing colon after "text"
         response1 = '''```json
 [{"text" "word", "xbar_label": "noun"}]
 ```'''
-        annotations1 = annotator._parse_json_response(response1)
-        assert len(annotations1) >= 0  # Should not crash
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response1)
         
         # Scenario 2: Missing colon after "xbar_label" 
         response2 = '''```json
 [{"text": "word", "xbar_label" "noun"}]
 ```'''
-        annotations2 = annotator._parse_json_response(response2)
-        assert len(annotations2) >= 0  # Should not crash
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response2)
         
         # Scenario 3: Multiple missing colons
         response3 = '''```json
 [{"text" "word", "xbar_label" "noun"}]
 ```'''
-        annotations3 = annotator._parse_json_response(response3)
-        assert len(annotations3) >= 0  # Should not crash
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response3)
         
         # Scenario 4: Missing colons at various character positions (real error patterns)
         response4 = '''```json
 [{"text" "running"}, {"label" "verb"}]
 ```'''
-        annotations4 = annotator._parse_json_response(response4)
-        assert len(annotations4) >= 0  # Should not crash
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response4)
     
     def test_parse_json_missing_comma_errors(self, annotator):
-        """Test parsing JSON with missing comma delimiter errors (production scenarios)."""
+        """Test parsing JSON with missing comma delimiter errors - should raise ValueError."""
         # Scenario 1: Missing comma between key-value pairs
         response1 = '''```json
 [{"text": "word" "xbar_label": "noun"}]
 ```'''
-        annotations1 = annotator._parse_json_response(response1)
-        assert len(annotations1) >= 0  # Should not crash
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response1)
         
         # Scenario 2: Missing comma between objects in array
         response2 = '''```json
 [{"text": "word1"} {"text": "word2"}]
 ```'''
-        annotations2 = annotator._parse_json_response(response2)
-        assert len(annotations2) >= 0  # Should not crash
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response2)
         
         # Scenario 3: Missing comma with varying positions
         response3 = '''```json
 [{"text": "word1", "label": "noun1"} {"text": "word2", "label": "noun2"}]
 ```'''
-        annotations3 = annotator._parse_json_response(response3)
-        assert len(annotations3) >= 0  # Should not crash
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response3)
     
     def test_parse_json_property_name_errors(self, annotator):
-        """Test parsing JSON with property name errors (production scenarios)."""
-        # Scenario 1: Property name without quotes
+        """Test parsing JSON with property name errors."""
+        # Scenario 1: Property name without quotes - will match pattern and fail to parse
         response1 = '''```json
 [{text: "word", xbar_label: "noun"}]
 ```'''
-        annotations1 = annotator._parse_json_response(response1)
-        assert len(annotations1) >= 0  # Should not crash
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response1)
         
-        # Scenario 2: Extra data after valid JSON
+        # Scenario 2: Extra data after valid JSON - may not match pattern
         response2 = '''```json
 [{"text": "word"}] extra data here
 ```'''
-        annotations2 = annotator._parse_json_response(response2)
-        assert len(annotations2) >= 0  # Should not crash
+        # This doesn't match the pattern exactly, so returns empty list
+        annotations = annotator._parse_json_response(response2)
+        assert isinstance(annotations, list)
         
         # Scenario 3: Complex combination of errors from production logs
         response3 = '''```json
 [{"text" "running", "label" "verb"}, {text: "quickly", xbar_label: "adverb"}]
 ```'''
-        annotations3 = annotator._parse_json_response(response3)
-        assert len(annotations3) >= 0  # Should not crash
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response3)
     
     def test_parse_json_multiline_errors(self, annotator):
-        """Test parsing JSON with multiline error patterns (production scenarios)."""
+        """Test parsing JSON with multiline error patterns - should raise ValueError."""
         # Scenario 1: Error on line 3 column 32 (char 76) pattern
         response1 = '''```json
 [
@@ -426,8 +381,8 @@ plus "text":"fox" with "xbar_label":"noun"'''
   {"label" "determiner"}
 ]
 ```'''
-        annotations1 = annotator._parse_json_response(response1)
-        assert len(annotations1) >= 0  # Should not crash
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response1)
         
         # Scenario 2: Error on line 22 (deep nesting or long arrays)
         response2 = '''```json
@@ -456,12 +411,12 @@ plus "text":"fox" with "xbar_label":"noun"'''
   {"text" "word22", "label": "ord"}
 ]
 ```'''
-        annotations2 = annotator._parse_json_response(response2)
-        assert len(annotations2) >= 0  # Should not crash
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response2)
     
     def test_parse_json_edge_case_combinations(self, annotator):
-        """Test combinations of multiple JSON errors (worst-case production scenarios)."""
-        # Scenario 1: Multiple error types in one response
+        """Test combinations of multiple JSON errors."""
+        # Scenario 1: Multiple error types in one response - will match and fail
         response1 = '''```json
 [
   {"text" "word1", "label" "noun"},
@@ -470,50 +425,23 @@ plus "text":"fox" with "xbar_label":"noun"'''
   {"text": "word4"}
 ]
 ```'''
-        annotations1 = annotator._parse_json_response(response1)
-        assert len(annotations1) >= 0  # Should not crash
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response1)
         
-        # Scenario 2: Deeply malformed structure
+        # Scenario 2: Deeply malformed structure - may not match pattern
         response2 = '''```json
 {"text" "sentence" "label" "clause"}, {"text" "word" "label" "noun"}
 ```'''
-        annotations2 = annotator._parse_json_response(response2)
-        assert len(annotations2) >= 0  # Should not crash
+        # This may not match the array pattern, so returns empty list
+        annotations = annotator._parse_json_response(response2)
+        assert isinstance(annotations, list)
         
-        # Scenario 3: Real production error pattern simulation
+        # Scenario 3: Real production error pattern simulation - will match and fail
         response3 = '''```json
 [{"text":"running","xbar_label""verb"},{"text""quickly","label":"adverb"},{"text":"very","xbar_label":"adverb"}]
 ```'''
-        annotations3 = annotator._parse_json_response(response3)
-        assert len(annotations3) >= 0  # Should not crash
-    
-    def test_fix_malformed_json_specific_patterns(self, annotator):
-        """Test _fix_malformed_json with specific error patterns from production."""
-        # Test Pattern 1: "text" "value" (missing colon)
-        malformed1 = '{"text" "running", "label": "verb"}'
-        fixed1 = annotator._fix_malformed_json(malformed1)
-        assert '"text": "running"' in fixed1
-        
-        # Test Pattern 2: Multiple missing colons
-        malformed2 = '{"text" "word", "label" "noun"}'
-        fixed2 = annotator._fix_malformed_json(malformed2)
-        assert '"text": "word"' in fixed2
-        assert '"label": "noun"' in fixed2
-        
-        # Test Pattern 3: Missing comma between key-value pairs
-        malformed3 = '{"text": "word" "label": "noun"}'
-        fixed3 = annotator._fix_malformed_json(malformed3)
-        assert '"text": "word",' in fixed3 or '}, "' in fixed3
-        
-        # Test Pattern 4: Property names without quotes
-        malformed4 = '{text: "word", label: "noun"}'
-        fixed4 = annotator._fix_malformed_json(malformed4)
-        assert '"text"' in fixed4 and '"label"' in fixed4
-        
-        # Test Pattern 5: Concatenated objects (missing comma between objects)
-        malformed5 = '[{"text":"word1"}{"text":"word2"}]'
-        fixed5 = annotator._fix_malformed_json(malformed5)
-        assert '}, {' in fixed5
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(response3)
     
     def test_parse_spans_from_response_with_json(self, annotator):
         """Test parsing spans from JSON response."""
@@ -926,7 +854,7 @@ class TestAnnotationPipeline:
             assert spans == []
     
     async def test_extract_spans_via_dialogue_truncated_response(self, annotator):
-        """Test handling of truncated LLM responses (the specific issue we fixed)."""
+        """Test handling of truncated LLM responses - should return empty list on JSON errors."""
         with patch('x_spanformer.agents.ollama_client.chat', new_callable=AsyncMock) as mock_chat:
             # Simulate the exact truncated response that caused the pipeline to hang
             mock_chat.return_value = '''```json
@@ -948,18 +876,11 @@ class TestAnnotationPipeline:
                 pretrain_record
             )
             
-        # Should not crash, may recover some data
-        assert isinstance(spans, list)
-        # If it recovers data, check that it's reasonable
-        if len(spans) >= 1:
-            assert hasattr(spans[0], 'text')
-            assert hasattr(spans[0], 'xbar_label')
-            # Only check content if we actually recovered data
-            if spans[0].text:
-                assert spans[0].text in ["The", "ti:j"]  # Could be either recovered item
-                if spans[0].xbar_label:
-                    assert spans[0].xbar_label in ["determiner", ""]  # Could be either    async def test_extract_spans_via_dialogue_various_malformed_responses(self, annotator):
-        """Test handling of various malformed responses we might encounter."""
+        # Should return empty list on JSON parsing error (ValueError caught)
+        assert spans == []
+    
+    async def test_extract_spans_via_dialogue_various_malformed_responses(self, annotator):
+        """Test handling of various malformed responses - should raise ValueError for JSON errors."""
         malformed_responses = [
             # Missing closing bracket
             '''```json
@@ -992,20 +913,22 @@ class TestAnnotationPipeline:
             with patch('x_spanformer.agents.ollama_client.chat', new_callable=AsyncMock) as mock_chat:
                 mock_chat.return_value = malformed_response
                 
-                spans = await annotator._extract_spans_via_dialogue(
-                    "The word test", 
-                    DomainType.NATURAL, 
-                    "word_level",
-                    pretrain_record
-                )
-                
-                # Should recover at least some data or gracefully handle the error
-                # (specific expectations depend on the malformed response type)
-                if i < 3:  # First three should recover some data
-                    assert len(spans) >= 0  # At minimum, no crash
-                    if len(spans) > 0:
-                        assert hasattr(spans[0], 'text')
-                        assert hasattr(spans[0], 'xbar_label')
+                if i == 1 or i == 2:  # Trailing comma and missing quotes will match and fail to parse
+                    with pytest.raises(ValueError):
+                        await annotator._extract_spans_via_dialogue(
+                            "The word test", 
+                            DomainType.NATURAL, 
+                            "word_level",
+                            pretrain_record
+                        )
+                else:  # Others may not match pattern and return empty list
+                    spans = await annotator._extract_spans_via_dialogue(
+                        "The word test", 
+                        DomainType.NATURAL, 
+                        "word_level",
+                        pretrain_record
+                    )
+                    assert spans == []
 
 
 class TestRegressionTests:
@@ -1023,19 +946,16 @@ class TestRegressionTests:
 [{"text":"ti:j"}}
 ```'''
         
-        # Should not hang and should either recover data or return empty list
+        # This may not match any pattern, so returns empty list rather than hanging
         annotations = annotator._parse_json_response(malformed_response)
-        
-        # Key: this should complete quickly and not hang
-        # The exact result is less important than not hanging
-        assert isinstance(annotations, list)  # Should return a list, not hang
+        assert isinstance(annotations, list)  # Should not hang
     
     def test_json_truncation_recovery_patterns(self, annotator):
-        """Test various JSON truncation patterns we might encounter."""
+        """Test various JSON truncation patterns."""
         truncation_patterns = [
             # Object truncated mid-field
             '[{"text":"word","xbar_label":"no',
-            # Array truncated after complete object
+            # Array truncated after complete object  
             '[{"text":"word","xbar_label":"noun"}',
             # Array truncated after incomplete object
             '[{"text":"word"},{"text":"inc',
@@ -1044,17 +964,9 @@ class TestRegressionTests:
         ]
         
         for pattern in truncation_patterns:
+            # These may not match any regex pattern, so return empty list
             annotations = annotator._parse_json_response(f'```json\n{pattern}\n```')
-            
-            # Should recover at least some data or gracefully fail
-            assert isinstance(annotations, list)
-            
-            # For patterns with complete objects, should recover them
-            if '{"text":"word","xbar_label":"noun"}' in pattern:
-                complete_annotations = [a for a in annotations if a.get('text') == 'word']
-                # May or may not recover data depending on truncation severity
-                # Just ensure it doesn't crash
-                assert len(complete_annotations) >= 0
+            assert isinstance(annotations, list)  # Should not crash
     
     def test_case_insensitive_matching_regression(self, annotator):
         """Test that case-insensitive matching works as expected."""
@@ -1104,16 +1016,8 @@ class TestRegressionTests:
         ]
         
         for i, pattern in enumerate(error_patterns):
-            try:
-                annotations = annotator._parse_json_response(pattern)
-                # Should not crash and return a list
-                assert isinstance(annotations, list), f"Pattern {i+1} should return list"
-                
-                # Should attempt to recover some data if possible
-                logger.debug(f"Pattern {i+1} recovered {len(annotations)} annotations")
-                
-            except Exception as e:
-                pytest.fail(f"Pattern {i+1} caused unexpected exception: {e}")
+            with pytest.raises(ValueError):
+                annotator._parse_json_response(pattern)
     
     def test_production_comma_error_patterns_august_2025(self, annotator):
         """Test specific comma delimiter error patterns from August 2025 production logs."""
@@ -1143,15 +1047,8 @@ class TestRegressionTests:
         ]
         
         for i, pattern in enumerate(comma_error_patterns):
-            try:
-                annotations = annotator._parse_json_response(pattern)
-                # Should not crash and return a list
-                assert isinstance(annotations, list), f"Comma pattern {i+1} should return list"
-                
-                logger.debug(f"Comma pattern {i+1} recovered {len(annotations)} annotations")
-                
-            except Exception as e:
-                pytest.fail(f"Comma pattern {i+1} caused unexpected exception: {e}")
+            with pytest.raises(ValueError):
+                annotator._parse_json_response(pattern)
     
     def test_production_property_name_error_patterns_august_2025(self, annotator):
         """Test property name error patterns from August 2025 production logs."""
@@ -1177,15 +1074,12 @@ class TestRegressionTests:
         ]
         
         for i, pattern in enumerate(property_error_patterns):
-            try:
+            if i < 3:  # First three patterns will match and fail to parse
+                with pytest.raises(ValueError):
+                    annotator._parse_json_response(pattern)
+            else:  # Last pattern may not match regex, returns empty list
                 annotations = annotator._parse_json_response(pattern)
-                # Should not crash and return a list
-                assert isinstance(annotations, list), f"Property pattern {i+1} should return list"
-                
-                logger.debug(f"Property pattern {i+1} recovered {len(annotations)} annotations")
-                
-            except Exception as e:
-                pytest.fail(f"Property pattern {i+1} caused unexpected exception: {e}")
+                assert isinstance(annotations, list)
     
     def test_deep_error_line_patterns_august_2025(self, annotator):
         """Test error patterns occurring on deeper lines (line 22, etc.)."""
@@ -1219,20 +1113,8 @@ class TestRegressionTests:
 ```'''
         
         # Test with error on line 22 (column 17, char 937 pattern)
-        try:
-            annotations = annotator._parse_json_response(deep_error_pattern)
-            # Should not crash and should recover the valid annotations
-            assert isinstance(annotations, list)
-            
-            # Should recover some valid annotations before the error
-            valid_annotations = [a for a in annotations if a.get('text', '').startswith('word')]
-            # Lower expectation - may only recover some due to error position
-            assert len(valid_annotations) >= 3, f"Should recover at least some valid annotations before error, got {len(valid_annotations)}"
-            
-            logger.debug(f"Deep error pattern recovered {len(annotations)} annotations")
-            
-        except Exception as e:
-            pytest.fail(f"Deep error pattern caused unexpected exception: {e}")
+        with pytest.raises(ValueError):
+            annotator._parse_json_response(deep_error_pattern)
     
     def test_comprehensive_error_recovery_integration(self, annotator):
         """Integration test with multiple error types in one response (worst case scenario)."""
@@ -1248,27 +1130,9 @@ class TestRegressionTests:
   {malformed incomplete
 ```'''
         
-        try:
-            annotations = annotator._parse_json_response(complex_malformed)
-            
-            # Key requirements:
-            # 1. Should not crash or hang
-            assert isinstance(annotations, list)
-            
-            # 2. Should attempt to recover any parseable data
-            # (even if it's just partial recovery)
-            logger.debug(f"Complex malformed recovered {len(annotations)} annotations")
-            
-            # 3. If any annotations are recovered, they should have basic structure
-            for annotation in annotations:
-                assert isinstance(annotation, dict)
-                # Should have either text or some identifiable field
-                has_useful_field = any(key in annotation for key in ['text', 'label', 'xbar_label', 'class'])
-                if annotation:  # Only check non-empty annotations
-                    assert has_useful_field, f"Annotation {annotation} lacks useful fields"
-            
-        except Exception as e:
-            pytest.fail(f"Complex malformed response caused unexpected exception: {e}")
+        # This may not match any pattern due to malformed structure
+        annotations = annotator._parse_json_response(complex_malformed)
+        assert isinstance(annotations, list)  # Should not crash
     
     def test_multiple_occurrence_handling(self, annotator):
         """Test handling of multiple occurrences of the same text."""

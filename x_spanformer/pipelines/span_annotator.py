@@ -530,6 +530,7 @@ class SpanAnnotatorPipeline:
         # Process sequences individually (sequential processing)
         successful_count = 0
         failed_count = 0
+        skipped_count = 0  # Track sequences skipped due to errors (including JSON parsing)
         session_start_time = datetime.now()
         total_completed_already = len(existing_results)
         
@@ -560,7 +561,7 @@ class SpanAnnotatorPipeline:
                     # Calculate and log progress summary
                     current_time = datetime.now()
                     elapsed_seconds = (current_time - session_start_time).total_seconds()
-                    completed_count = successful_count + failed_count
+                    completed_count = successful_count + failed_count + skipped_count
                     remaining_count = len(sequences_to_process) - completed_count
                     total_completed_overall = total_completed_already + completed_count
                     
@@ -576,7 +577,7 @@ class SpanAnnotatorPipeline:
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_formatted}")
                         logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']} | "
-                                  f"Total errors: {failed_count}")
+                                  f"Skipped: {skipped_count}")
                         logger.info("=" * 80)
                 else:
                     error_msg = result.error_message or "Annotation failed"
@@ -592,7 +593,7 @@ class SpanAnnotatorPipeline:
                     # Calculate and log progress summary
                     current_time = datetime.now()
                     elapsed_seconds = (current_time - session_start_time).total_seconds()
-                    completed_count = successful_count + failed_count
+                    completed_count = successful_count + failed_count + skipped_count
                     remaining_count = len(sequences_to_process) - completed_count
                     total_completed_overall = total_completed_already + completed_count
                     
@@ -608,9 +609,17 @@ class SpanAnnotatorPipeline:
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_formatted}")
                         logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']} | "
-                                  f"Total errors: {failed_count}")
+                                  f"Skipped: {skipped_count}")
                         logger.info("=" * 80)
                     
+            except ValueError as e:
+                # JSON parsing errors - skip sequence without saving working file
+                skipped_count += 1
+                logger.warning(f"SKIPPED: Sequence {seq_id}: {str(e)}")
+                logger.info(f"Sequence {seq_id} will be retried on next pipeline run")
+                # Don't increment failed_count or save working file - just continue to next sequence
+                continue
+                
             except Exception as e:
                 failed_count += 1
                 logger.error(f"ERROR: Sequence {seq_id}: {str(e)}")
@@ -640,17 +649,18 @@ class SpanAnnotatorPipeline:
                               f"Avg: {sequences_per_minute:.1f} seq/min | "
                               f"ETA: {eta_formatted}")
                     logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']} | "
-                              f"Total errors: {failed_count}")
+                              f"Skipped: {skipped_count}")
                     logger.info("=" * 80)
         
         # Update statistics
         self.pipeline_stats["processed_sequences"] = len(sequences_to_process)
         self.pipeline_stats["successful_annotations"] = successful_count
         self.pipeline_stats["failed_annotations"] = failed_count
+        self.pipeline_stats["skipped_annotations"] = skipped_count
         self.pipeline_stats["completed_at"] = datetime.now().isoformat()
         
         # Check if pipeline exited early due to failures
-        processed_count = successful_count + failed_count
+        processed_count = successful_count + failed_count + skipped_count
         if processed_count < len(sequences_to_process):
             remaining_count = len(sequences_to_process) - processed_count
             logger.warning(f"Pipeline exited early: {remaining_count} sequences not processed due to failure limit")
@@ -667,7 +677,7 @@ class SpanAnnotatorPipeline:
         if failed_count >= MAX_TOTAL_FAILURES:
             logger.critical(f"Pipeline terminated due to {failed_count} failures. Failed sequences will be retried on next run.")
         else:
-            logger.info(f"Pipeline completed: {successful_count}/{len(sequences_to_process)} successful")
+            logger.info(f"Pipeline completed: {successful_count} successful, {failed_count} failed, {skipped_count} skipped")
         
         logger.info(f"Results saved to: {output_dir}")
         
