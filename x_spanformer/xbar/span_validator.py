@@ -273,11 +273,11 @@ class SpanCleaner:
         # Group by sequence for repetition checking
         sequence_groups = defaultdict(list)
         for annotation in annotations:
-            sequence_id = annotation.get('sequence_id', 0)
-            sequence_groups[sequence_id].append(annotation)
+            sequence_number = annotation.get('sequence_number', 0)
+            sequence_groups[sequence_number].append(annotation)
         
         # Process each sequence
-        for sequence_id, seq_annotations in sequence_groups.items():
+        for sequence_number, seq_annotations in sequence_groups.items():
             seq_word_counts = defaultdict(Counter)
             
             for annotation in seq_annotations:

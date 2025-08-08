@@ -191,7 +191,7 @@ class SpanAnnotatorPipeline:
         working_file = working_dir / f"sequence-{sequence_id:08d}.json"
         
         working_data = {
-            "sequence_id": sequence_id,
+            "sequence_number": sequence_id,
             "raw_text": sequence.raw,
             "domain_type": getattr(sequence, 'type', 'unknown'),
             "timestamp": datetime.now().isoformat(),

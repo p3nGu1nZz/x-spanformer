@@ -19,7 +19,6 @@ class PretrainRecord(BaseModel):
     
     # New fields for embedding and annotation alignment
     sequence_number: Optional[int] = Field(default=None, description="Sequential position in corpus for embedding lookup")
-    embedding_chunk_id: Optional[int] = Field(default=None, description="Chunk ID containing position-wise embeddings for this sequence")
     embedding_positions: Optional[int] = Field(default=None, description="Number of position-wise embeddings (sequence length)")
 
     model_config = ConfigDict(
@@ -38,7 +37,6 @@ class PretrainRecord(BaseModel):
                     "status": "keep"
                 },
                 "sequence_number": 1,
-                "embedding_chunk_id": 1,
                 "embedding_positions": 44
             }
         }

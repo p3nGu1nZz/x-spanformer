@@ -111,13 +111,13 @@ class TestAnnotationRecord(unittest.TestCase):
         """Test basic annotation record creation."""
         record = AnnotationRecord(
             raw="The quick brown fox",
-            sequence_id=42,
+            sequence_number=42,
             span_annotations=self.sample_annotations,
             total_positions=19
         )
         
         self.assertEqual(record.raw, "The quick brown fox")
-        self.assertEqual(record.sequence_id, 42)
+        self.assertEqual(record.sequence_number, 42)
         self.assertEqual(len(record.span_annotations), 4)
         self.assertEqual(record.total_positions, 19)
     
@@ -125,7 +125,7 @@ class TestAnnotationRecord(unittest.TestCase):
         """Test annotation record with conversation context."""
         record = AnnotationRecord(
             raw="Complex sentence requiring multi-turn analysis.",
-            sequence_id=100,
+            sequence_number=100,
             span_annotations=self.sample_annotations,
             total_positions=47,
             conversation_turns=self.sample_conversation,
@@ -143,7 +143,7 @@ class TestAnnotationRecord(unittest.TestCase):
         """Test annotation record with no spans."""
         record = AnnotationRecord(
             raw="Short.",
-            sequence_id=1,
+            sequence_number=1,
             total_positions=6
         )
         
@@ -155,7 +155,7 @@ class TestAnnotationRecord(unittest.TestCase):
         # Should create successfully
         record = AnnotationRecord(
             raw="Valid text",
-            sequence_id=1,
+            sequence_number=1,
             total_positions=10
         )
         
@@ -168,7 +168,7 @@ class TestAnnotationRecord(unittest.TestCase):
         
         record_with_overlaps = AnnotationRecord(
             raw="Test text",
-            sequence_id=2,
+            sequence_number=2,
             span_annotations=overlapping_spans,
             total_positions=9
         )
@@ -188,7 +188,6 @@ class TestPretrainRecord(unittest.TestCase):
         self.assertIsInstance(record.id, RecordID)
         self.assertIsInstance(record.meta, RecordMeta)
         self.assertIsNone(record.sequence_number)
-        self.assertIsNone(record.embedding_chunk_id)
         self.assertIsNone(record.embedding_positions)
     
     def test_pretrain_record_enhanced(self):
@@ -197,13 +196,11 @@ class TestPretrainRecord(unittest.TestCase):
             raw="The quick brown fox jumps over the lazy dog.",
             type="natural",
             sequence_number=42,
-            embedding_chunk_id=3,
             embedding_positions=44
         )
         
         self.assertEqual(record.type, "natural")
         self.assertEqual(record.sequence_number, 42)
-        self.assertEqual(record.embedding_chunk_id, 3)
         self.assertEqual(record.embedding_positions, 44)
         self.assertEqual(len(record.raw), 44)  # Character count matches
     
@@ -240,7 +237,6 @@ class TestPretrainRecord(unittest.TestCase):
             type="natural",
             meta=meta,
             sequence_number=1,
-            embedding_chunk_id=1,
             embedding_positions=27
         )
         
@@ -253,7 +249,6 @@ class TestPretrainRecord(unittest.TestCase):
             raw="Serialization test sequence.",
             type="natural",
             sequence_number=999,
-            embedding_chunk_id=10,
             embedding_positions=28
         )
         
@@ -272,8 +267,8 @@ class TestPretrainRecord(unittest.TestCase):
 class TestSchemaIntegration(unittest.TestCase):
     """Test integration between annotation and pretrain schemas."""
     
-    def test_sequence_id_alignment(self):
-        """Test that sequence IDs align between pretrain and annotation records."""
+    def test_sequence_number_alignment(self):
+        """Test that sequence numbers align between pretrain and annotation records."""
         # Pretrain record
         pretrain = PretrainRecord(
             raw="Integration test sequence.",
@@ -284,7 +279,7 @@ class TestSchemaIntegration(unittest.TestCase):
         # Corresponding annotation record
         annotation = AnnotationRecord(
             raw=pretrain.raw,
-            sequence_id=pretrain.sequence_number or 123,
+            sequence_number=pretrain.sequence_number or 123,
             span_annotations=[
                 SpanAnnotation(start_pos=0, end_pos=11, xbar_class="NP"),
                 SpanAnnotation(start_pos=12, end_pos=16, xbar_class="N"),
@@ -295,7 +290,7 @@ class TestSchemaIntegration(unittest.TestCase):
         
         # Verify alignment
         self.assertEqual(pretrain.raw, annotation.raw)
-        self.assertEqual(pretrain.sequence_number, annotation.sequence_id)
+        self.assertEqual(pretrain.sequence_number, annotation.sequence_number)
         self.assertEqual(pretrain.embedding_positions, annotation.total_positions)
     
     def test_position_boundary_validation(self):
@@ -311,7 +306,7 @@ class TestSchemaIntegration(unittest.TestCase):
         
         record = AnnotationRecord(
             raw="A" * sequence_length,  # 20 characters
-            sequence_id=1,
+            sequence_number=1,
             span_annotations=valid_annotations,
             total_positions=sequence_length
         )

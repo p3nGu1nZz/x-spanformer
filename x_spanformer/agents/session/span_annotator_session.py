@@ -17,9 +17,8 @@ from enum import Enum
 from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.annotation_record import AnnotationRecord, SpanAnnotation
 from x_spanformer.schema.metadata import RecordMeta
-from x_spanformer.xbar.xbar_annotator import (
-    XBarAnnotator, ModelConfig, DomainType
-)
+from x_spanformer.xbar.xbar_annotator import XBarAnnotator, ModelConfig
+from x_spanformer.xbar.xbar_map import DomainType
 
 # Initialize logger
 logger = logging.getLogger(__name__)

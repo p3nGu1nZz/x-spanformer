@@ -371,7 +371,7 @@ class TestSpanCleaner:
         annotations = [
             {
                 'raw': 'The cat sat.',
-                'sequence_id': 1,
+                'sequence_number': 1,
                 'span_annotation': {
                     'text': 'The',
                     'xbar_class': 'determiner',
@@ -382,7 +382,7 @@ class TestSpanCleaner:
             },
             {
                 'raw': 'The cat sat.',
-                'sequence_id': 1,
+                'sequence_number': 1,
                 'span_annotation': {
                     'text': 'cat',
                     'xbar_class': 'noun',
@@ -408,7 +408,7 @@ class TestSpanCleaner:
             # Valid span
             {
                 'raw': 'The cat sat.',
-                'sequence_id': 1,
+                'sequence_number': 1,
                 'span_annotation': {
                     'text': 'The',
                     'xbar_class': 'determiner',
@@ -420,7 +420,7 @@ class TestSpanCleaner:
             # Invalid: "in" as determiner
             {
                 'raw': 'He walked in the room.',
-                'sequence_id': 2,
+                'sequence_number': 2,
                 'span_annotation': {
                     'text': 'in',
                     'xbar_class': 'determiner',
@@ -432,7 +432,7 @@ class TestSpanCleaner:
             # Invalid: embedded single char
             {
                 'raw': 'The cat sat.',
-                'sequence_id': 3,
+                'sequence_number': 3,
                 'span_annotation': {
                     'text': 'a',
                     'xbar_class': 'determiner',
@@ -465,7 +465,7 @@ class TestSpanCleaner:
         for i in range(7):
             annotations.append({
                 'raw': f'Text with in position {i}',
-                'sequence_id': 1,
+                'sequence_number': 1,
                 'span_annotation': {
                     'text': 'in',
                     'xbar_class': 'preposition',
@@ -491,7 +491,7 @@ class TestSpanCleaner:
         annotations = [
             {
                 'raw': 'Valid span.',
-                'sequence_id': 1,
+                'sequence_number': 1,
                 'span_annotation': {
                     'text': 'Valid',
                     'xbar_class': 'adjective',
@@ -603,7 +603,7 @@ class TestSpanValidatorIntegration:
             # Valid spans
             {
                 'raw': 'The quick brown fox jumps.',
-                'sequence_id': 1,
+                'sequence_number': 1,
                 'span_annotation': {
                     'text': 'The',
                     'xbar_class': 'determiner',
@@ -614,7 +614,7 @@ class TestSpanValidatorIntegration:
             },
             {
                 'raw': 'The quick brown fox jumps.',
-                'sequence_id': 1,
+                'sequence_number': 1,
                 'span_annotation': {
                     'text': 'fox',
                     'xbar_class': 'noun',
@@ -626,7 +626,7 @@ class TestSpanValidatorIntegration:
             # Invalid: "in" as determiner (our main target)
             {
                 'raw': 'They walked in the park.',
-                'sequence_id': 2,
+                'sequence_number': 2,
                 'span_annotation': {
                     'text': 'in',
                     'xbar_class': 'determiner',
@@ -638,7 +638,7 @@ class TestSpanValidatorIntegration:
             # Invalid: embedded character
             {
                 'raw': 'The cats run.',
-                'sequence_id': 3,
+                'sequence_number': 3,
                 'span_annotation': {
                     'text': 'a',
                     'xbar_class': 'determiner',
@@ -650,7 +650,7 @@ class TestSpanValidatorIntegration:
             # Invalid: standalone number
             {
                 'raw': 'Version 3 is new.',
-                'sequence_id': 4,
+                'sequence_number': 4,
                 'span_annotation': {
                     'text': '3',
                     'xbar_class': 'number',

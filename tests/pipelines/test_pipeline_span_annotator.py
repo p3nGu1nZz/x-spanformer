@@ -205,7 +205,7 @@ class TestOutputStructure:
             with open(working_file, 'r') as f:
                 data = json.load(f)
             
-            assert data["sequence_id"] == 1
+            assert data["sequence_number"] == 1
             assert data["raw_text"] == "This is a test sequence."
             assert data["status"] == "failed"
             assert data["error_message"] == "Test error"

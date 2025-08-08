@@ -37,7 +37,7 @@ class AnnotationRecord(BaseModel):
     """
     # Core sequence data
     raw: str = Field(..., description="Original Unicode text sequence")
-    sequence_id: int = Field(..., description="Sequential position in corpus for embedding lookup")
+    sequence_number: int = Field(..., description="Sequential position in corpus for embedding lookup")
     
     # Position-wise span annotations
     span_annotations: List[SpanAnnotation] = Field(default_factory=list, description="List of position-indexed span annotations")
@@ -55,7 +55,7 @@ class AnnotationRecord(BaseModel):
         json_schema_extra = {
             "example": {
                 "raw": "The quick brown fox jumps over the lazy dog.",
-                "sequence_id": 1,
+                "sequence_number": 1,
                 "span_annotations": [
                     {
                         "start_pos": 0,

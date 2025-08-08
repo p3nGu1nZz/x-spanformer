@@ -87,7 +87,7 @@ class TestAnnotationResult(unittest.TestCase):
         )
         
         annotation_record = AnnotationRecord(
-            sequence_id=1,
+            sequence_number=1,
             raw="Test text",
             total_positions=10,
             span_annotations=[span_annotation]
