@@ -110,6 +110,9 @@ class SpanAnnotatorPipeline:
             "started_at": None,
             "completed_at": None
         }
+        
+        # Track failed sequences for priority retry
+        self.failed_sequence_ids = set()
     
     def get_sequence_number(self, sequence: PretrainRecord) -> int:
         """Extract sequence number from PretrainRecord, checking meta field first."""
@@ -182,7 +185,14 @@ class SpanAnnotatorPipeline:
                 if seq_num and seq_num in target_sequence_ids:
                     filtered_sequences.append(seq)
             
+            # Show range-specific message
             logger.info(f"Filtered to {len(filtered_sequences)}/{original_count} sequences")
+            if len(filtered_sequences) == 1:
+                seq_nums = sorted(target_sequence_ids)
+                logger.info(f"Selected sequence {seq_nums[0]}")
+            else:
+                seq_nums = sorted([seq.meta.sequence_number if hasattr(seq.meta, 'sequence_number') else seq.meta.get('sequence_number', '?') for seq in filtered_sequences])
+                logger.info(f"Selected sequences: {seq_nums}")
             sequences = filtered_sequences
         
         return sequences
@@ -206,6 +216,7 @@ class SpanAnnotatorPipeline:
         total_existing_spans = 0
         completed_sequences = 0
         failed_sequences = 0
+        self.failed_sequence_ids = set()  # Track failed sequences for priority retry
         
         for working_file in working_files:
             try:
@@ -222,12 +233,21 @@ class SpanAnnotatorPipeline:
                     completed_sequences += 1
                     existing_results[sequence_number] = status
                 else:
+                    # Track failed sequence for priority retry
+                    self.failed_sequence_ids.add(sequence_number)
                     # Remove working file if no spans - force retry
                     logger.info(f"Removing empty working file for sequence {sequence_number}: {working_file.name}")
                     working_file.unlink()
                     failed_sequences += 1
                 
             except Exception as e:
+                # Extract sequence number from filename for tracking
+                try:
+                    seq_num = int(working_file.stem.split('-')[-1])
+                    self.failed_sequence_ids.add(seq_num)
+                except (ValueError, IndexError):
+                    pass
+                    
                 logger.warning(f"Load error {working_file.name}: {e}")
                 # Remove corrupted working file - force retry
                 logger.info(f"Removing corrupted working file: {working_file.name}")
@@ -245,6 +265,10 @@ class SpanAnnotatorPipeline:
             
             # Update pipeline stats with existing span count
             self.pipeline_stats["total_spans"] = total_existing_spans
+            
+        # Log failed sequences that will be prioritized
+        if hasattr(self, 'failed_sequence_ids') and self.failed_sequence_ids:
+            logger.info(f"Will prioritize retry of {len(self.failed_sequence_ids)} previously failed sequences")
             
         return existing_results
     
@@ -300,27 +324,9 @@ class SpanAnnotatorPipeline:
         working_files = list(working_dir.glob("*.json"))
         logger.info(f"Consolidating {len(working_files)} working files")
         
-        # Define label hierarchy for deduplication (higher value = more specific)
-        label_hierarchy = {
-            # Clause-level (most specific)
-            "main_clause": 3, "subordinate_clause": 3, "relative_clause": 3,
-            "if_statement": 3, "loop_statement": 3, "function_definition": 3,
-            "class_definition": 3, "import_statement": 3, "return_statement": 3,
-            "sentence": 3, "fragment": 3,
-            
-            # Phrase-level (medium specificity)
-            "noun_phrase": 2, "verb_phrase": 2, "adjective_phrase": 2, "adverb_phrase": 2,
-            "prepositional_phrase": 2, "expression": 2, "function_call": 2, "assignment": 2,
-            "parameter_list": 2, "argument_list": 2, "code_block": 2, "documentation_comment": 2,
-            
-            # Word-level (least specific)
-            "noun": 1, "verb": 1, "adjective": 1, "adverb": 1, "preposition": 1,
-            "determiner": 1, "pronoun": 1, "conjunction": 1, "keyword": 1, "identifier": 1,
-            "operator": 1, "literal": 1, "inline_code": 1, "punctuation": 1, "proper_noun": 1
-        }
-        
-        # Collect all valid annotations with deduplication
-        all_annotations = {}  # Key: (sequence_number, start_pos, end_pos, text) -> annotation
+        # Collect all valid annotations preserving overlapping spans and multiple labels
+        # No deduplication - allow multiple spans with different labels for same positions
+        all_annotations = []  # List to preserve all annotations including overlaps
         
         for working_file in sorted(working_files):
             try:
@@ -340,10 +346,7 @@ class SpanAnnotatorPipeline:
                             # Check if the extracted text matches (use exclusive end for extraction)
                             actual_text = raw_text[start_pos:end_pos]
                             if actual_text == expected_text:
-                                # Create deduplication key
-                                dup_key = (data["sequence_number"], start_pos, end_pos, expected_text)
-                                
-                                # Create flattened record with id first (will be set during output)
+                                # Create flattened record - preserve all spans including overlaps
                                 flattened_record = {
                                     "sequence_number": data["sequence_number"],
                                     "raw": data["raw_text"],
@@ -356,22 +359,9 @@ class SpanAnnotatorPipeline:
                                     "timestamp": data["timestamp"]
                                 }
                                 
-                                # Apply deduplication logic
-                                if dup_key in all_annotations:
-                                    # Keep the annotation with higher hierarchy (more specific label)
-                                    existing_label = all_annotations[dup_key]["xbar_label"]
-                                    new_label = span_annotation["xbar_label"]
-                                    
-                                    existing_priority = label_hierarchy.get(existing_label, 0)
-                                    new_priority = label_hierarchy.get(new_label, 0)
-                                    
-                                    if new_priority > existing_priority:
-                                        all_annotations[dup_key] = flattened_record
-                                        logger.debug(f"Updated {existing_label} to {new_label}: '{expected_text[:20]}...'")
-                                    else:
-                                        logger.debug(f"Kept {existing_label} over {new_label}: '{expected_text[:20]}...'")
-                                else:
-                                    all_annotations[dup_key] = flattened_record
+                                # Add all valid spans - no deduplication to preserve overlapping annotations
+                                all_annotations.append(flattened_record)
+                                logger.debug(f"Added {span_annotation['xbar_label']}: '{expected_text[:20]}...' at {start_pos}-{end_pos}")
                             else:
                                 logger.warning(f"Text mismatch seq {data['sequence_number']}: expected '{expected_text}' at {start_pos}-{end_pos}")
                         else:
@@ -380,10 +370,10 @@ class SpanAnnotatorPipeline:
             except Exception as e:
                 logger.warning(f"Consolidation error {working_file.name}: {e}")
         
-        # Write deduplicated annotations to file with unique IDs
+        # Write all annotations to file with unique IDs (preserving overlaps)
         total_annotations = len(all_annotations)
         with open(annotations_file, 'w', encoding='utf-8') as outf:
-            for span_id, annotation in enumerate(all_annotations.values()):
+            for span_id, annotation in enumerate(all_annotations):
                 # Create ordered record with id first
                 ordered_record = {
                     "id": span_id,
@@ -477,18 +467,32 @@ class SpanAnnotatorPipeline:
         # Load existing results for resume (always enabled)
         existing_results = self.load_existing_results(output_dir)
         
-        # Filter sequences to process
+        # Filter sequences to process with priority for previously failed sequences
         sequences_to_process = []
+        failed_sequences_to_retry = []
+        new_sequences_to_process = []
+        
         for seq in sequences:
             # Get sequence number using consistent helper method
             seq_id = self.get_sequence_number(seq)
                     
             if seq_id not in existing_results or existing_results[seq_id] != "completed":
-                sequences_to_process.append(seq)
+                # Prioritize previously failed sequences
+                if hasattr(self, 'failed_sequence_ids') and seq_id in self.failed_sequence_ids:
+                    failed_sequences_to_retry.append(seq)
+                else:
+                    new_sequences_to_process.append(seq)
+        
+        # Process failed sequences first, then new sequences
+        sequences_to_process = failed_sequences_to_retry + new_sequences_to_process
         
         skipped_count = len(sequences) - len(sequences_to_process)
         if skipped_count > 0:
             logger.info(f"Processing {len(sequences_to_process)} sequences (skipped {skipped_count} completed)")
+            if failed_sequences_to_retry:
+                logger.info(f"  - {len(failed_sequences_to_retry)} previously failed sequences (prioritized)")
+            if new_sequences_to_process:
+                logger.info(f"  - {len(new_sequences_to_process)} new sequences")
         else:
             logger.info(f"Processing {len(sequences_to_process)} sequences")
         
@@ -499,6 +503,7 @@ class SpanAnnotatorPipeline:
         # Process sequences individually (sequential processing)
         successful_count = 0
         failed_count = 0
+        skipped_count = 0  # Track sequences skipped due to errors (including JSON parsing)
         session_start_time = datetime.now()
         total_completed_already = len(existing_results)
         
@@ -508,9 +513,10 @@ class SpanAnnotatorPipeline:
             
             # Calculate current position in total sequences (already completed + current position)
             current_position = total_completed_already + i + 1
-            total_sequences = len(sequences)
+            total_sequences_to_process = len(sequences_to_process)
+            total_sequences_overall = self.pipeline_stats["total_sequences"]  # Use the original total from load_sequences
             
-            logger.info(f"Processing {current_position}/{total_sequences}: sequence {seq_id}")
+            logger.info(f"Processing {current_position}/{total_sequences_overall}: sequence {seq_id}")
             
             try:
                 # Annotate single sequence
@@ -529,8 +535,8 @@ class SpanAnnotatorPipeline:
                     # Calculate and log progress summary
                     current_time = datetime.now()
                     elapsed_seconds = (current_time - session_start_time).total_seconds()
-                    completed_count = successful_count + failed_count
-                    remaining_count = len(sequences_to_process) - completed_count
+                    completed_count = successful_count + failed_count  # Exclude skipped_count from ETA calculation
+                    remaining_count = len(sequences_to_process) - completed_count  # Skipped sequences still need to be processed
                     total_completed_overall = total_completed_already + completed_count
                     
                     if completed_count > 0 and elapsed_seconds > 0:
@@ -541,10 +547,11 @@ class SpanAnnotatorPipeline:
                         eta_formatted = format_eta_time(eta_minutes)
                         
                         logger.info("=" * 80)
-                        logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
+                        logger.info(f"{total_completed_overall}/{total_sequences_overall} sequences completed | "
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_formatted}")
-                        logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']}")
+                        logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']} | "
+                                  f"Skipped: {skipped_count}")
                         logger.info("=" * 80)
                 else:
                     error_msg = result.error_message or "Annotation failed"
@@ -560,8 +567,8 @@ class SpanAnnotatorPipeline:
                     # Calculate and log progress summary
                     current_time = datetime.now()
                     elapsed_seconds = (current_time - session_start_time).total_seconds()
-                    completed_count = successful_count + failed_count
-                    remaining_count = len(sequences_to_process) - completed_count
+                    completed_count = successful_count + failed_count  # Exclude skipped_count from ETA calculation
+                    remaining_count = len(sequences_to_process) - completed_count  # Skipped sequences still need to be processed
                     total_completed_overall = total_completed_already + completed_count
                     
                     if completed_count > 0 and elapsed_seconds > 0:
@@ -572,12 +579,21 @@ class SpanAnnotatorPipeline:
                         eta_formatted = format_eta_time(eta_minutes)
                         
                         logger.info("=" * 80)
-                        logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
+                        logger.info(f"{total_completed_overall}/{total_sequences_overall} sequences completed | "
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_formatted}")
-                        logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']}")
+                        logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']} | "
+                                  f"Skipped: {skipped_count}")
                         logger.info("=" * 80)
                     
+            except ValueError as e:
+                # JSON parsing errors - skip sequence without saving working file
+                skipped_count += 1
+                logger.warning(f"SKIPPED: Sequence {seq_id}: {str(e)}")
+                logger.info(f"Sequence {seq_id} will be retried on next pipeline run")
+                # Don't increment failed_count or save working file - just continue to next sequence
+                continue
+                
             except Exception as e:
                 failed_count += 1
                 logger.error(f"ERROR: Sequence {seq_id}: {str(e)}")
@@ -603,20 +619,22 @@ class SpanAnnotatorPipeline:
                     eta_formatted = format_eta_time(eta_minutes)
                     
                     logger.info("=" * 80)
-                    logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
+                    logger.info(f"{total_completed_overall}/{total_sequences_overall} sequences completed | "
                               f"Avg: {sequences_per_minute:.1f} seq/min | "
                               f"ETA: {eta_formatted}")
-                    logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']}")
+                    logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']} | "
+                              f"Skipped: {skipped_count}")
                     logger.info("=" * 80)
         
         # Update statistics
         self.pipeline_stats["processed_sequences"] = len(sequences_to_process)
         self.pipeline_stats["successful_annotations"] = successful_count
         self.pipeline_stats["failed_annotations"] = failed_count
+        self.pipeline_stats["skipped_annotations"] = skipped_count
         self.pipeline_stats["completed_at"] = datetime.now().isoformat()
         
         # Check if pipeline exited early due to failures
-        processed_count = successful_count + failed_count
+        processed_count = successful_count + failed_count + skipped_count
         if processed_count < len(sequences_to_process):
             remaining_count = len(sequences_to_process) - processed_count
             logger.warning(f"Pipeline exited early: {remaining_count} sequences not processed due to failure limit")
@@ -633,7 +651,7 @@ class SpanAnnotatorPipeline:
         if failed_count >= MAX_TOTAL_FAILURES:
             logger.critical(f"Pipeline terminated due to {failed_count} failures. Failed sequences will be retried on next run.")
         else:
-            logger.info(f"Pipeline completed: {successful_count}/{len(sequences_to_process)} successful")
+            logger.info(f"Pipeline completed: {successful_count} successful, {failed_count} failed, {skipped_count} skipped")
         
         logger.info(f"Results saved to: {output_dir}")
         
@@ -712,11 +730,19 @@ async def main():
         logger.info(f"Processed: {stats['processed_sequences']}")
         logger.info(f"Successful: {stats['successful_annotations']}")
         logger.info(f"Failed: {stats['failed_annotations']}")
+        logger.info(f"Skipped: {stats.get('skipped_annotations', 0)}")
         
-        session_stats = pipeline.session.get_statistics()
-        logger.info(f"Total spans: {session_stats.get('total_spans', 0)}")
-        logger.info(f"Success rate: {session_stats.get('success_rate', 0):.2%}")
-        logger.info(f"Avg spans/sequence: {session_stats.get('avg_spans_per_sequence', 0):.1f}")
+        # Calculate success rate and other metrics from pipeline stats
+        total_spans = stats.get('total_spans', 0)
+        successful_sequences = stats['successful_annotations']
+        total_processed = stats['processed_sequences']
+        
+        success_rate = (successful_sequences / total_processed) if total_processed > 0 else 0
+        avg_spans = (total_spans / successful_sequences) if successful_sequences > 0 else 0
+        
+        logger.info(f"Total spans: {total_spans}")
+        logger.info(f"Success rate: {success_rate:.2%}")
+        logger.info(f"Avg spans/sequence: {avg_spans:.1f}")
         
         logger.info(f"Results: {args.output}")
         logger.info(f"Working files: {args.output / 'working'}")
