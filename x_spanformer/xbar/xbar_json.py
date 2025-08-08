@@ -87,46 +87,43 @@ class XBarJsonParser:
         Extract annotations using regex patterns when JSON parsing fails.
         
         This handles cases where the LLM generates valid-looking JSON that's actually
-        broken due to unescaped quotes or other issues.
+        broken due to unescaped quotes or other issues. The key is to extract the
+        text content exactly as the LLM intended, preserving quotes and special characters.
         """
         annotations = []
         
-        # Pattern to match individual JSON objects with text and xbar_label
-        # This is more forgiving than strict JSON parsing
-        patterns = [
-            # Standard format: {"text":"...", "xbar_label":"..."}
-            r'\{\s*"text"\s*:\s*"([^"]+)"\s*,\s*"xbar_label"\s*:\s*"([^"]+)"\s*\}',
+        # Pattern to extract complete JSON-like objects, being flexible about quote handling
+        # This captures the full object structure and extracts fields separately
+        
+        # Primary pattern: match complete objects with text and xbar_label
+        object_patterns = [
+            # Standard order: {"text":"...", "xbar_label":"..."}
+            r'\{\s*"text"\s*:\s*"([^"]*(?:"[^"]*)*?)"\s*,\s*"xbar_label"\s*:\s*"([^"]+)"\s*\}',
             
-            # Handle quotes in text: {"text":"word with "quotes"", "xbar_label":"label"}
-            # Extract everything between "text":" and ", "xbar_label"
-            r'\{\s*"text"\s*:\s*"([^"]*(?:"[^"]*"[^"]*)*?)"\s*,\s*"xbar_label"\s*:\s*"([^"]+)"\s*\}',
-            
-            # More flexible pattern that handles various whitespace and formatting
-            r'\{\s*["\']?text["\']?\s*:\s*["\']([^"\']*(?:["\'][^"\']*["\'][^"\']*)*?)["\']?\s*,\s*["\']?xbar_label["\']?\s*:\s*["\']([^"\']+)["\']?\s*\}',
-            
-            # Handle reversed order: {"xbar_label":"...", "text":"..."}
-            r'\{\s*"xbar_label"\s*:\s*"([^"]+)"\s*,\s*"text"\s*:\s*"([^"]+)"\s*\}',
+            # Reversed order: {"xbar_label":"...", "text":"..."}  
+            r'\{\s*"xbar_label"\s*:\s*"([^"]+)"\s*,\s*"text"\s*:\s*"([^"]*(?:"[^"]*)*?)"\s*\}',
         ]
         
-        for pattern in patterns:
-            matches = re.findall(pattern, response, re.DOTALL | re.IGNORECASE)
+        for pattern in object_patterns:
+            matches = re.findall(pattern, response, re.DOTALL)
             for match in matches:
                 if len(match) == 2:
-                    if 'xbar_label' in pattern and pattern.index('xbar_label') < pattern.index('text'):
-                        # Reversed order pattern
-                        xbar_label, text = match
+                    # Check if this is the reversed pattern
+                    if '"xbar_label"' in pattern and pattern.index('"xbar_label"') < pattern.index('"text"'):
+                        # Reversed order: (label, text)
+                        label, text = match
                     else:
-                        # Normal order pattern
-                        text, xbar_label = match
+                        # Normal order: (text, label)
+                        text, label = match
                     
-                    # Clean up extracted text and label
-                    text = text.strip().strip('"\'')
-                    xbar_label = xbar_label.strip().strip('"\'')
+                    # Clean up the extracted content
+                    text = text.strip()
+                    label = label.strip()
                     
-                    if text and xbar_label:
+                    if text and label:
                         annotations.append({
                             'text': text,
-                            'xbar_label': xbar_label
+                            'xbar_label': label
                         })
         
         return annotations
@@ -143,28 +140,23 @@ class XBarJsonParser:
         return unique_annotations
     
     def _clean_malformed_json(self, response: str) -> str:
-        """Clean common LLM-generated JSON malformations."""
+        """
+        Clean common LLM-generated JSON malformations.
+        
+        Focus on simple, reliable fixes that don't over-process the text.
+        The goal is to make the JSON parseable while preserving the original text content.
+        """
         cleaned = response
         
-        # Fix the specific pattern we're seeing: {"text","word1","word2",...,"}"xbar_label:"label"}
-        # This appears to be the LLM mixing up JSON structure and trying to put multiple values in the text field
-        malformed_pattern = r'\{"text","([^"]+(?:","[^"]+)*)","\}"xbar_label:"([^"]+)"\}'
+        # Remove any obvious formatting issues
+        cleaned = cleaned.strip()
         
-        def fix_malformed_entry(match):
-            text_parts = match.group(1).split('","')
-            # Join all text parts with spaces
-            combined_text = ' '.join(text_parts)
-            label = match.group(2)
-            # Return properly formatted JSON object
-            return f'{{"text":"{combined_text}","xbar_label":"{label}"}}'
+        # Fix common trailing comma issues
+        cleaned = re.sub(r',\s*}', '}', cleaned)
+        cleaned = re.sub(r',\s*]', ']', cleaned)
         
-        cleaned = re.sub(malformed_pattern, fix_malformed_entry, cleaned)
-        
-        # Fix missing quotes around property names
-        cleaned = re.sub(r'\b(\w+):', r'"\1":', cleaned)
-        
-        # Fix trailing commas in arrays/objects
-        cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
+        # Fix missing commas between objects
+        cleaned = re.sub(r'}\s*{', '},{', cleaned)
         
         return cleaned
     
