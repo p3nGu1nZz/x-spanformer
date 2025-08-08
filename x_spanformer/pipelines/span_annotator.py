@@ -110,6 +110,9 @@ class SpanAnnotatorPipeline:
             "started_at": None,
             "completed_at": None
         }
+        
+        # Track failed sequences for priority retry
+        self.failed_sequence_ids = set()
     
     def get_sequence_number(self, sequence: PretrainRecord) -> int:
         """Extract sequence number from PretrainRecord, checking meta field first."""
@@ -206,6 +209,7 @@ class SpanAnnotatorPipeline:
         total_existing_spans = 0
         completed_sequences = 0
         failed_sequences = 0
+        self.failed_sequence_ids = set()  # Track failed sequences for priority retry
         
         for working_file in working_files:
             try:
@@ -222,12 +226,21 @@ class SpanAnnotatorPipeline:
                     completed_sequences += 1
                     existing_results[sequence_number] = status
                 else:
+                    # Track failed sequence for priority retry
+                    self.failed_sequence_ids.add(sequence_number)
                     # Remove working file if no spans - force retry
                     logger.info(f"Removing empty working file for sequence {sequence_number}: {working_file.name}")
                     working_file.unlink()
                     failed_sequences += 1
                 
             except Exception as e:
+                # Extract sequence number from filename for tracking
+                try:
+                    seq_num = int(working_file.stem.split('-')[-1])
+                    self.failed_sequence_ids.add(seq_num)
+                except (ValueError, IndexError):
+                    pass
+                    
                 logger.warning(f"Load error {working_file.name}: {e}")
                 # Remove corrupted working file - force retry
                 logger.info(f"Removing corrupted working file: {working_file.name}")
@@ -245,6 +258,10 @@ class SpanAnnotatorPipeline:
             
             # Update pipeline stats with existing span count
             self.pipeline_stats["total_spans"] = total_existing_spans
+            
+        # Log failed sequences that will be prioritized
+        if hasattr(self, 'failed_sequence_ids') and self.failed_sequence_ids:
+            logger.info(f"Will prioritize retry of {len(self.failed_sequence_ids)} previously failed sequences")
             
         return existing_results
     
@@ -477,18 +494,32 @@ class SpanAnnotatorPipeline:
         # Load existing results for resume (always enabled)
         existing_results = self.load_existing_results(output_dir)
         
-        # Filter sequences to process
+        # Filter sequences to process with priority for previously failed sequences
         sequences_to_process = []
+        failed_sequences_to_retry = []
+        new_sequences_to_process = []
+        
         for seq in sequences:
             # Get sequence number using consistent helper method
             seq_id = self.get_sequence_number(seq)
                     
             if seq_id not in existing_results or existing_results[seq_id] != "completed":
-                sequences_to_process.append(seq)
+                # Prioritize previously failed sequences
+                if hasattr(self, 'failed_sequence_ids') and seq_id in self.failed_sequence_ids:
+                    failed_sequences_to_retry.append(seq)
+                else:
+                    new_sequences_to_process.append(seq)
+        
+        # Process failed sequences first, then new sequences
+        sequences_to_process = failed_sequences_to_retry + new_sequences_to_process
         
         skipped_count = len(sequences) - len(sequences_to_process)
         if skipped_count > 0:
             logger.info(f"Processing {len(sequences_to_process)} sequences (skipped {skipped_count} completed)")
+            if failed_sequences_to_retry:
+                logger.info(f"  - {len(failed_sequences_to_retry)} previously failed sequences (prioritized)")
+            if new_sequences_to_process:
+                logger.info(f"  - {len(new_sequences_to_process)} new sequences")
         else:
             logger.info(f"Processing {len(sequences_to_process)} sequences")
         

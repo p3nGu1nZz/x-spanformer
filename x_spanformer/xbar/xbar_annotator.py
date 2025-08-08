@@ -395,7 +395,7 @@ Use these labels: {", ".join(label_names)}"""
     
     def _parse_json_response(self, response: str) -> List[Dict[str, Any]]:
         """
-        Parse and validate JSON response from LLM with optimized error recovery.
+        Parse and validate JSON response from LLM with optimized performance.
         
         Args:
             response: Raw response string from LLM
@@ -404,70 +404,39 @@ Use these labels: {", ".join(label_names)}"""
             List of parsed annotation dictionaries
         """
         annotations = []
-        
-        # FAST PATH: Check for truncated responses and handle immediately
         response_stripped = response.strip()
-        if response_stripped.endswith(('"}', '"}}', '"]')) and not response_stripped.endswith(']}'):
-            logger.warning("Detected truncated response - attempting recovery")
-            # For truncated responses, immediately fall back to regex extraction
-            # This prevents the expensive JSON fixing loops
-            regex_annotations = self._recover_malformed_json(response_stripped)
-            if regex_annotations:
-                logger.debug(f"Recovered {len(regex_annotations)} annotations via regex fallback")
-                # Apply the same deduplication logic as used at the end of this method
-                seen_annotations = set()
-                unique_annotations = []
-                for annotation in regex_annotations:
-                    if isinstance(annotation, dict):
-                        text = annotation.get('text', '') or ''
-                        xbar_label = annotation.get('xbar_label', '') or ''
-                        key = (text.strip(), xbar_label.strip())
-                        if key not in seen_annotations and text.strip() and xbar_label.strip():
-                            seen_annotations.add(key)
-                            unique_annotations.append(annotation)
-                return unique_annotations
-            # If regex fails, continue with limited attempts below
         
-        # Try to extract JSON from response with streamlined patterns
+        # PERFORMANCE: Early exit for empty responses
+        if not response_stripped:
+            return []
+        
+        # FAST PATH: Try standard JSON patterns with immediate parsing
         json_patterns = [
             r'```json\s*(\[.*?\])\s*```',       # JSON code block with array (highest priority)
             r'```\s*(\[.*?\])\s*```',           # Generic code block with array
             r'(\[(?:\s*\{[^}]*\},?\s*)*\])',    # JSON arrays with objects
         ]
         
-        # Streamlined processing with early termination
-        successful_parse = False
-        max_attempts = 3  # Reduced from 5 to prevent expensive processing
-        attempts = 0
-        
+        # PERFORMANCE: Single pass through patterns with immediate success termination
         for pattern in json_patterns:
-            if successful_parse or attempts >= max_attempts:
-                break
-                
             matches = re.findall(pattern, response, re.DOTALL | re.MULTILINE)
             for match in matches:
-                attempts += 1
-                if attempts >= max_attempts:
-                    logger.debug(f"Hit attempt limit ({max_attempts}), stopping JSON recovery")
-                    break
-                
                 try:
-                    # Try direct parsing first
+                    # PERFORMANCE: Try direct parsing first - this should work for valid JSON
                     parsed_data = json.loads(match)
                     if isinstance(parsed_data, list):
                         annotations.extend(parsed_data)
-                        successful_parse = True
                     elif isinstance(parsed_data, dict):
                         annotations.append(parsed_data)
-                    logger.debug(f"Successfully parsed JSON directly")
+                    logger.debug(f"Successfully parsed {len(annotations)} annotations directly")
+                    # PERFORMANCE: Exit immediately on successful parse
                     break
                     
                 except json.JSONDecodeError as e:
                     logger.debug(f"JSON parsing failed: {e}")
-                    logger.debug(f"Problematic JSON snippet: {match[:100]}...")
                     
-                    # ONLY attempt fix for clearly recoverable patterns
-                    if len(match) < 1000 and self._is_recoverable_json_error(e, match):
+                    # PERFORMANCE: Only attempt recovery for small, clearly fixable JSON
+                    if len(match) < 500 and self._is_simple_recoverable_error(e, match):
                         try:
                             fixed_json = self._fix_malformed_json(match)
                             parsed_data = json.loads(fixed_json)
@@ -476,21 +445,21 @@ Use these labels: {", ".join(label_names)}"""
                             elif isinstance(parsed_data, dict):
                                 annotations.append(parsed_data)
                             logger.debug("JSON fix successful")
-                            successful_parse = True
                             break
                         except json.JSONDecodeError:
-                            logger.debug("JSON fix failed, trying regex recovery")
-                            # Last resort: regex extraction
-                            recovered_annotations = self._recover_malformed_json(match)
-                            if recovered_annotations:
-                                logger.debug(f"Recovered {len(recovered_annotations)} annotations via regex")
-                                annotations.extend(recovered_annotations)
-                                successful_parse = True
-                                break
-                        recovered_annotations = self._recover_malformed_json(match)
-                        if recovered_annotations:
-                            logger.debug(f"Recovered {len(recovered_annotations)} annotations via regex")
-                            annotations.extend(recovered_annotations)
+                            logger.debug("JSON fix failed, skipping expensive recovery")
+                            continue
+            
+            # PERFORMANCE: Exit early if we found annotations
+            if annotations:
+                break
+        
+        # PERFORMANCE: Only use regex recovery as last resort for small responses
+        if not annotations and len(response_stripped) < 1000:
+            logger.debug("Attempting regex recovery as last resort")
+            recovered_annotations = self._recover_malformed_json(response_stripped)
+            if recovered_annotations:
+                annotations.extend(recovered_annotations)
         
         # Deduplicate annotations based on key fields
         seen_annotations = set()
@@ -535,6 +504,32 @@ Use these labels: {", ".join(label_names)}"""
         
         logger.debug(f"Parsed {len(unique_annotations)} unique annotations from {len(annotations)} total found")
         return unique_annotations
+    
+    def _is_simple_recoverable_error(self, error: json.JSONDecodeError, json_str: str) -> bool:
+        """
+        Quick check for simple recoverable JSON errors without expensive operations.
+        
+        Args:
+            error: JSON decode error
+            json_str: The malformed JSON string
+            
+        Returns:
+            True if error appears easily recoverable, False otherwise
+        """
+        # Only handle clearly recoverable error types
+        simple_errors = [
+            "Expecting ':' delimiter",      # Missing colon after property name
+            "Expecting ',' delimiter",      # Missing comma between properties
+            "Expecting property name",      # Missing quotes around property names
+        ]
+        
+        # Quick check for error message
+        for simple_error in simple_errors:
+            if simple_error in error.msg:
+                return True
+        
+        # Quick check for expected field names in content
+        return any(field in json_str for field in ['"text"', '"xbar_label"', '"label"'])
     
     def _is_recoverable_json_error(self, error_or_json: Union[json.JSONDecodeError, str], json_str: Optional[str] = None) -> bool:
         """
@@ -596,157 +591,51 @@ Use these labels: {", ".join(label_names)}"""
     
     def _fix_malformed_json(self, json_str: str) -> str:
         """
-        Fix common JSON formatting issues with comprehensive pattern matching.
+        Fix common JSON formatting issues with simplified, robust pattern matching.
         
-        This method implements the error recovery patterns identified from production
-        logs and validated through our comprehensive test suite.
+        This method fixes the most common JSON errors encountered in production
+        without getting into expensive or error-prone complex pattern matching.
+        
+        Args:
+            json_str: Malformed JSON string
+            
+        Returns:
+            Fixed JSON string
         """
-        original_str = json_str
-        
-        # Early return for already valid JSON or hopeless cases
         if not json_str.strip():
             return json_str
-            
-        # Handle truncated JSON - if it ends with incomplete objects
-        if json_str.strip().endswith(('"}', '"}}')):
-            if not json_str.strip().endswith((']}', ')]')):
-                # Try to close incomplete arrays
-                json_str = json_str.strip() + ']'
         
-        # Handle incomplete object at end
-        if json_str.strip().endswith(','):
-            json_str = json_str.strip()[:-1]  # Remove trailing comma
+        # Start with the original string
+        fixed = json_str.strip()
         
-        # Remove trailing commas before closing brackets
-        json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
+        # Fix 1: Remove trailing commas (most common issue)
+        fixed = re.sub(r',\s*([}\]])', r'\1', fixed)
         
-        # CRITICAL FIX: Handle the specific production error pattern
-        # {"text","xbar_label":"literal"} - missing colon after "text"
-        # This is the exact pattern causing the repetitive failures in production
+        # Fix 2: Add missing colons after common field names
+        # "text" "value" -> "text": "value"
+        fixed = re.sub(r'"(text|xbar_label|label|class)"\s+"([^"]*)"', r'"\1": "\2"', fixed)
         
-        # Pattern 0: Convert null values to empty strings to prevent NoneType errors
-        # "xbar_label":null -> "xbar_label":""
-        json_str = re.sub(r'"(text|label|xbar_label|xbar_class|class)"\s*:\s*null\b', r'"\1": ""', json_str)
+        # Fix 3: Add missing commas between key-value pairs
+        # "key": "value" "key2" -> "key": "value", "key2"
+        fixed = re.sub(r'"\s+"([^"]+)"\s*:', r'", "\1":', fixed)
         
-        # Pattern 1: Fix missing colon after "text" specifically
-        # {"text","xbar_label":"value"} -> {"text":"","xbar_label":"value"}
-        json_str = re.sub(r'\{"text",', r'{"text":"",', json_str)
+        # Fix 4: Add missing commas between objects
+        # }{  -> }, {
+        fixed = re.sub(r'}\s*{', '}, {', fixed)
         
-        # Pattern 2: Fix specific missing colon after known field names
-        # Only target known field names that should have colons
-        json_str = re.sub(r'"(text|label|xbar_label|xbar_class|class|start|end|start_pos|end_pos)"\s*,\s*"([^"]+)"\s*:', r'"\1":"", "\2":', json_str)
+        # Fix 5: Add quotes around unquoted property names
+        # {text: "value"} -> {"text": "value"}
+        fixed = re.sub(r'(?<=[\{\s,])(\w+)(?=\s*:)', r'"\1"', fixed)
         
-        # Pattern 3: Standard missing colon patterns
-        # "text" "value" -> "text": "value" (most common)
-        json_str = re.sub(r'"(text|label|xbar_label|xbar_class|class|start|end|start_pos|end_pos)"\s+"([^"]*)"', r'"\1": "\2"', json_str)
+        # Fix 6: Try to close incomplete arrays if needed
+        if '[' in fixed and not fixed.strip().endswith(']'):
+            if fixed.strip().endswith(('}', '"')):
+                fixed = fixed.strip() + ']'
         
-        # Pattern 4: More general quoted field followed by quoted value
-        json_str = re.sub(r'"([^"]+)"\s+"([^"]*)"(?=\s*[,}\]])', r'"\1": "\2"', json_str)
+        # Fix 7: Handle null values
+        fixed = re.sub(r':\s*null\b', r': ""', fixed)
         
-        # Pattern 5: Unquoted field names followed by quoted values
-        json_str = re.sub(r'(\w+)\s+"([^"]*)"', r'"\1": "\2"', json_str)
-        
-        # Pattern 6: Handle multiple missing colons in sequence
-        # "text" "value", "label" "type" -> "text": "value", "label": "type"
-        json_str = re.sub(r'"([^"]+)"\s+"([^"]*)",\s*"([^"]+)"\s+"([^"]*)"', r'"\1": "\2", "\3": "\4"', json_str)
-        
-        # ENHANCED: Fix missing commas between key-value pairs
-        
-        # Pattern 7: "key": "value" "key2": "value2" -> "key": "value", "key2": "value2"
-        json_str = re.sub(r'"\s+"([^"]+)"\s*:', r'", "\1":', json_str)
-        
-        # Pattern 8: Missing comma between objects in arrays
-        json_str = re.sub(r'}\s*{', '}, {', json_str)
-        
-        # Pattern 9: Missing comma after string values before next field
-        # "value" "field": -> "value", "field":
-        json_str = re.sub(r'"\s+"([^"]+)"\s*:', r'", "\1":', json_str)
-        
-        # ENHANCED: Fix property name issues
-        
-        # Pattern 10: Missing quotes around property names (only at start of line or after {,)
-        # Avoid matching inside quoted strings by requiring word boundaries
-        json_str = re.sub(r'(?<=[\{\s,])(\w+)(?=\s*:)', r'"\1"', json_str)
-        
-        # Pattern 11: Fix incomplete objects and arrays
-        
-        # Handle cases where opening brace/bracket exists but object is malformed
-        if '{' in json_str and '}' not in json_str:
-            # Try to complete the object
-            if '"' in json_str:
-                json_str += '"}'
-            else:
-                json_str += '}'
-                
-        if '[' in json_str and ']' not in json_str:
-            # Try to complete the array
-            json_str += ']'
-        
-        # Pattern 12: Fix extra data issues - remove text after valid JSON
-        # Look for pattern like: [{"text":"word"}] extra text
-        # Use greedy matching to get the full array content
-        match = re.search(r'(\[.*\]|\{.*\})', json_str, re.DOTALL)
-        if match:
-            potential_json = match.group(1)
-            try:
-                # Test if this parses successfully
-                import json
-                json.loads(potential_json)
-                json_str = potential_json  # Use only the valid JSON part
-            except:
-                pass  # Continue with other fixes
-        
-        # Pattern 13: Fix quotes around string values when missing
-        # "field": value -> "field": "value" (where value isn't a number/boolean)
-        json_str = re.sub(r'"([^"]+)":\s*([^",\s{}\[\]]+)(?=[,}\]])', r'"\1": "\2"', json_str)
-        
-        # PRODUCTION FIX: Handle specific error patterns with simple string replacements
-        # These are the exact patterns that cause failures in production logs
-        
-        # Pattern 1: Missing comma before field name
-        json_str = json_str.replace('"y())"xbar_label":"inline_code"', '"y())","xbar_label":"inline_code"')
-        json_str = json_str.replace('")}i""xbar_label":"identifier"', '")}i","xbar_label":"identifier"')
-        
-        # Pattern 2: Missing quotes around field value  
-        json_str = json_str.replace('"den"xbar_label:"noun"', '"den","xbar_label":"noun"')
-        
-        # Pattern 3: General case - missing comma before xbar_label (conservative approach)
-        # Only fix when we see the exact pattern: "text"xbar_label
-        lines = json_str.split('\n')
-        fixed_lines = []
-        for line in lines:
-            if '"xbar_label' in line and not '","xbar_label' in line and not '": "' in line.split('"xbar_label')[0][-10:]:
-                # This line has the malformed pattern
-                line = re.sub(r'"([^"]+)"xbar_label', r'"\1","xbar_label', line)
-            fixed_lines.append(line)
-        json_str = '\n'.join(fixed_lines)
-        
-        # Pattern 15: Fix concatenated JSON objects
-        # {"text":"word"}{"label":"noun"} -> {"text":"word","label":"noun"}
-        json_str = re.sub(r'}\s*{', ',', json_str)
-        
-        # Pattern 16: Remove malformed objects with punctuation as keys
-        # {",":{}}, -> (remove completely)
-        # {".":{}}  -> (remove completely)
-        json_str = re.sub(r'\{\s*"[^\w]"\s*:\s*\{\s*\}\s*\}\s*,?\s*', '', json_str)
-        
-        # Pattern 17: Fix malformed key-value pairs where key is punctuation
-        # {"text":"value", ",": {}, "label":"type"} -> {"text":"value", "label":"type"}
-        json_str = re.sub(r',\s*"[^\w]"\s*:\s*[^,}\]]+\s*,?', ',', json_str)
-        
-        # Pattern 18: Clean up multiple consecutive commas
-        json_str = re.sub(r',\s*,+', ',', json_str)
-        
-        # Pattern 19: Clean up leading commas in arrays/objects
-        json_str = re.sub(r'([\[\{])\s*,', r'\1', json_str)
-        
-        # If we made changes, log for debugging (but limit log size)
-        if original_str != json_str and len(original_str) < 200:
-            logger.debug(f"JSON transformation: {original_str} -> {json_str}")
-        elif original_str != json_str:
-            logger.debug(f"JSON transformation: {original_str[:50]}... -> {json_str[:50]}...")
-        
-        return json_str
+        return fixed
     
     def _recover_malformed_json(self, malformed_str: str) -> List[Dict[str, Any]]:
         """
