@@ -34,7 +34,7 @@ class XBarJsonParser:
         # Pre-process response to fix common LLM JSON generation errors
         response_cleaned = self._clean_malformed_json(response_stripped)
         
-        # JSON extraction patterns
+        # JSON extraction patterns - try multiple approaches
         patterns = [
             r'```json\s*(\[.*?\])\s*```',        # JSON array in code block
             r'```json\s*(\{.*?\})\s*```',        # JSON object in code block
@@ -44,6 +44,7 @@ class XBarJsonParser:
             r'(\{[^{}]*"text"[^{}]*"xbar_label"[^{}]*\})',  # Simple object pattern with required fields
         ]
         
+        # Try standard JSON parsing first
         for pattern in patterns:
             for match in re.findall(pattern, response_cleaned, re.DOTALL):
                 try:
@@ -57,14 +58,89 @@ class XBarJsonParser:
                         continue
                         
                     logger.debug(f"Successfully parsed {len(annotations)} annotations")
-                    return self.filter_valid_annotations(annotations)
+                    filtered_annotations = self.filter_valid_annotations(annotations)
+                    # Remove duplicates at JSON parse level before passing to annotator
+                    deduplicated_annotations = self._remove_duplicates(filtered_annotations)
+                    logger.debug(f"Removed {len(filtered_annotations) - len(deduplicated_annotations)} duplicates at JSON parse level")
+                    return deduplicated_annotations
                     
                 except json.JSONDecodeError as e:
                     logger.warning(f"JSON parsing failed for match '{match[:100]}...': {e}")
                     continue
         
+        # If standard JSON parsing fails, try regex-based extraction
+        # This handles cases where quotes inside text break JSON structure
+        logger.debug("Standard JSON parsing failed, trying regex extraction")
+        annotations = self._extract_annotations_with_regex(response_stripped)
+        if annotations:
+            logger.debug(f"Regex extraction found {len(annotations)} annotations")
+            filtered_annotations = self.filter_valid_annotations(annotations)
+            deduplicated_annotations = self._remove_duplicates(filtered_annotations)
+            logger.debug(f"Removed {len(filtered_annotations) - len(deduplicated_annotations)} duplicates at JSON parse level")
+            return deduplicated_annotations
+        
         logger.warning("No valid JSON found in response, skipping sequence")
         return []
+    
+    def _extract_annotations_with_regex(self, response: str) -> List[Dict[str, Any]]:
+        """
+        Extract annotations using regex patterns when JSON parsing fails.
+        
+        This handles cases where the LLM generates valid-looking JSON that's actually
+        broken due to unescaped quotes or other issues.
+        """
+        annotations = []
+        
+        # Pattern to match individual JSON objects with text and xbar_label
+        # This is more forgiving than strict JSON parsing
+        patterns = [
+            # Standard format: {"text":"...", "xbar_label":"..."}
+            r'\{\s*"text"\s*:\s*"([^"]+)"\s*,\s*"xbar_label"\s*:\s*"([^"]+)"\s*\}',
+            
+            # Handle quotes in text: {"text":"word with "quotes"", "xbar_label":"label"}
+            # Extract everything between "text":" and ", "xbar_label"
+            r'\{\s*"text"\s*:\s*"([^"]*(?:"[^"]*"[^"]*)*?)"\s*,\s*"xbar_label"\s*:\s*"([^"]+)"\s*\}',
+            
+            # More flexible pattern that handles various whitespace and formatting
+            r'\{\s*["\']?text["\']?\s*:\s*["\']([^"\']*(?:["\'][^"\']*["\'][^"\']*)*?)["\']?\s*,\s*["\']?xbar_label["\']?\s*:\s*["\']([^"\']+)["\']?\s*\}',
+            
+            # Handle reversed order: {"xbar_label":"...", "text":"..."}
+            r'\{\s*"xbar_label"\s*:\s*"([^"]+)"\s*,\s*"text"\s*:\s*"([^"]+)"\s*\}',
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, response, re.DOTALL | re.IGNORECASE)
+            for match in matches:
+                if len(match) == 2:
+                    if 'xbar_label' in pattern and pattern.index('xbar_label') < pattern.index('text'):
+                        # Reversed order pattern
+                        xbar_label, text = match
+                    else:
+                        # Normal order pattern
+                        text, xbar_label = match
+                    
+                    # Clean up extracted text and label
+                    text = text.strip().strip('"\'')
+                    xbar_label = xbar_label.strip().strip('"\'')
+                    
+                    if text and xbar_label:
+                        annotations.append({
+                            'text': text,
+                            'xbar_label': xbar_label
+                        })
+        
+        return annotations
+    
+    def _remove_duplicates(self, annotations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Remove duplicate annotations while preserving order."""
+        seen = set()
+        unique_annotations = []
+        for ann in annotations:
+            key = (ann['text'], ann['xbar_label'])
+            if key not in seen:
+                seen.add(key)
+                unique_annotations.append(ann)
+        return unique_annotations
     
     def _clean_malformed_json(self, response: str) -> str:
         """Clean common LLM-generated JSON malformations."""
@@ -85,7 +161,7 @@ class XBarJsonParser:
         cleaned = re.sub(malformed_pattern, fix_malformed_entry, cleaned)
         
         # Fix missing quotes around property names
-        cleaned = re.sub(r'(\w+):', r'"\1":', cleaned)
+        cleaned = re.sub(r'\b(\w+):', r'"\1":', cleaned)
         
         # Fix trailing commas in arrays/objects
         cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)

@@ -299,7 +299,7 @@ plus "text":"fox" with "xbar_label":"noun"'''
         assert annotations == []
     
     def test_parse_json_response_duplicate_handling(self, annotator):
-        """Test that parser doesn't handle duplicates - deduplication happens at sequence level."""
+        """Test that parser now deduplicates at JSON level for better efficiency."""
         response = '''```json
 [
     {"text": "The", "xbar_label": "determiner"},
@@ -309,12 +309,16 @@ plus "text":"fox" with "xbar_label":"noun"'''
 ```'''
         
         annotations = annotator.json_parser.parse_json_response(response)
-        assert len(annotations) == 3  # Parser doesn't deduplicate - done at sequence level
+        assert len(annotations) == 2  # Parser now deduplicates exact matches at JSON level
         
-        # Verify all entries are preserved at parse level
+        # Verify duplicates are removed
         texts = [ann["text"] for ann in annotations]
-        assert texts.count("The") == 2  # Both duplicates preserved
+        assert texts.count("The") == 1  # Duplicate removed
         assert texts.count("fox") == 1
+        
+        # Verify the remaining annotations are correct
+        assert {"text": "The", "xbar_label": "determiner"} in annotations
+        assert {"text": "fox", "xbar_label": "noun"} in annotations
     
     def test_parse_json_missing_colon_errors(self, annotator):
         """Test parsing JSON with missing colon delimiter errors - should skip malformed sequences."""
