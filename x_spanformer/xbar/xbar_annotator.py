@@ -249,15 +249,17 @@ Use these labels: {", ".join(label_names)}"""
                 matches = list(re.finditer(escaped_text, text, re.IGNORECASE))
                 
                 if matches:
-                    best_match = self._select_best_match(matches, unescaped_span_text, text)
-                    start_pos, end_pos = best_match.start(), best_match.end() - 1
-                    actual_text = text[start_pos:end_pos + 1]
-                    
-                    if actual_text.lower() == unescaped_span_text.lower():
-                        span_label = SpanLabel(span=(start_pos, end_pos), xbar_label=xbar_label, text=actual_text)
-                        spans.append(span_label)
-                    else:
-                        logger.debug(f"Text mismatch: expected '{unescaped_span_text}', got '{actual_text}' at {start_pos}-{end_pos}")
+                    # Create spans for ALL matches, not just the "best" one
+                    # This ensures we capture all legitimate occurrences of the same text
+                    for match in matches:
+                        start_pos, end_pos = match.start(), match.end() - 1
+                        actual_text = text[start_pos:end_pos + 1]
+                        
+                        if actual_text.lower() == unescaped_span_text.lower():
+                            span_label = SpanLabel(span=(start_pos, end_pos), xbar_label=xbar_label, text=actual_text)
+                            spans.append(span_label)
+                        else:
+                            logger.debug(f"Text mismatch: expected '{unescaped_span_text}', got '{actual_text}' at {start_pos}-{end_pos}")
                 elif len(unescaped_span_text) > 10:  # Try fuzzy matching for longer phrases
                     fuzzy_span = self._try_fuzzy_match(unescaped_span_text, text, xbar_label)
                     if fuzzy_span:
