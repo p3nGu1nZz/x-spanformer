@@ -108,10 +108,11 @@ class XBarJsonParser:
             if len(text) > 1 and all(c in '.,;:!?-_()[]{}' for c in text):
                 continue
             
-            # Skip single-character punctuation that's not meaningful
-            # But keep meaningful operators and punctuation with proper labels
-            if (len(text) == 1 and text in [',', ';', ':', '.', '"', "'", '[', ']', '{', '}'] and 
-                xbar_label not in ['operator', 'punctuation', 'delimiter', 'bracket']):
+            # Keep all single-character punctuation with proper labels
+            # Important punctuation like (), {}, [], etc. should be preserved
+            # Only skip if it's clearly mislabeled (e.g., punctuation labeled as 'noun')
+            if (len(text) == 1 and text in [',', ';', ':', '.', '"', "'"] and 
+                xbar_label not in ['operator', 'punctuation', 'delimiter', 'bracket', 'conjunction']):
                 continue
                 
             # Skip very short non-meaningful text
