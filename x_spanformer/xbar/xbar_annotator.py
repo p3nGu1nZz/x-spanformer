@@ -248,6 +248,11 @@ Use these labels: {", ".join(label_names)}"""
         # Parse JSON annotations from response
         json_annotations = self._parse_json_response(response)
         
+        if json_annotations:
+            logger.debug(f"Successfully parsed {len(json_annotations)} JSON annotations, now attempting text matching")
+        else:
+            logger.debug("No JSON annotations parsed from response")
+        
         for annotation in json_annotations:
             try:
                 # Extract required fields with proper null handling
@@ -302,6 +307,49 @@ Use these labels: {", ".join(label_names)}"""
                     )
                     spans.append(span_label)
                 else:
+                    # ENHANCED: Try fuzzy matching for phrases that may not match exactly
+                    # This handles cases where LLM returns longer phrases than shown in snippet
+                    if len(span_text) > 10:  # Only for longer phrases
+                        # Try to find partial matches by splitting the phrase
+                        words = span_text.split()
+                        if len(words) >= 2:
+                            # Try to find the first few words and last few words
+                            first_words = ' '.join(words[:3]) if len(words) >= 3 else ' '.join(words[:2])
+                            last_words = ' '.join(words[-2:]) if len(words) >= 2 else words[-1]
+                            
+                            # Look for start of phrase
+                            first_escaped = re.escape(first_words)
+                            first_matches = list(re.finditer(first_escaped, text, re.IGNORECASE))
+                            
+                            if first_matches:
+                                # Try to extend the match to cover the full phrase concept
+                                start_pos = first_matches[0].start()
+                                # Look for a reasonable end point (end of sentence, punctuation, etc.)
+                                search_end = min(start_pos + len(span_text) * 2, len(text))
+                                extended_text = text[start_pos:search_end]
+                                
+                                # Find a natural break point
+                                break_chars = ['.', ';', ':', '\n', '  ']  # Natural phrase boundaries
+                                end_offset = len(extended_text)
+                                for break_char in break_chars:
+                                    break_pos = extended_text.find(break_char, len(first_words))
+                                    if break_pos > 0:
+                                        end_offset = break_pos
+                                        break
+                                
+                                end_pos = start_pos + end_offset - 1
+                                if end_pos > start_pos and end_pos < len(text):
+                                    actual_text = text[start_pos:end_pos + 1].strip()
+                                    if len(actual_text) > 0:
+                                        logger.debug(f"Fuzzy matched phrase: '{span_text}' -> '{actual_text[:50]}...'")
+                                        span_label = SpanLabel(
+                                            span=(start_pos, end_pos),
+                                            xbar_label=xbar_label,
+                                            text=actual_text
+                                        )
+                                        spans.append(span_label)
+                                        continue
+                    
                     logger.debug(f"Could not find text '{span_text}' in source text")
                     
             except Exception as e:
@@ -652,13 +700,45 @@ Use these labels: {", ".join(label_names)}"""
         # "field": value -> "field": "value" (where value isn't a number/boolean)
         json_str = re.sub(r'"([^"]+)":\s*([^",\s{}\[\]]+)(?=[,}\]])', r'"\1": "\2"', json_str)
         
-        # Pattern 14: Handle malformed arrays of objects
-        # Fix patterns like: [{"text":"word""label":"noun"}] -> [{"text":"word","label":"noun"}]
-        json_str = re.sub(r'""', '","', json_str)
+        # PRODUCTION FIX: Handle specific error patterns with simple string replacements
+        # These are the exact patterns that cause failures in production logs
+        
+        # Pattern 1: Missing comma before field name
+        json_str = json_str.replace('"y())"xbar_label":"inline_code"', '"y())","xbar_label":"inline_code"')
+        json_str = json_str.replace('")}i""xbar_label":"identifier"', '")}i","xbar_label":"identifier"')
+        
+        # Pattern 2: Missing quotes around field value  
+        json_str = json_str.replace('"den"xbar_label:"noun"', '"den","xbar_label":"noun"')
+        
+        # Pattern 3: General case - missing comma before xbar_label (conservative approach)
+        # Only fix when we see the exact pattern: "text"xbar_label
+        lines = json_str.split('\n')
+        fixed_lines = []
+        for line in lines:
+            if '"xbar_label' in line and not '","xbar_label' in line and not '": "' in line.split('"xbar_label')[0][-10:]:
+                # This line has the malformed pattern
+                line = re.sub(r'"([^"]+)"xbar_label', r'"\1","xbar_label', line)
+            fixed_lines.append(line)
+        json_str = '\n'.join(fixed_lines)
         
         # Pattern 15: Fix concatenated JSON objects
         # {"text":"word"}{"label":"noun"} -> {"text":"word","label":"noun"}
         json_str = re.sub(r'}\s*{', ',', json_str)
+        
+        # Pattern 16: Remove malformed objects with punctuation as keys
+        # {",":{}}, -> (remove completely)
+        # {".":{}}  -> (remove completely)
+        json_str = re.sub(r'\{\s*"[^\w]"\s*:\s*\{\s*\}\s*\}\s*,?\s*', '', json_str)
+        
+        # Pattern 17: Fix malformed key-value pairs where key is punctuation
+        # {"text":"value", ",": {}, "label":"type"} -> {"text":"value", "label":"type"}
+        json_str = re.sub(r',\s*"[^\w]"\s*:\s*[^,}\]]+\s*,?', ',', json_str)
+        
+        # Pattern 18: Clean up multiple consecutive commas
+        json_str = re.sub(r',\s*,+', ',', json_str)
+        
+        # Pattern 19: Clean up leading commas in arrays/objects
+        json_str = re.sub(r'([\[\{])\s*,', r'\1', json_str)
         
         # If we made changes, log for debugging (but limit log size)
         if original_str != json_str and len(original_str) < 200:
