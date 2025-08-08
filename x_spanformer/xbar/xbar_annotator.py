@@ -432,21 +432,39 @@ Use these labels: {", ".join(label_names)}"""
         # Deduplicate annotations based on key fields
         seen_annotations = set()
         unique_annotations = []
+        empty_object_count = 0
         
         for annotation in annotations:
             if isinstance(annotation, dict):
                 # Create key for deduplication
                 text = annotation.get('text', '')
-                xbar_class = annotation.get('label', annotation.get('xbar_class', ''))
+                xbar_label = annotation.get('xbar_label', '')
+                xbar_class = annotation.get('label', annotation.get('xbar_class', xbar_label))
                 key = (text.strip(), xbar_class.strip())
+                
+                # Enhanced validation to filter out empty/invalid annotations
+                text_stripped = text.strip() if text else ''
+                label_stripped = xbar_class.strip() if xbar_class else ''
+                
+                # Count empty objects for monitoring
+                if not text_stripped or not label_stripped:
+                    empty_object_count += 1
+                    continue
                 
                 # Filter out invalid/junk annotations
                 if (key not in seen_annotations and 
-                    text.strip() and 
-                    text.strip() not in ['text', 'label', 'xbar_label'] and  # Filter literal field names
-                    len(text.strip()) > 0):
+                    text_stripped and 
+                    label_stripped and
+                    text_stripped not in ['text', 'label', 'xbar_label'] and  # Filter literal field names
+                    label_stripped not in ['text', 'label', 'xbar_label'] and  # Filter literal field names
+                    len(text_stripped) > 0 and
+                    len(label_stripped) > 0):
                     seen_annotations.add(key)
                     unique_annotations.append(annotation)
+        
+        # Log warning if excessive empty objects detected (possible LLM output quality issue)
+        if empty_object_count > 10:
+            logger.warning(f"Detected {empty_object_count} empty/invalid JSON objects - possible LLM output quality issue")
         
         logger.debug(f"Parsed {len(unique_annotations)} unique annotations from {len(annotations)} total found")
         return unique_annotations
@@ -1011,17 +1029,27 @@ Use these labels: {", ".join(label_names)}"""
                 span_text = span.text or ""
                 xbar_label = span.xbar_label
                 
+                # Enhanced validation for empty/invalid spans
+                text_stripped = span_text.strip() if span_text else ''
+                label_stripped = xbar_label.strip() if xbar_label else ''
+                
                 # Basic validation
                 if start_pos < 0 or end_pos >= len(text) or start_pos > end_pos:
                     logger.debug(f"Invalid span positions: {span.span} for text length {len(text)}")
                     continue
                 
-                if not span_text or not xbar_label:
-                    logger.debug(f"Missing text or label: {span}")
+                # Enhanced validation: both text and label must be non-empty strings
+                if not text_stripped or not label_stripped:
+                    logger.debug(f"Empty text or label: text='{text_stripped}', label='{label_stripped}'")
+                    continue
+                
+                # Filter out literal field names that sometimes leak through
+                if text_stripped in ['text', 'label', 'xbar_label'] or label_stripped in ['text', 'label', 'xbar_label']:
+                    logger.debug(f"Filtered literal field name: text='{text_stripped}', label='{label_stripped}'")
                     continue
                 
                 # Check for duplicates
-                span_key = (start_pos, end_pos, xbar_label)
+                span_key = (start_pos, end_pos, label_stripped)
                 if span_key in seen_spans:
                     continue
                 
