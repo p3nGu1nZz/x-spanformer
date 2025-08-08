@@ -81,51 +81,51 @@ Extract spans and classify them using only the labels above. Focus on accuracy a
                 DomainType.NATURAL: {
                     "labels": ["noun", "verb", "adjective", "adverb", "preposition", "determiner", "pronoun", "conjunction", "punctuation"],
                     "description": "individual WORDS and their grammatical classes",
-                    "examples": '"word" -> noun, "runs" -> verb, "quickly" -> adverb'
+                    "examples": '"transformer" -> noun, "encodes" -> verb, "neural" -> adjective, "efficiently" -> adverb, "(" -> punctuation, "the" -> determiner'
                 },
                 DomainType.CODE: {
                     "labels": ["keyword", "identifier", "operator", "literal", "delimiter", "type_name", "comment"],
                     "description": "individual CODE TOKENS and their syntactic types",
-                    "examples": '"if" -> keyword, "variable" -> identifier, "+" -> operator'
+                    "examples": '"def" -> keyword, "attention_weights" -> identifier, "==" -> operator, "0.1" -> literal, ";" -> delimiter, "List" -> type_name'
                 },
                 DomainType.MIXED: {
                     "labels": ["noun", "verb", "adjective", "adverb", "preposition", "determiner", "pronoun", "conjunction", "keyword", "identifier", "operator", "literal", "inline_code"],
                     "description": "individual WORDS/TOKENS from both natural language and code",
-                    "examples": '"function" -> noun (or keyword in code context), "variable" -> identifier'
+                    "examples": '"model" -> noun, "returns" -> verb, "def" -> keyword, "loss_fn" -> identifier, "`torch.nn.Module`" -> inline_code'
                 }
             },
             "phrase_level": {
                 DomainType.NATURAL: {
                     "labels": ["noun_phrase", "verb_phrase", "adjective_phrase", "adverb_phrase", "prepositional_phrase"],
                     "description": "PHRASES (groups of related words)",
-                    "examples": '"the red car" -> noun_phrase, "is running quickly" -> verb_phrase'
+                    "examples": '"the attention mechanism" -> noun_phrase, "computes hidden states" -> verb_phrase, "very efficiently" -> adverb_phrase, "in the transformer" -> prepositional_phrase'
                 },
                 DomainType.CODE: {
                     "labels": ["expression", "function_call", "assignment", "parameter_list", "argument_list"],
                     "description": "CODE EXPRESSIONS and structured constructs",
-                    "examples": '"x + y" -> expression, "func(a, b)" -> function_call'
+                    "examples": '"x + y * 2" -> expression, "torch.matmul(q, k)" -> function_call, "hidden_size=512" -> assignment, "(x, y, z)" -> parameter_list'
                 },
                 DomainType.MIXED: {
                     "labels": ["noun_phrase", "verb_phrase", "expression", "function_call", "code_block", "documentation_comment"],
                     "description": "PHRASES and CODE EXPRESSIONS from mixed content",
-                    "examples": '"the function call" -> noun_phrase, "func(x)" -> function_call'
+                    "examples": '"the model architecture" -> noun_phrase, "self.forward(x)" -> function_call, "```python\\nreturn output\\n```" -> code_block'
                 }
             },
             "clause_level": {
                 DomainType.NATURAL: {
                     "labels": ["main_clause", "subordinate_clause", "relative_clause"],
                     "description": "CLAUSES and major syntactic structures",
-                    "examples": '"She runs fast" -> main_clause, "because it was late" -> subordinate_clause'
+                    "examples": '"The transformer processes input sequences" -> main_clause, "which are then passed to the decoder" -> relative_clause, "because attention allows parallel computation" -> subordinate_clause'
                 },
                 DomainType.CODE: {
                     "labels": ["if_statement", "loop_statement", "function_definition", "class_definition", "import_statement", "return_statement"],
                     "description": "CODE STATEMENTS and control structures",
-                    "examples": '"if x > 0:" -> if_statement, "def func():" -> function_definition'
+                    "examples": '"if hidden_dim > 0:" -> if_statement, "for layer in self.layers:" -> loop_statement, "def forward(self, x):" -> function_definition, "import torch.nn as nn" -> import_statement'
                 },
                 DomainType.MIXED: {
                     "labels": ["main_clause", "subordinate_clause", "if_statement", "loop_statement", "function_definition"],
                     "description": "CLAUSES and CODE STATEMENTS from mixed content",
-                    "examples": '"The function returns" -> main_clause, "if condition:" -> if_statement'
+                    "examples": '"The model implements attention mechanisms" -> main_clause, "if config.use_attention:" -> if_statement, "while training the neural network" -> subordinate_clause'
                 }
             }
         }
@@ -140,8 +140,17 @@ Extract spans and classify them using only the labels above. Focus on accuracy a
 Domain: {domain.value.upper()}
 Focus: {config["description"]}
 
+Context: You are analyzing text that contains {domain.value} content. Your task is to identify and classify spans according to the hierarchical level specified ({turn_focus.replace('_', ' ')}).
+
 Available labels:
 {chr(10).join(f"- {desc}" for desc in label_descriptions)}
+
+Guidelines:
+- Extract ONLY spans that clearly match the specified labels
+- Be precise with boundary detection - include complete linguistic units
+- For {domain.value} domain: Focus on {config["description"]} that are linguistically meaningful
+- Avoid over-segmentation - prefer complete meaningful units over fragments
+- When uncertain, prefer more general labels over highly specific ones
 
 Extract accurate spans using ONLY these labels. Be precise and consistent."""
 
@@ -151,12 +160,23 @@ Extract accurate spans using ONLY these labels. Be precise and consistent."""
         user_prompt = f"""Analyze this {domain.value} text and identify {config["description"]}:
 "{escaped_text}"
 
-Return ONLY a JSON array with this exact format. Do not include any explanations, notes, or additional text:
+Task: Extract spans that represent {config["description"]} from the text above.
+
+Expected Output Format:
 [{{"text":"extracted_text","xbar_label":"label_name"}}]
 
-Examples: {config["examples"]}
+Example Annotations:
+{config["examples"]}
 
-Use these labels: {", ".join(label_names)}"""
+Important Instructions:
+- Return ONLY a valid JSON array - no explanations, notes, or additional text
+- Each span should be a complete, meaningful linguistic unit at the {turn_focus.replace('_', ' ')} level
+- Use EXACTLY these labels: {", ".join(label_names)}
+- Extract spans in the order they appear in the text
+- Ensure "text" field contains the exact text from the input
+- Ensure "xbar_label" field uses one of the specified labels
+
+Begin annotation:"""
 
         return system_prompt, user_prompt
     

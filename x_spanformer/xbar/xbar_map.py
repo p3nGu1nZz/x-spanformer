@@ -21,55 +21,55 @@ class XBarLabelMap:
     
     # Natural language labels
     NATURAL_LABELS = {
-        "noun": "Individual nouns including proper nouns, common nouns, and collective nouns",
-        "verb": "Individual verbs including action verbs, linking verbs, and auxiliary verbs", 
-        "adjective": "Individual adjectives including descriptive, comparative, and superlative forms",
-        "adverb": "Individual adverbs modifying verbs, adjectives, or other adverbs",
-        "determiner": "Determiners including articles (the, a, an), demonstratives (this, that), and quantifiers",
-        "preposition": "Prepositions indicating relationships of time, place, or manner",
-        "pronoun": "Pronouns including personal, possessive, demonstrative, and relative pronouns",
-        "conjunction": "Coordinating and subordinating conjunctions",
-        "punctuation": "Sentence-level punctuation marks with syntactic significance",
-        "noun_phrase": "Complete noun phrases including determiners, modifiers, and head nouns",
-        "verb_phrase": "Complete verb phrases including auxiliary verbs, main verbs, and complements",
-        "adjective_phrase": "Adjective phrases with modifiers and complements",
-        "adverb_phrase": "Adverb phrases with intensifiers and modifiers",
-        "prepositional_phrase": "Prepositional phrases with their noun phrase objects",
-        "main_clause": "Main/independent clauses that can stand alone as sentences",
-        "subordinate_clause": "Dependent/subordinate clauses including relative and adverbial clauses",
-        "relative_clause": "Relative clauses modifying noun phrases"
+        "noun": "Individual nouns: people, places, things, concepts (e.g., 'transformer', 'attention', 'model', 'layer')",
+        "verb": "Individual verbs: actions, states, processes (e.g., 'computes', 'processes', 'encodes', 'learns')", 
+        "adjective": "Individual adjectives: descriptive words, properties (e.g., 'neural', 'deep', 'efficient', 'complex')",
+        "adverb": "Individual adverbs: manner, time, degree modifiers (e.g., 'efficiently', 'quickly', 'automatically')",
+        "determiner": "Determiners: articles, quantifiers, possessives (e.g., 'the', 'a', 'each', 'this', 'our')",
+        "preposition": "Prepositions: spatial, temporal, logical relations (e.g., 'in', 'through', 'during', 'via')",
+        "pronoun": "Pronouns: personal, demonstrative, relative (e.g., 'it', 'they', 'which', 'that')",
+        "conjunction": "Coordinating and subordinating conjunctions (e.g., 'and', 'but', 'because', 'while')",
+        "punctuation": "Sentence-level punctuation with syntactic significance (e.g., '.', ',', ';', ':', '(', ')')",
+        "noun_phrase": "Complete noun phrases with modifiers (e.g., 'the attention mechanism', 'multi-head self-attention')",
+        "verb_phrase": "Complete verb phrases with auxiliaries and complements (e.g., 'computes attention weights', 'has been trained')",
+        "adjective_phrase": "Adjective phrases with modifiers (e.g., 'computationally efficient', 'very deep')",
+        "adverb_phrase": "Adverb phrases with intensifiers (e.g., 'quite efficiently', 'much more quickly')",
+        "prepositional_phrase": "Prepositional phrases with objects (e.g., 'in the transformer', 'through multiple layers')",
+        "main_clause": "Independent clauses that express complete thoughts (e.g., 'The model processes sequences', 'Attention mechanisms enable parallelization')",
+        "subordinate_clause": "Dependent clauses with subordinating conjunctions (e.g., 'because it allows parallel computation', 'when training deep networks')",
+        "relative_clause": "Relative clauses modifying noun phrases (e.g., 'which computes attention weights', 'that processes the input')"
     }
     
     # Code labels
     CODE_LABELS = {
-        "keyword": "Programming language keywords (if, for, class, def, return, etc.)",
-        "identifier": "Variable names, function names, class names, and other user-defined identifiers",
-        "operator": "All operators including arithmetic (+, -, *, /), logical (&&, ||), and comparison (==, !=)",
-        "literal": "String literals, numeric literals, boolean literals, and null values",
-        "delimiter": "Delimiters including parentheses, brackets, braces, semicolons, and commas",
-        "type_name": "Built-in and user-defined type names",
-        "comment": "Single-line and multi-line comments",
-        "expression": "Mathematical, logical, and assignment expressions",
-        "function_call": "Function calls with their argument lists",
-        "assignment": "Variable assignment statements and expressions",
-        "parameter_list": "Function parameter lists in definitions",
-        "argument_list": "Function call argument lists",
-        "if_statement": "Conditional statements including if, elif, and else branches",
-        "loop_statement": "For loops, while loops, and other iteration constructs",
-        "function_definition": "Complete function definitions including signatures and bodies",
-        "class_definition": "Complete class definitions including inheritance and methods",
-        "import_statement": "Import and include statements",
-        "return_statement": "Return statements in functions"
+        "keyword": "Programming language keywords and reserved words (e.g., 'def', 'class', 'if', 'for', 'import', 'return')",
+        "identifier": "Variable, function, class, and module names (e.g., 'attention_weights', 'forward', 'TransformerModel')",
+        "operator": "Arithmetic, logical, comparison, and assignment operators (e.g., '+', '==', '&&', '=', '->')",
+        "literal": "String, numeric, boolean literals and constants (e.g., '\"hello\"', '0.1', 'True', 'None')",
+        "delimiter": "Structural delimiters and separators (e.g., '(', ')', '[', ']', '{', '}', ';', ',')",
+        "type_name": "Built-in and user-defined type names (e.g., 'int', 'str', 'List', 'torch.Tensor')",
+        "comment": "Single-line and multi-line comments (e.g., '# This computes attention', '/* Multi-line comment */')",
+        "expression": "Mathematical and logical expressions (e.g., 'x + y * 2', 'hidden_dim > 0', 'torch.matmul(q, k)')",
+        "function_call": "Function invocations with arguments (e.g., 'torch.nn.Linear(512, 256)', 'model.forward(x)')",
+        "assignment": "Variable assignments and parameter bindings (e.g., 'x = torch.zeros()', 'hidden_size=512')",
+        "parameter_list": "Function parameter definitions (e.g., '(self, x, mask=None)', '(input_dim: int, output_dim: int)')",
+        "argument_list": "Function call arguments (e.g., '(x, attention_mask)', '(hidden_states, key_padding_mask=mask)')",
+        "if_statement": "Conditional statements and branches (e.g., 'if mask is not None:', 'elif hidden_dim > 0:')",
+        "loop_statement": "Iteration constructs (e.g., 'for layer in self.layers:', 'while epoch < max_epochs:')",
+        "function_definition": "Complete function definitions (e.g., 'def forward(self, x):', 'async def train_model():')",
+        "class_definition": "Complete class definitions (e.g., 'class TransformerEncoder(nn.Module):', 'class Config:')",
+        "import_statement": "Import and include statements (e.g., 'import torch', 'from transformers import BertModel')",
+        "return_statement": "Return statements in functions (e.g., 'return output', 'return self.layer_norm(hidden_states)')"
     }
     
     # Mixed domain labels
     MIXED_LABELS = {
-        "inline_code": "Inline code snippets within natural language text (e.g., `variable` in markdown)",
-        "code_block": "Code blocks or examples within documentation or comments",
-        "natural_instruction": "Natural language instructions or descriptions about code",
-        "documentation_comment": "Structured documentation comments (docstrings, javadoc, etc.)",
-        "api_reference": "References to APIs, functions, or classes within natural language",
-        "error_message": "Error messages or exception text within code or logs"
+        "inline_code": "Inline code snippets within natural language (e.g., '`torch.nn.Module`', '`self.attention()`')",
+        "code_block": "Multi-line code blocks or examples (e.g., '```python\\nmodel = TransformerModel()\\n```')",
+        "natural_instruction": "Natural language instructions about code (e.g., 'Initialize the model with default parameters')",
+        "documentation_comment": "Structured documentation and docstrings (e.g., '\"\"\"Computes multi-head attention\"\"\"')",
+        "api_reference": "References to APIs, classes, or functions (e.g., 'torch.nn.TransformerEncoder', 'the forward() method')",
+        "error_message": "Error messages and exception text (e.g., 'RuntimeError: Expected tensor on cuda:0', 'ValueError: Invalid input shape')"
     }
     
     # Abbreviation mappings for efficiency

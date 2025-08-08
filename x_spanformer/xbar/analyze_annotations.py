@@ -264,27 +264,54 @@ def find_anomalies(annotations):
                     'severity': 'low'
                 })
         
-        # Enhanced: Check for repetitive patterns (same text, many occurrences)
+        # Enhanced: Check for truly problematic repetitive patterns
+        # Only flag texts that appear with identical positions (actual duplicates)
+        # or unusually high frequencies that suggest annotation errors
         text_counts = Counter(ann['text'] for ann in seq_anns)
         for text, count in text_counts.items():
-            # Be more lenient with punctuation and common words
-            is_punctuation = text in [',', '.', ';', ':', '!', '?', '(', ')', '"', "'"]
-            is_common_word = text.lower() in ['the', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for']
+            # Get all positions for this text
+            positions = [(ann['start_pos'], ann['end_pos']) for ann in seq_anns if ann['text'] == text]
             
-            threshold = 10 if is_punctuation else 6 if is_common_word else 3
+            # Check for position duplicates (true anomalies)
+            position_counts = Counter(positions)
+            position_duplicates = [pos for pos, cnt in position_counts.items() if cnt > 1]
             
-            if count > threshold:
-                # Get all positions for this text
-                positions = [(ann['start_pos'], ann['end_pos']) for ann in seq_anns if ann['text'] == text]
-                
+            if position_duplicates:
+                # This is a real anomaly - same text at same position multiple times
                 anomalies.append({
-                    'type': 'repetitive_text',
+                    'type': 'position_duplicate',
                     'sequence': seq_num,
                     'text': text,
+                    'duplicate_positions': position_duplicates,
                     'count': count,
-                    'positions': positions[:5],  # Show first 5 positions
-                    'severity': 'low' if is_punctuation or is_common_word else 'medium'
+                    'severity': 'high'
                 })
+            else:
+                # Only flag extremely high frequencies that suggest annotation errors
+                # Be very lenient - only flag if it's clearly excessive
+                is_single_char = len(text) == 1
+                is_punctuation = text in [',', '.', ';', ':', '!', '?', '(', ')', '"', "'"]
+                is_common_word = text.lower() in ['the', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'from', 'as', 'is', 'are', 'was', 'were']
+                
+                # Very high thresholds - only flag truly excessive cases
+                if is_single_char and is_punctuation:
+                    threshold = 50  # Very high for single punctuation
+                elif is_single_char:
+                    threshold = 25  # High for single characters
+                elif is_common_word:
+                    threshold = 20  # High for common words
+                else:
+                    threshold = 15  # High for other words
+                
+                if count > threshold:
+                    anomalies.append({
+                        'type': 'excessive_repetition',
+                        'sequence': seq_num,
+                        'text': text,
+                        'count': count,
+                        'positions': positions[:3],  # Show first 3 positions
+                        'severity': 'low'
+                    })
         
         # Enhanced: Check for inconsistent labeling across positions
         text_to_labels = defaultdict(set)
@@ -646,6 +673,8 @@ def main():
                     print(f"  🔄 Exact duplicate in seq {anomaly['sequence']}: '{anomaly['span']['text']}' ({anomaly['span']['xbar_label']})")
                 elif anomaly['type'] == 'overlapping_identical_spans':
                     print(f"  📐 Overlapping identical spans in seq {anomaly['sequence']}: '{anomaly['text']}' ({anomaly['label']}) - overlap: {anomaly['overlap_length']} chars")
+                elif anomaly['type'] == 'position_duplicate':
+                    print(f"  🔄 Position duplicate in seq {anomaly['sequence']}: '{anomaly['text']}' appears {anomaly['count']} times at same positions {anomaly['duplicate_positions']}")
             if len(high_severity) > 5:
                 print(f"  ... and {len(high_severity) - 5} more high severity anomalies")
         
@@ -656,9 +685,6 @@ def main():
                     print(f"  🏷️  Boundary duplicate in seq {anomaly['sequence']}: '{anomaly['text']}' @ {anomaly['positions']} has labels {anomaly['labels']}")
                 elif anomaly['type'] == 'inconsistent_labeling':
                     print(f"  🏷️  Inconsistent labels in seq {anomaly['sequence']}: '{anomaly['text']}' -> {anomaly['labels']} ({anomaly['occurrences']} occurrences)")
-                elif anomaly['type'] == 'repetitive_text':
-                    severity_marker = "📊" if anomaly.get('severity') == 'medium' else "🔁"
-                    print(f"  {severity_marker} Repetitive in seq {anomaly['sequence']}: '{anomaly['text']}' appears {anomaly['count']} times")
             if len(medium_severity) > 5:
                 print(f"  ... and {len(medium_severity) - 5} more medium severity anomalies")
         
@@ -667,8 +693,8 @@ def main():
             for anomaly in low_severity[:3]:  # Show fewer low severity
                 if anomaly['type'] == 'suspicious_short_span':
                     print(f"  ⚠️  Short span in seq {anomaly['sequence']}: '{anomaly['span']['text']}' ({anomaly['span']['xbar_label']})")
-                elif anomaly['type'] == 'repetitive_text':
-                    print(f"  🔁 Repetitive in seq {anomaly['sequence']}: '{anomaly['text']}' appears {anomaly['count']} times")
+                elif anomaly['type'] == 'excessive_repetition':
+                    print(f"  � Excessive repetition in seq {anomaly['sequence']}: '{anomaly['text']}' appears {anomaly['count']} times (threshold exceeded)")
                 elif anomaly['type'] == 'insufficient_hierarchical_coverage':
                     missing_levels_str = ', '.join(anomaly['missing_levels'])
                     print(f"  🏗️  Insufficient hierarchical coverage in seq {anomaly['sequence']}: missing {missing_levels_str} level spans")
