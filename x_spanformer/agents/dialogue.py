@@ -15,7 +15,13 @@ class DialogueManager:
 	def add(self, role: Literal["user", "assistant"], content: str):
 		self.history.append({"role": role, "content": content})
 		self.history = self.history[-2 * self.max_turns:]
-		logger.info(f"[DIALOGUE] {role.upper()}:\n{content}")
+		
+		# Log the content with proper formatting
+		if role == "assistant":
+			logger.info(f"[DIALOGUE] ASSISTANT:\n{content}")
+		else:
+			logger.info(f"[DIALOGUE] {role.upper()}:\n{content}")
+		
 		logger.debug(f"Message added: role={role}, total turns={len(self.history)}")
 
 	def as_messages(self) -> list[dict[str, str]]:

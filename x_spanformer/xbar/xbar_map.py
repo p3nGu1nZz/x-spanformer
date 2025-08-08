@@ -72,6 +72,94 @@ class XBarLabelMap:
         "error_message": "Error messages or exception text within code or logs"
     }
     
+    # Abbreviation mappings for efficiency
+    ABBREVIATION_MAP = {
+        # Natural language word-level
+        "n": "noun",
+        "v": "verb", 
+        "adj": "adjective",
+        "adv": "adverb",
+        "det": "determiner",
+        "prep": "preposition",
+        "pron": "pronoun",
+        "conj": "conjunction",
+        "punct": "punctuation",
+        
+        # Natural language phrase-level
+        "np": "noun_phrase",
+        "vp": "verb_phrase",
+        "adjp": "adjective_phrase",
+        "advp": "adverb_phrase",
+        "pp": "prepositional_phrase",
+        
+        # Natural language clause-level
+        "mc": "main_clause",
+        "sc": "subordinate_clause",
+        "rc": "relative_clause",
+        
+        # Code word-level
+        "kw": "keyword",
+        "id": "identifier",
+        "op": "operator",
+        "lit": "literal",
+        "delim": "delimiter",
+        "type": "type_name",
+        "comm": "comment",
+        
+        # Code phrase-level
+        "expr": "expression",
+        "fcall": "function_call",
+        "assign": "assignment",
+        "params": "parameter_list",
+        "args": "argument_list",
+        
+        # Code clause-level
+        "if": "if_statement",
+        "loop": "loop_statement",
+        "fdef": "function_definition",
+        "cdef": "class_definition",
+        "imp": "import_statement",
+        "ret": "return_statement",
+        
+        # Mixed domain labels
+        "url": "url",
+        "email": "email_address",
+        "num": "number",
+        "date": "date_time",
+        "ref": "reference",
+        "quote": "quoted_text",
+        "code": "code_block",
+        "list": "list_item",
+        "head": "heading",
+        "para": "paragraph"
+    }
+    
+    @classmethod
+    def normalize_xbar_class(cls, xbar_class: str) -> str:
+        """
+        Normalize XBar class label using abbreviation mapping.
+        
+        Args:
+            xbar_class: Input label (can be abbreviation or full name)
+            
+        Returns:
+            Normalized full label name
+        """
+        if not xbar_class or not xbar_class.strip():
+            return "unknown"
+            
+        normalized = xbar_class.strip().lower()
+        
+        # Check if it's an abbreviation
+        if normalized in cls.ABBREVIATION_MAP:
+            return cls.ABBREVIATION_MAP[normalized]
+        
+        # Replace spaces with underscores and lowercase
+        normalized = normalized.replace(" ", "_")
+        
+        # Return normalized form
+        return normalized
+    
     @classmethod
     def get_labels_for_domain(cls, domain: DomainType) -> Dict[str, str]:
         """
@@ -126,5 +214,30 @@ class XBarLabelMap:
         """
         valid_labels = cls.get_labels_for_domain(domain)
         return label_name in valid_labels
+    
+    @classmethod
+    def normalize_label(cls, label: str) -> str:
+        """
+        Normalize X-bar class label to standard format using abbreviation mappings.
+        
+        Args:
+            label: Raw X-bar class from LLM
+            
+        Returns:
+            Normalized X-bar class
+        """
+        if not label:
+            return "unknown"
+            
+        # Remove extra whitespace and convert to standard case
+        normalized = label.strip()
+        
+        # Try exact match in abbreviation map (case insensitive)
+        for key, value in cls.ABBREVIATION_MAP.items():
+            if normalized.lower() == key.lower():
+                return value
+        
+        # Return original if no mapping found
+        return normalized
     
 

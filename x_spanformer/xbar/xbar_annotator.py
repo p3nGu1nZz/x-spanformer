@@ -70,11 +70,115 @@ Available labels for {domain.value} domain:
 
 Extract spans and classify them using only the labels above. Focus on accuracy and consistency."""
     
+    def _build_domain_specific_prompts(
+        self, 
+        domain: DomainType, 
+        turn_focus: str, 
+        text_snippet: str
+    ) -> Tuple[str, str]:
+        """Build domain-specific system and user prompts for a given turn."""
+        
+        # Get domain-specific labels
+        all_labels = XBarLabelMap.get_labels_for_domain(domain)
+        
+        # Filter labels by turn focus
+        if turn_focus == "word_level":
+            # Word-level labels for each domain
+            if domain == DomainType.NATURAL:
+                relevant_labels = {k: v for k, v in all_labels.items() 
+                                 if k in ["noun", "verb", "adjective", "adverb", "preposition", 
+                                         "determiner", "pronoun", "conjunction", "punctuation"]}
+                focus_description = "individual WORDS and their grammatical classes"
+                examples = '"word" -> noun, "runs" -> verb, "quickly" -> adverb'
+            elif domain == DomainType.CODE:
+                relevant_labels = {k: v for k, v in all_labels.items() 
+                                 if k in ["keyword", "identifier", "operator", "literal", 
+                                         "delimiter", "type_name", "comment"]}
+                focus_description = "individual CODE TOKENS and their syntactic types"
+                examples = '"if" -> keyword, "variable" -> identifier, "+" -> operator'
+            else:  # MIXED
+                relevant_labels = {k: v for k, v in all_labels.items() 
+                                 if k in ["noun", "verb", "adjective", "adverb", "preposition",
+                                         "determiner", "pronoun", "conjunction", "keyword", 
+                                         "identifier", "operator", "literal", "inline_code"]}
+                focus_description = "individual WORDS/TOKENS from both natural language and code"
+                examples = '"function" -> noun (or keyword in code context), "variable" -> identifier'
+                
+        elif turn_focus == "phrase_level":
+            # Phrase-level labels
+            if domain == DomainType.NATURAL:
+                relevant_labels = {k: v for k, v in all_labels.items() 
+                                 if k in ["noun_phrase", "verb_phrase", "adjective_phrase", 
+                                         "adverb_phrase", "prepositional_phrase"]}
+                focus_description = "PHRASES (groups of related words)"
+                examples = '"the red car" -> noun_phrase, "is running quickly" -> verb_phrase'
+            elif domain == DomainType.CODE:
+                relevant_labels = {k: v for k, v in all_labels.items() 
+                                 if k in ["expression", "function_call", "assignment", 
+                                         "parameter_list", "argument_list"]}
+                focus_description = "CODE EXPRESSIONS and structured constructs"
+                examples = '"x + y" -> expression, "func(a, b)" -> function_call'
+            else:  # MIXED
+                relevant_labels = {k: v for k, v in all_labels.items() 
+                                 if k in ["noun_phrase", "verb_phrase", "expression", "function_call", 
+                                         "code_block", "documentation_comment"]}
+                focus_description = "PHRASES and CODE EXPRESSIONS from mixed content"
+                examples = '"the function call" -> noun_phrase, "func(x)" -> function_call'
+                
+        else:  # clause_level
+            # Clause-level labels
+            if domain == DomainType.NATURAL:
+                relevant_labels = {k: v for k, v in all_labels.items() 
+                                 if k in ["main_clause", "subordinate_clause", "relative_clause"]}
+                focus_description = "CLAUSES and major syntactic structures"
+                examples = '"She runs fast" -> main_clause, "because it was late" -> subordinate_clause'
+            elif domain == DomainType.CODE:
+                relevant_labels = {k: v for k, v in all_labels.items() 
+                                 if k in ["if_statement", "loop_statement", "function_definition", 
+                                         "class_definition", "import_statement", "return_statement"]}
+                focus_description = "CODE STATEMENTS and control structures"
+                examples = '"if x > 0:" -> if_statement, "def func():" -> function_definition'
+            else:  # MIXED
+                relevant_labels = {k: v for k, v in all_labels.items() 
+                                 if k in ["main_clause", "subordinate_clause", "if_statement", 
+                                         "loop_statement", "function_definition"]}
+                focus_description = "CLAUSES and CODE STATEMENTS from mixed content"
+                examples = '"The function returns" -> main_clause, "if condition:" -> if_statement'
+        
+        # Build label list for prompt
+        label_names = list(relevant_labels.keys())
+        label_descriptions = [f"{k}: {v}" for k, v in relevant_labels.items()]
+        
+        # Build system prompt
+        system_prompt = f"""You are a linguistic annotator specializing in {domain.value} domain {turn_focus.replace('_', '-')} analysis.
+
+Domain: {domain.value.upper()}
+Focus: {focus_description}
+
+Available labels:
+{chr(10).join(f"- {desc}" for desc in label_descriptions)}
+
+Extract accurate spans using ONLY these labels. Be precise and consistent."""
+
+        # Build user prompt
+        user_prompt = f"""Analyze this {domain.value} text and identify {focus_description}:
+"{text_snippet}"
+
+Return ONLY a JSON array with this exact format. Do not include any explanations, notes, or additional text:
+[{{"text":"extracted_text","xbar_label":"label_name"}}]
+
+Examples: {examples}
+
+Use these labels: {", ".join(label_names)}"""
+
+        return system_prompt, user_prompt
+    
     async def _extract_spans_via_dialogue(
         self, 
         text: str, 
         domain: DomainType,
-        turn_focus: str
+        turn_focus: str,
+        pretrain_record: PretrainRecord
     ) -> List[SpanLabel]:
         """
         Extract spans via dialogue with LLM using focused turn strategy.
@@ -92,39 +196,16 @@ Extract spans and classify them using only the labels above. Focus on accuracy a
             from x_spanformer.agents.ollama_client import chat
             from x_spanformer.agents.dialogue import DialogueManager
             
-            # Build focused prompt for this turn - use shorter text to avoid timeouts
-            text_snippet = text[:100] if len(text) > 100 else text
+            # Detect domain for this sequence
+            domain = self._detect_domain_from_record(pretrain_record)
             
-            # Create turn-specific prompts
-            if turn_focus == "word_level":
-                system_prompt = "You are a linguistic annotator specializing in word-level analysis. Extract individual words and classify them grammatically."
-                user_prompt = f"""Analyze this text and identify individual WORDS with their grammatical classes:
-"{text_snippet}"
-
-Return a JSON array with this exact format:
-[{{"text":"word","xbar_label":"noun"}}]
-
-Use these labels: noun, verb, adjective, adverb, preposition, determiner, pronoun, conjunction, punctuation"""
-                
-            elif turn_focus == "phrase_level":
-                system_prompt = "You are a linguistic annotator specializing in phrase-level analysis. Extract meaningful phrases and classify them."
-                user_prompt = f"""Analyze this text and identify PHRASES (groups of related words):
-"{text_snippet}"
-
-Return a JSON array with this exact format:
-[{{"text":"noun phrase","xbar_label":"noun_phrase"}}]
-
-Use these labels: noun_phrase, verb_phrase, prepositional_phrase, adjective_phrase, adverb_phrase"""
-                
-            else:  # clause_level
-                system_prompt = "You are a linguistic annotator specializing in clause-level analysis. Extract clauses and major syntactic units."
-                user_prompt = f"""Analyze this text and identify CLAUSES and major syntactic structures:
-"{text_snippet}"
-
-Return a JSON array with this exact format:
-[{{"text":"main clause","xbar_label":"main_clause"}}]
-
-Use these labels: main_clause, subordinate_clause, relative_clause, sentence, fragment"""
+            # Build focused prompt for this turn - use larger text window for better context
+            text_snippet = text[:200] if len(text) > 200 else text
+            
+            # Create domain-specific turn prompts
+            system_prompt, user_prompt = self._build_domain_specific_prompts(
+                domain, turn_focus, text_snippet
+            )
             
             # Use DialogueManager for proper conversation handling
             dm = DialogueManager(system_prompt=system_prompt, max_turns=1)
@@ -137,6 +218,9 @@ Use these labels: main_clause, subordinate_clause, relative_clause, sentence, fr
                 temperature=0.1,
                 timeout=90.0
             )
+            
+            # Add assistant response to dialogue for logging
+            dm.add("assistant", response)
             
             # Parse spans from response
             spans = self._parse_spans_from_response(response, text)
@@ -174,26 +258,36 @@ Use these labels: main_clause, subordinate_clause, relative_clause, sentence, fr
                     continue
                 
                 # Use regex to find all occurrences of this text in the original text
-                # Escape special regex characters in the span text
+                # Escape special regex characters in the span text and clean whitespace
+                span_text = span_text.strip()  # Remove leading/trailing whitespace
+                if not span_text:  # Skip empty spans
+                    continue
+                    
                 escaped_text = re.escape(span_text)
                 
-                # Find all matches (case-sensitive first, then case-insensitive)
-                matches = list(re.finditer(escaped_text, text))
-                if not matches:
-                    # Try case-insensitive
-                    matches = list(re.finditer(escaped_text, text, re.IGNORECASE))
+                # Find all matches (case-insensitive for all input segments)
+                matches = list(re.finditer(escaped_text, text, re.IGNORECASE))
                 
                 if matches:
-                    # Use the first match for now
-                    match = matches[0]
-                    start_pos = match.start()
-                    end_pos = match.end() - 1  # Convert to inclusive end
+                    # Choose the best match based on context and position
+                    best_match = self._select_best_match(matches, span_text, text)
+                    start_pos = best_match.start()
+                    end_pos = best_match.end() - 1  # Convert to inclusive end for internal storage
+                    
+                    # Validate that extracted text matches (case-insensitive for all input segments)
+                    actual_text = text[start_pos:end_pos + 1]
+                    # For case-insensitive matches, compare lowercased versions
+                    if actual_text.lower() != span_text.lower():
+                        logger.debug(f"Text mismatch (case-insensitive): expected '{span_text}', got '{actual_text}' at {start_pos}-{end_pos}")
+                        continue
+                    # Use the actual text from the source for the span
+                    span_text_to_use = actual_text
                     
                     # Create SpanLabel object
                     span_label = SpanLabel(
                         span=(start_pos, end_pos),
                         xbar_label=xbar_label,
-                        text=span_text
+                        text=span_text_to_use
                     )
                     spans.append(span_label)
                 else:
@@ -447,87 +541,59 @@ Use these labels: main_clause, subordinate_clause, relative_clause, sentence, fr
                 
         return boundaries
     
-    def _normalize_xbar_class(self, xbar_class: str) -> str:
+    def _select_best_match(self, matches: List[re.Match], span_text: str, full_text: str) -> re.Match:
         """
-        Normalize X-bar class label to standard format.
+        Select the best match from multiple occurrences of the same text.
+        
+        Prioritizes matches that:
+        1. Are at word boundaries
+        2. Are not nested within other matches
+        3. Appear earlier in the text (for deterministic results)
         
         Args:
-            xbar_class: Raw X-bar class from LLM
+            matches: List of regex matches for the same text
+            span_text: The text being matched
+            full_text: Full source text
             
         Returns:
-            Normalized X-bar class
+            The best match object
         """
-        if not xbar_class:
-            return "unknown"
+        if len(matches) == 1:
+            return matches[0]
+        
+        # Score each match
+        scored_matches = []
+        for match in matches:
+            score = 0
+            start_pos = match.start()
+            end_pos = match.end()
             
-        # Remove extra whitespace and convert to standard case
-        normalized = xbar_class.strip()
+            # Prefer word boundaries (not in middle of words)
+            if start_pos == 0 or not full_text[start_pos - 1].isalnum():
+                score += 2
+            if end_pos >= len(full_text) or not full_text[end_pos].isalnum():
+                score += 2
+                
+            # Prefer earlier positions for consistency
+            score -= start_pos / len(full_text)
+            
+            scored_matches.append((score, match))
         
-        # Preserve detailed classifier names first, only fall back to abbreviations if needed
-        detailed_map = {
-            "determiner": "determiner",
-            "noun": "noun", 
-            "verb": "verb",
-            "adjective": "adjective",
-            "adverb": "adverb",
-            "preposition": "preposition",
-            "pronoun": "pronoun",
-            "conjunction": "conjunction",
-            "punctuation": "punctuation",
-            "noun_phrase": "noun_phrase",
-            "verb_phrase": "verb_phrase",
-            "adjective_phrase": "adjective_phrase",
-            "adverb_phrase": "adverb_phrase", 
-            "prepositional_phrase": "prepositional_phrase",
-            "main_clause": "main_clause",
-            "subordinate_clause": "subordinate_clause",
-            "relative_clause": "relative_clause",
-            "simple_sentence": "simple_sentence",
-            "compound_sentence": "compound_sentence",
-            "complex_sentence": "complex_sentence",
-            "head": "head",
-            "specifier": "specifier",
-            "modifier": "modifier", 
-            "complement": "complement",
-            "adjunct": "adjunct",
-        }
+        # Return the highest scored match
+        scored_matches.sort(key=lambda x: x[0], reverse=True)
+        return scored_matches[0][1]
+    
+    def _normalize_xbar_class(self, xbar_class: str) -> str:
+        """
+        Normalize XBar class label using the mapping from XBarLabelMap.
         
-        # Try exact match first (case insensitive)
-        for key, value in detailed_map.items():
-            if normalized.lower() == key.lower():
-                return value
-        
-        # Legacy abbreviation fallbacks (only if no detailed match)
-        abbreviation_map = {
-            "noun phrase": "noun_phrase",
-            "verb phrase": "verb_phrase", 
-            "adjective phrase": "adjective_phrase",
-            "prepositional phrase": "prepositional_phrase",
-            "determiner phrase": "determiner_phrase",
-            "complementizer phrase": "complementizer_phrase",  
-            "np": "noun_phrase",
-            "vp": "verb_phrase",
-            "ap": "adjective_phrase",
-            "pp": "prepositional_phrase",
-            "dp": "determiner_phrase",
-            "cp": "complementizer_phrase",
-            "n": "noun",
-            "v": "verb",
-            "a": "adjective",
-            "adv": "adverb",
-            "d": "determiner",
-            "p": "preposition",
-            "pro": "pronoun",
-            "conj": "conjunction",
-        }
-        
-        # Try partial matches for abbreviations
-        for key, value in abbreviation_map.items():
-            if normalized.lower() == key.lower():
-                return value
-        
-        # Return original if no mapping found
-        return normalized
+        Args:
+            xbar_class: Input label (can be abbreviation or full name)
+            
+        Returns:
+            Normalized full label name
+        """
+        return XBarLabelMap.normalize_xbar_class(xbar_class)
     
     async def annotate_sequence(self, pretrain_record: PretrainRecord) -> Optional[AnnotationRecord]:
         """
@@ -556,17 +622,17 @@ Use these labels: main_clause, subordinate_clause, relative_clause, sentence, fr
             
             # Turn 1: Word-level spans
             logger.info("Turn 1: Extracting word-level spans")
-            word_spans = await self._extract_spans_via_dialogue(text, domain, "word_level")
+            word_spans = await self._extract_spans_via_dialogue(text, domain, "word_level", pretrain_record)
             all_spans.extend(word_spans)
             
             # Turn 2: Phrase-level spans
             logger.info("Turn 2: Extracting phrase-level spans")
-            phrase_spans = await self._extract_spans_via_dialogue(text, domain, "phrase_level")
+            phrase_spans = await self._extract_spans_via_dialogue(text, domain, "phrase_level", pretrain_record)
             all_spans.extend(phrase_spans)
             
             # Turn 3: Clause-level spans
             logger.info("Turn 3: Extracting clause-level spans")
-            clause_spans = await self._extract_spans_via_dialogue(text, domain, "clause_level")
+            clause_spans = await self._extract_spans_via_dialogue(text, domain, "clause_level", pretrain_record)
             all_spans.extend(clause_spans)
             
             # Validate and filter spans
@@ -661,17 +727,24 @@ Use these labels: main_clause, subordinate_clause, relative_clause, sentence, fr
         for span in spans:
             try:
                 start_pos, end_pos = span.span
+                span_text = span.text or ""
                 
-                # Create SpanAnnotation
+                # Validate span boundaries one more time
+                actual_text = text[start_pos:end_pos + 1]
+                if actual_text != span_text:
+                    logger.debug(f"Skipping span with mismatched text: expected '{span_text}', got '{actual_text}' at {start_pos}-{end_pos}")
+                    continue
+                
+                # Create SpanAnnotation with correct end position (keep inclusive internally)
                 annotation = SpanAnnotation(
                     start_pos=start_pos,
-                    end_pos=end_pos + 1,  # Convert to exclusive end
+                    end_pos=end_pos + 1,  # Convert to exclusive end only for final output
                     xbar_label=span.xbar_label,
                     linguistic_features={
-                        'extracted_text': span.text,
+                        'extracted_text': span_text,
                         'character_span': {
                             'start_char': start_pos,
-                            'end_char': end_pos
+                            'end_char': end_pos  # Keep original inclusive end in metadata
                         }
                     }
                 )

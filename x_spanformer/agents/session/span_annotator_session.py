@@ -121,12 +121,12 @@ class SpanAnnotatorSession:
         """
         start_time = asyncio.get_event_loop().time()
         
-        logger.info(f"[UNIFIED] Starting annotation for sequence {pretrain_record.sequence_number}")
-        logger.info(f"[UNIFIED] Text length: {len(pretrain_record.raw)} chars")
-        logger.info(f"[UNIFIED] Text preview: {pretrain_record.raw[:100]}{'...' if len(pretrain_record.raw) > 100 else ''}")
+        logger.info(f"Starting annotation: sequence {pretrain_record.sequence_number}")
+        logger.info(f"Text length: {len(pretrain_record.raw)} chars")
+        logger.info(f"Preview: {pretrain_record.raw[:100]}{'...' if len(pretrain_record.raw) > 100 else ''}")
         
         try:
-            logger.info(f"[UNIFIED] Starting sequence processing for {pretrain_record.sequence_number}")
+            logger.info(f"Processing sequence {pretrain_record.sequence_number}")
             
             # Call progress callback if provided
             if progress_callback:
@@ -153,8 +153,8 @@ class SpanAnnotatorSession:
                 self.stats["total_turns"] += 3  # Always 3 turns
                 self.stats["total_time"] += processing_time
                 
-                logger.info(f"[UNIFIED] Successfully annotated sequence {pretrain_record.sequence_number}")
-                logger.info(f"[UNIFIED] Extracted {len(annotation_record.span_annotations)} spans in 3 turns")
+                logger.info(f"SUCCESS: Sequence {pretrain_record.sequence_number} annotated")
+                logger.info(f"Extracted {len(annotation_record.span_annotations)} spans (3 turns)")
                 
                 # Final progress callback
                 if progress_callback:
@@ -181,7 +181,7 @@ class SpanAnnotatorSession:
                 self.stats["total_time"] += processing_time
                 
                 error_msg = f"Three-turn annotation failed for sequence {pretrain_record.sequence_number or 0}"
-                logger.warning(f"[UNIFIED] {error_msg}")
+                logger.warning(f"{error_msg}")
                 
                 return AnnotationResult(
                     sequence_number=pretrain_record.sequence_number or 0,
@@ -194,7 +194,7 @@ class SpanAnnotatorSession:
         except asyncio.TimeoutError:
             processing_time = asyncio.get_event_loop().time() - start_time
             error_msg = f"Annotation timeout after {self.conversation_timeout}s for sequence {pretrain_record.sequence_number or 0}"
-            logger.error(f"[UNIFIED] {error_msg}")
+            logger.error(f"{error_msg}")
             
             self.stats["total_processed"] += 1
             self.stats["failed"] += 1
@@ -211,7 +211,7 @@ class SpanAnnotatorSession:
         except Exception as e:
             processing_time = asyncio.get_event_loop().time() - start_time
             error_msg = f"Failed to annotate sequence {pretrain_record.sequence_number or 0}: {str(e)}"
-            logger.error(f"[UNIFIED] {error_msg}")
+            logger.error(f"{error_msg}")
             
             self.stats["total_processed"] += 1
             self.stats["failed"] += 1
@@ -252,7 +252,7 @@ class SpanAnnotatorSession:
                 result = await task
                 yield result
             except Exception as e:
-                logger.error(f"[UNIFIED] Stream annotation error: {e}")
+                logger.error(f"Stream annotation error: {e}")
                 yield AnnotationResult(
                     sequence_number=-1,
                     annotation_record=None,
