@@ -347,11 +347,7 @@ Use these labels: {", ".join(label_names)}"""
     
     def _parse_json_response(self, response: str) -> List[Dict[str, Any]]:
         """
-        Parse and validate JSON response from LLM with enhanced error recovery.
-        
-        This method implements efficient error recovery aligned with the mathematical
-        rigor described in Section 3.3 (Factorized Pointer Networks) of the 
-        X-Spanformer architecture paper.
+        Parse and validate JSON response from LLM with optimized error recovery.
         
         Args:
             response: Raw response string from LLM
@@ -361,41 +357,51 @@ Use these labels: {", ".join(label_names)}"""
         """
         annotations = []
         
-        # Check for obviously truncated responses
-        if response.strip().endswith(('"}', '"}}', '"]')) and not response.strip().endswith(']}'):
+        # FAST PATH: Check for truncated responses and handle immediately
+        response_stripped = response.strip()
+        if response_stripped.endswith(('"}', '"}}', '"]')) and not response_stripped.endswith(']}'):
             logger.warning("Detected truncated response - attempting recovery")
-            # Try to append missing closing bracket
-            response = response.strip() + ']'
+            # For truncated responses, immediately fall back to regex extraction
+            # This prevents the expensive JSON fixing loops
+            regex_annotations = self._recover_malformed_json(response_stripped)
+            if regex_annotations:
+                logger.debug(f"Recovered {len(regex_annotations)} annotations via regex fallback")
+                # Apply the same deduplication logic as used at the end of this method
+                seen_annotations = set()
+                unique_annotations = []
+                for annotation in regex_annotations:
+                    if isinstance(annotation, dict):
+                        text = annotation.get('text', '') or ''
+                        xbar_label = annotation.get('xbar_label', '') or ''
+                        key = (text.strip(), xbar_label.strip())
+                        if key not in seen_annotations and text.strip() and xbar_label.strip():
+                            seen_annotations.add(key)
+                            unique_annotations.append(annotation)
+                return unique_annotations
+            # If regex fails, continue with limited attempts below
         
-        # Try to extract JSON from response with comprehensive patterns
-        # Priority ordered: try most likely patterns first for efficiency
+        # Try to extract JSON from response with streamlined patterns
         json_patterns = [
             r'```json\s*(\[.*?\])\s*```',       # JSON code block with array (highest priority)
             r'```\s*(\[.*?\])\s*```',           # Generic code block with array
-            r'```json\s*(\[.*?)\s*```',         # JSON code block with truncated array
-            r'```\s*(\[.*?)\s*```',             # Generic code block with truncated array  
             r'(\[(?:\s*\{[^}]*\},?\s*)*\])',    # JSON arrays with objects
-            r'```json\s*(\{.*?\})\s*```',       # JSON code block with object
-            r'```\s*(\{.*?\})\s*```',           # Generic code block with object
         ]
         
-        # Track attempted fixes to prevent infinite loops
-        attempted_fixes = set()
+        # Streamlined processing with early termination
         successful_parse = False
+        max_attempts = 3  # Reduced from 5 to prevent expensive processing
+        attempts = 0
         
         for pattern in json_patterns:
-            if successful_parse:
-                break  # Exit early if we successfully parsed complete JSON
+            if successful_parse or attempts >= max_attempts:
+                break
                 
             matches = re.findall(pattern, response, re.DOTALL | re.MULTILINE)
             for match in matches:
-                # Skip if we've already attempted to fix this exact text
-                match_hash = hash(match)
-                if match_hash in attempted_fixes:
-                    logger.debug(f"Skipping duplicate fix attempt for JSON fragment")
-                    continue
-                    
-                attempted_fixes.add(match_hash)
+                attempts += 1
+                if attempts >= max_attempts:
+                    logger.debug(f"Hit attempt limit ({max_attempts}), stopping JSON recovery")
+                    break
                 
                 try:
                     # Try direct parsing first
@@ -406,35 +412,33 @@ Use these labels: {", ".join(label_names)}"""
                     elif isinstance(parsed_data, dict):
                         annotations.append(parsed_data)
                     logger.debug(f"Successfully parsed JSON directly")
-                    break  # Move to next pattern if successful
+                    break
                     
                 except json.JSONDecodeError as e:
                     logger.debug(f"JSON parsing failed: {e}")
-                    logger.debug(f"Problematic JSON snippet: {match[:100]}...")  # Reduced log size
+                    logger.debug(f"Problematic JSON snippet: {match[:100]}...")
                     
-                    # Apply circuit breaker: only attempt fix if error is recoverable
-                    if self._is_recoverable_json_error(e, match):
+                    # ONLY attempt fix for clearly recoverable patterns
+                    if len(match) < 1000 and self._is_recoverable_json_error(e, match):
                         try:
                             fixed_json = self._fix_malformed_json(match)
                             parsed_data = json.loads(fixed_json)
                             if isinstance(parsed_data, list):
                                 annotations.extend(parsed_data)
-                                successful_parse = True
                             elif isinstance(parsed_data, dict):
                                 annotations.append(parsed_data)
-                            logger.debug(f"Successfully fixed and parsed JSON")
-                            break  # Move to next pattern if successful
-                            
-                        except json.JSONDecodeError as e2:
-                            logger.debug(f"JSON fix failed: {e2}")
-                            # Try regex recovery when fix fails
+                            logger.debug("JSON fix successful")
+                            successful_parse = True
+                            break
+                        except json.JSONDecodeError:
+                            logger.debug("JSON fix failed, trying regex recovery")
+                            # Last resort: regex extraction
                             recovered_annotations = self._recover_malformed_json(match)
                             if recovered_annotations:
                                 logger.debug(f"Recovered {len(recovered_annotations)} annotations via regex")
                                 annotations.extend(recovered_annotations)
-                            # Continue to next match rather than trying same pattern repeatedly
-                    else:
-                        logger.debug(f"JSON error not recoverable, trying regex recovery")
+                                successful_parse = True
+                                break
                         recovered_annotations = self._recover_malformed_json(match)
                         if recovered_annotations:
                             logger.debug(f"Recovered {len(recovered_annotations)} annotations via regex")
