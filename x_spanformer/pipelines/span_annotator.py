@@ -40,6 +40,36 @@ DEFAULT_MODEL = "llama3.2:3b"
 logger = logging.getLogger(__name__)
 
 
+def format_eta_time(eta_minutes: float) -> str:
+    """
+    Format ETA time in a human-readable format.
+    
+    Args:
+        eta_minutes: ETA in minutes
+        
+    Returns:
+        Formatted time string (e.g., "2h 30m", "1d 5h 20m")
+    """
+    if eta_minutes < 60:
+        return f"{eta_minutes:.1f} min"
+    
+    hours = int(eta_minutes // 60)
+    minutes = int(eta_minutes % 60)
+    
+    if hours < 24:
+        return f"{hours}h {minutes}m"
+    
+    days = hours // 24
+    remaining_hours = hours % 24
+    
+    if remaining_hours == 0 and minutes == 0:
+        return f"{days}d"
+    elif minutes == 0:
+        return f"{days}d {remaining_hours}h"
+    else:
+        return f"{days}d {remaining_hours}h {minutes}m"
+
+
 class SpanAnnotatorPipeline:
     """
     Three-turn span annotation pipeline with robust session management.
@@ -119,6 +149,14 @@ class SpanAnnotatorPipeline:
                 try:
                     data = json.loads(line.strip())
                     sequence = PretrainRecord(**data)
+                    
+                    # Ensure sequence_number is set from meta if not present at root level
+                    if sequence.sequence_number is None and sequence.meta:
+                        if hasattr(sequence.meta, 'sequence_number') and sequence.meta.sequence_number:
+                            sequence.sequence_number = sequence.meta.sequence_number
+                        elif isinstance(sequence.meta, dict) and 'sequence_number' in sequence.meta:
+                            sequence.sequence_number = sequence.meta['sequence_number']
+                    
                     sequences.append(sequence)
                 except Exception as e:
                     logger.warning(f"Parse error line {line_num}: {e}")
@@ -462,11 +500,12 @@ class SpanAnnotatorPipeline:
                         sequences_per_minute = (completed_count / elapsed_seconds) * 60
                         eta_seconds = remaining_count * avg_time_per_sequence
                         eta_minutes = eta_seconds / 60
+                        eta_formatted = format_eta_time(eta_minutes)
                         
                         logger.info("=" * 80)
                         logger.info(f"{completed_count}/{len(sequences_to_process)} sequences completed | "
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
-                                  f"ETA: {eta_minutes:.1f} min")
+                                  f"ETA: {eta_formatted}")
                         logger.info("=" * 80)
                 else:
                     error_msg = result.error_message or "Annotation failed"
@@ -485,11 +524,12 @@ class SpanAnnotatorPipeline:
                         sequences_per_minute = (completed_count / elapsed_seconds) * 60
                         eta_seconds = remaining_count * avg_time_per_sequence
                         eta_minutes = eta_seconds / 60
+                        eta_formatted = format_eta_time(eta_minutes)
                         
                         logger.info("=" * 80)
                         logger.info(f"{completed_count}/{len(sequences_to_process)} sequences completed | "
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
-                                  f"ETA: {eta_minutes:.1f} min")
+                                  f"ETA: {eta_formatted}")
                         logger.info("=" * 80)
                     
             except Exception as e:
@@ -508,11 +548,12 @@ class SpanAnnotatorPipeline:
                     sequences_per_minute = (completed_count / elapsed_seconds) * 60
                     eta_seconds = remaining_count * avg_time_per_sequence
                     eta_minutes = eta_seconds / 60
+                    eta_formatted = format_eta_time(eta_minutes)
                     
                     logger.info("=" * 80)
                     logger.info(f"{completed_count}/{len(sequences_to_process)} sequences completed | "
                               f"Avg: {sequences_per_minute:.1f} seq/min | "
-                              f"ETA: {eta_minutes:.1f} min")
+                              f"ETA: {eta_formatted}")
                     logger.info("=" * 80)
         
         # Update statistics
