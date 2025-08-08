@@ -162,21 +162,15 @@ Use these labels: {", ".join(label_names)}"""
     
     def _escape_text_for_prompt(self, text: str) -> str:
         """Escape text for safe inclusion in JSON-generating prompts."""
-        # Escape characters that can confuse JSON generation
+        # Only escape characters that will break JSON parsing - preserve original text content
         escaped = text.replace('\\', '\\\\')  # Escape backslashes first
-        escaped = escaped.replace('"', '\\"')  # Escape quotes
-        escaped = escaped.replace('\n', '\\n')  # Escape newlines
-        escaped = escaped.replace('\t', '\\t')  # Escape tabs
-        escaped = escaped.replace('\r', '\\r')  # Escape carriage returns
+        escaped = escaped.replace('"', '\\"')  # Escape quotes that would break JSON strings
         return escaped
     
     def _unescape_text_for_matching(self, text: str) -> str:
         """Unescape text to match against original raw text."""
-        # Reverse the escaping process
-        unescaped = text.replace('\\r', '\r')
-        unescaped = unescaped.replace('\\t', '\t')  
-        unescaped = unescaped.replace('\\n', '\n')
-        unescaped = unescaped.replace('\\"', '"')
+        # Reverse the minimal escaping - only what we actually escaped
+        unescaped = text.replace('\\"', '"')    # Unescape quotes
         unescaped = unescaped.replace('\\\\', '\\')  # Unescape backslashes last
         return unescaped
     

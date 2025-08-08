@@ -31,6 +31,9 @@ class XBarJsonParser:
         if not response_stripped:
             return []
         
+        # Pre-process response to fix common LLM JSON generation errors
+        response_cleaned = self._clean_malformed_json(response_stripped)
+        
         # JSON extraction patterns
         patterns = [
             r'```json\s*(\[.*?\])\s*```',        # JSON array in code block
@@ -42,7 +45,7 @@ class XBarJsonParser:
         ]
         
         for pattern in patterns:
-            for match in re.findall(pattern, response_stripped, re.DOTALL):
+            for match in re.findall(pattern, response_cleaned, re.DOTALL):
                 try:
                     # Try direct parsing - no repair
                     parsed_data = json.loads(match)
@@ -62,6 +65,32 @@ class XBarJsonParser:
         
         logger.warning("No valid JSON found in response, skipping sequence")
         return []
+    
+    def _clean_malformed_json(self, response: str) -> str:
+        """Clean common LLM-generated JSON malformations."""
+        cleaned = response
+        
+        # Fix the specific pattern we're seeing: {"text","word1","word2",...,"}"xbar_label:"label"}
+        # This appears to be the LLM mixing up JSON structure and trying to put multiple values in the text field
+        malformed_pattern = r'\{"text","([^"]+(?:","[^"]+)*)","\}"xbar_label:"([^"]+)"\}'
+        
+        def fix_malformed_entry(match):
+            text_parts = match.group(1).split('","')
+            # Join all text parts with spaces
+            combined_text = ' '.join(text_parts)
+            label = match.group(2)
+            # Return properly formatted JSON object
+            return f'{{"text":"{combined_text}","xbar_label":"{label}"}}'
+        
+        cleaned = re.sub(malformed_pattern, fix_malformed_entry, cleaned)
+        
+        # Fix missing quotes around property names
+        cleaned = re.sub(r'(\w+):', r'"\1":', cleaned)
+        
+        # Fix trailing commas in arrays/objects
+        cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
+        
+        return cleaned
     
     def filter_valid_annotations(self, annotations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Filter annotations for basic validity - no deduplication at this level."""
