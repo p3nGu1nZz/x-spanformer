@@ -35,6 +35,7 @@ from x_spanformer.agents.ollama_client import check_ollama_connection
 
 # Constants
 DEFAULT_MODEL = "llama3.2:3b"
+MAX_TOTAL_FAILURES = 3  # Exit pipeline after this many total failures
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -515,9 +516,14 @@ class SpanAnnotatorPipeline:
                         logger.info("=" * 80)
                 else:
                     error_msg = result.error_message or "Annotation failed"
-                    self.save_working_file(output_dir, sequence, error_message=error_msg)
                     failed_count += 1
                     logger.warning(f"FAILED: Sequence {seq_id}: {error_msg}")
+                    
+                    # Check if we've exceeded the maximum failure limit
+                    if failed_count >= MAX_TOTAL_FAILURES:
+                        logger.critical(f"CRITICAL: Reached maximum failure limit ({MAX_TOTAL_FAILURES} failures). Exiting pipeline.")
+                        logger.critical(f"Failed sequences will be retried automatically on next run.")
+                        break
                     
                     # Calculate and log progress summary
                     current_time = datetime.now()
@@ -540,9 +546,14 @@ class SpanAnnotatorPipeline:
                         logger.info("=" * 80)
                     
             except Exception as e:
-                self.save_working_file(output_dir, sequence, error_message=str(e))
                 failed_count += 1
                 logger.error(f"ERROR: Sequence {seq_id}: {str(e)}")
+                
+                # Check if we've exceeded the maximum failure limit
+                if failed_count >= MAX_TOTAL_FAILURES:
+                    logger.critical(f"CRITICAL: Reached maximum failure limit ({MAX_TOTAL_FAILURES} failures). Exiting pipeline.")
+                    logger.critical(f"Failed sequences will be retried automatically on next run.")
+                    break
                 
                 # Calculate and log progress summary
                 current_time = datetime.now()
@@ -570,11 +581,26 @@ class SpanAnnotatorPipeline:
         self.pipeline_stats["failed_annotations"] = failed_count
         self.pipeline_stats["completed_at"] = datetime.now().isoformat()
         
+        # Check if pipeline exited early due to failures
+        processed_count = successful_count + failed_count
+        if processed_count < len(sequences_to_process):
+            remaining_count = len(sequences_to_process) - processed_count
+            logger.warning(f"Pipeline exited early: {remaining_count} sequences not processed due to failure limit")
+            self.pipeline_stats["early_exit"] = True
+            self.pipeline_stats["remaining_sequences"] = remaining_count
+        else:
+            self.pipeline_stats["early_exit"] = False
+        
         # Consolidate and save metadata
         self.consolidate_results(output_dir)
         self.update_metadata(output_dir)
         
-        logger.info(f"Pipeline completed: {successful_count}/{len(sequences_to_process)} successful")
+        # Final status summary
+        if failed_count >= MAX_TOTAL_FAILURES:
+            logger.critical(f"Pipeline terminated due to {failed_count} failures. Failed sequences will be retried on next run.")
+        else:
+            logger.info(f"Pipeline completed: {successful_count}/{len(sequences_to_process)} successful")
+        
         logger.info(f"Results saved to: {output_dir}")
         
         return self.pipeline_stats
@@ -661,6 +687,11 @@ async def main():
         logger.info(f"Results: {args.output}")
         logger.info(f"Working files: {args.output / 'working'}")
         logger.info(f"Annotations: {args.output / 'annotations.jsonl'}")
+        
+        # Check if pipeline failed due to too many failures
+        if stats.get('early_exit', False) and stats['failed_annotations'] >= MAX_TOTAL_FAILURES:
+            logger.critical(f"Pipeline terminated due to failure limit. Exiting with error code.")
+            sys.exit(1)
         
         logger.info("Pipeline completed successfully!")
         logger.info(f"Stats: {stats['successful_annotations']}/{stats['total_sequences']} sequences annotated")
