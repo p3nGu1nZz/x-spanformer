@@ -86,9 +86,10 @@ async def chat(
 	model: str,
 	conversation: List[Message],
 	system: Optional[str] = None,
-	temperature: float = 0.2
+	temperature: float = 0.2,
+	timeout: float = 60.0
 ) -> str:
-	client = AsyncClient()
+	client = AsyncClient(timeout=timeout)
 	
 	# Build messages list with system prompt if provided
 	messages: List[Message] = []
@@ -96,25 +97,30 @@ async def chat(
 		messages.append({"role": "system", "content": system})
 	messages.extend(conversation)
 
-	# Single line truncated logging for dialogue
+	# Log query size instead of full content
 	user_msg = next((msg['content'] for msg in messages if msg['role'] == 'user'), "")
-	user_preview = (user_msg[:80] + '...') if len(user_msg) > 80 else user_msg
-	logger.info(f"Sending to {model} (T={temperature}): {user_preview}")
+	query_size = len(user_msg)
+	logger.info(f"Sending to {model} (T={temperature}, timeout={timeout}s, query_size={query_size} chars)")
 
-	response = await client.chat(
-		model=model,
-		messages=messages,
-		options={
-			"temperature": temperature,
-			"num_predict": 4096,  # Max tokens to prevent runaway generations
-			"repeat_penalty": 1.1  # Slight penalty for repetition
-		},
-		stream=False
-	)
-	content = response["message"]["content"]
-	
-	# Single line truncated response logging
-	response_preview = (content[:80] + '...') if len(content) > 80 else content
-	logger.info(f"Response from {model}: {response_preview}")
-	
-	return content
+	try:
+		response = await client.chat(
+			model=model,
+			messages=messages,
+			options={
+				"temperature": temperature,
+				"num_predict": 2048,  # Increased token limit for better span coverage
+				"repeat_penalty": 1.1  # Slight penalty for repetition
+			},
+			stream=False
+		)
+		content = response["message"]["content"]
+		
+		# Log response size instead of full content
+		response_size = len(content)
+		logger.info(f"Response from {model} (response_size={response_size} chars)")
+		
+		return content
+		
+	except Exception as e:
+		logger.error(f"Error in chat request: {e}")
+		raise

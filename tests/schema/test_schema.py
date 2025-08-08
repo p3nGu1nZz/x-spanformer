@@ -22,6 +22,9 @@ class TestSchemas(unittest.TestCase):
             extracted_by="test",
             source_file="test.txt",
             notes="test note",
+            sequence_number=1,
+            timestamp="2025-01-01T00:00:00",
+            source="test"
         )
         self.assertEqual(meta.tags, ["test"])
         self.assertEqual(meta.doc_language, "en")
@@ -33,6 +36,9 @@ class TestSchemas(unittest.TestCase):
                 notes="test note",
                 doc_language="en",
                 confidence=None,
+                sequence_number=1,
+                timestamp="2025-01-01T00:00:00",
+                source="test"
             ).confidence
         )
 
@@ -43,9 +49,9 @@ class TestSchemas(unittest.TestCase):
         self.assertIsInstance(record.meta, metadata.RecordMeta)
 
     def test_span_label(self):
-        label = span.SpanLabel(span=(0, 1), label="noun", text="test", role="token")
+        label = span.SpanLabel(span=(0, 1), xbar_label="noun", text="test")
         self.assertEqual(label.span, (0, 1))
-        self.assertEqual(label.label, "noun")
+        self.assertEqual(label.xbar_label, "noun")
 
     def test_xp_span(self):
         xp = xbar.XPSpan(
