@@ -8,7 +8,9 @@ validation, and classifier mapping for robust hierarchical span extraction.
 
 import logging
 import asyncio
-from typing import Optional, List, Dict, Any
+import json
+import re
+from typing import Optional, List, Dict, Any, Tuple
 from enum import Enum
 from dataclasses import dataclass
 
@@ -112,7 +114,7 @@ Return a JSON array with all identified spans using the format specified in the 
     
     def _parse_spans_from_response(self, response: str, text: str) -> List[CharacterSpan]:
         """
-        Parse character spans from LLM response.
+        Parse character spans from LLM response with robust error recovery.
         
         Args:
             response: Raw LLM response
@@ -121,60 +123,394 @@ Return a JSON array with all identified spans using the format specified in the 
         Returns:
             List of parsed and validated character spans
         """
-        import json
-        import re
-        
         spans = []
         
-        try:
-            # Try to parse as JSON first
-            if response.strip().startswith('['):
-                span_data = json.loads(response.strip())
-                for item in span_data:
-                    if all(key in item for key in ['text', 'start', 'end', 'label']):
-                        char_span = CharacterSpan(
-                            start_char=item['start'],
-                            end_char=item['end'],
-                            xbar_class=item['label'],
-                            confidence=item.get('confidence', 1.0),
-                            text=item['text']
-                        )
-                        
-                        # Validate span bounds and text match
-                        if (0 <= char_span.start_char < len(text) and 
-                            char_span.start_char < char_span.end_char <= len(text)):
-                            actual_text = text[char_span.start_char:char_span.end_char + 1]
-                            if (char_span.text and actual_text and 
-                                actual_text.strip() == char_span.text.strip()):
-                                spans.append(char_span)
-            
-            # Fallback: parse from text format
-            else:
-                pattern = r'"([^"]*?)"\s*\((\d+)-(\d+)\)\s*->\s*(\w+)(?:\s*\[confidence:\s*([\d.]+)\])?'
-                matches = re.finditer(pattern, response)
+        # First try robust JSON parsing with multiple patterns
+        json_annotations = self._parse_json_response(response)
+        
+        for annotation in json_annotations:
+            try:
+                # Extract required fields with flexible field names
+                span_text = annotation.get('text', '')
+                xbar_class = annotation.get('label', annotation.get('xbar_class', annotation.get('class', '')))
+                confidence = float(annotation.get('confidence', 1.0))
                 
-                for match in matches:
+                # Try to get positions if available
+                start_char = annotation.get('start', annotation.get('start_char'))
+                end_char = annotation.get('end', annotation.get('end_char'))
+                
+                # If positions available, use them directly
+                if start_char is not None and end_char is not None:
+                    start_char = int(start_char)
+                    end_char = int(end_char)
+                    
+                    # Validate bounds and text match
+                    is_valid, corrected_start, corrected_end = self._validate_span_boundaries(
+                        text, start_char, end_char, span_text
+                    )
+                    
+                    if is_valid:
+                        char_span = CharacterSpan(
+                            start_char=corrected_start,
+                            end_char=corrected_end,
+                            xbar_class=self._normalize_xbar_class(xbar_class),
+                            confidence=confidence,
+                            text=span_text
+                        )
+                        spans.append(char_span)
+                
+                # If no positions, use text-based boundary extraction
+                elif span_text and span_text.strip():
+                    boundaries = self._extract_text_boundaries(text, span_text)
+                    for start_char, end_char in boundaries:
+                        char_span = CharacterSpan(
+                            start_char=start_char,
+                            end_char=end_char - 1,  # Convert to inclusive end
+                            xbar_class=self._normalize_xbar_class(xbar_class),
+                            confidence=confidence,
+                            text=span_text
+                        )
+                        spans.append(char_span)
+                        break  # Use first occurrence
+                        
+            except Exception as e:
+                logger.debug(f"Failed to parse annotation: {annotation}, error: {e}")
+                continue
+        
+        # Fallback: parse from text format if no JSON found
+        if not spans:
+            pattern = r'"([^"]*?)"\s*\((\d+)-(\d+)\)\s*->\s*(\w+)(?:\s*\[confidence:\s*([\d.]+)\])?'
+            matches = re.finditer(pattern, response)
+            
+            for match in matches:
+                try:
                     span_text = match.group(1)
                     start_char = int(match.group(2))
                     end_char_inclusive = int(match.group(3))
                     xbar_class = match.group(4)
                     confidence = float(match.group(5)) if match.group(5) else 1.0
                     
-                    if start_char >= 0 and end_char_inclusive < len(text):
-                        actual_text = text[start_char:end_char_inclusive + 1]
-                        if actual_text.strip() == span_text.strip():
-                            spans.append(CharacterSpan(
-                                start_char=start_char,
-                                end_char=end_char_inclusive,
-                                xbar_class=xbar_class,
-                                confidence=confidence,
-                                text=span_text
-                            ))
+                    is_valid, corrected_start, corrected_end = self._validate_span_boundaries(
+                        text, start_char, end_char_inclusive, span_text
+                    )
+                    
+                    if is_valid:
+                        spans.append(CharacterSpan(
+                            start_char=corrected_start,
+                            end_char=corrected_end,
+                            xbar_class=self._normalize_xbar_class(xbar_class),
+                            confidence=confidence,
+                            text=span_text
+                        ))
+                except Exception as e:
+                    logger.debug(f"Failed to parse text format span: {match.group(0)}, error: {e}")
+                    continue
         
+        # Remove duplicates based on position and class
+        unique_spans = []
+        seen_spans = set()
+        
+        for span in spans:
+            span_key = (span.start_char, span.end_char, span.xbar_class)
+            if span_key not in seen_spans:
+                seen_spans.add(span_key)
+                unique_spans.append(span)
+        
+        logger.info(f"Parsed {len(unique_spans)} unique spans from {len(spans)} total found")
+        return unique_spans
+    
+    def _parse_json_response(self, response: str) -> List[Dict[str, Any]]:
+        """
+        Parse and validate JSON response from LLM with enhanced error recovery.
+        
+        Args:
+            response: Raw response string from LLM
+            
+        Returns:
+            List of parsed annotation dictionaries
+        """
+        annotations = []
+        
+        # Try to extract JSON from response with comprehensive patterns
+        json_patterns = [
+            r'```json\s*(\[.*?\])\s*```',       # JSON code block with array
+            r'```json\s*(\{.*?\})\s*```',       # JSON code block with object
+            r'```\s*(\[.*?\])\s*```',           # Generic code block with array
+            r'```\s*(\{.*?\})\s*```',           # Generic code block with object
+            r'(\[(?:\s*\{[^}]*\},?\s*)*\])',    # JSON arrays with objects
+            r'(\{[^{}]*"text"[^{}]*\})',        # Objects containing "text" field
+            r'(\{[^{}]*"start"[^{}]*\})',       # Objects containing position fields
+        ]
+        
+        for pattern in json_patterns:
+            matches = re.findall(pattern, response, re.DOTALL | re.MULTILINE)
+            for match in matches:
+                try:
+                    # Try direct parsing first
+                    parsed_data = json.loads(match)
+                    if isinstance(parsed_data, list):
+                        annotations.extend(parsed_data)
+                    elif isinstance(parsed_data, dict):
+                        annotations.append(parsed_data)
+                except json.JSONDecodeError:
+                    # Try fixing malformed JSON
+                    try:
+                        fixed_json = self._fix_malformed_json(match)
+                        parsed_data = json.loads(fixed_json)
+                        if isinstance(parsed_data, list):
+                            annotations.extend(parsed_data)
+                        elif isinstance(parsed_data, dict):
+                            annotations.append(parsed_data)
+                    except json.JSONDecodeError:
+                        # Try regex recovery as last resort
+                        recovered_annotations = self._recover_malformed_json(match)
+                        annotations.extend(recovered_annotations)
+        
+        # Deduplicate annotations based on key fields
+        seen_annotations = set()
+        unique_annotations = []
+        
+        for annotation in annotations:
+            if isinstance(annotation, dict):
+                # Create key for deduplication
+                text = annotation.get('text', '')
+                xbar_class = annotation.get('label', annotation.get('xbar_class', ''))
+                key = (text.strip(), xbar_class.strip())
+                
+                if key not in seen_annotations and text.strip():
+                    seen_annotations.add(key)
+                    unique_annotations.append(annotation)
+        
+        logger.debug(f"Parsed {len(unique_annotations)} unique annotations from {len(annotations)} total found")
+        return unique_annotations
+    
+    def _fix_malformed_json(self, json_str: str) -> str:
+        """Fix common JSON formatting issues."""
+        # Remove trailing commas before closing brackets
+        json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
+        
+        # Fix missing quotes around keys
+        json_str = re.sub(r'(\w+)(?=\s*:)', r'"\1"', json_str)
+        
+        # Fix missing commas between objects in arrays
+        json_str = re.sub(r'}\s*{', '}, {', json_str)
+        
+        return json_str
+    
+    def _recover_malformed_json(self, malformed_str: str) -> List[Dict[str, Any]]:
+        """Attempt to recover data from malformed JSON using pattern matching."""
+        recovered = []
+        
+        try:
+            # Look for text/class pairs using regex
+            text_pattern = r'"text":\s*"([^"]*)"'
+            class_pattern = r'"(?:label|xbar_class|class)":\s*"([^"]*)"'
+            conf_pattern = r'"confidence":\s*([0-9.]+)'
+            start_pattern = r'"(?:start|start_char)":\s*(\d+)'
+            end_pattern = r'"(?:end|end_char)":\s*(\d+)'
+            
+            text_matches = re.findall(text_pattern, malformed_str)
+            class_matches = re.findall(class_pattern, malformed_str)
+            conf_matches = re.findall(conf_pattern, malformed_str)
+            start_matches = re.findall(start_pattern, malformed_str)
+            end_matches = re.findall(end_pattern, malformed_str)
+            
+            # Try to pair them up
+            for i, text in enumerate(text_matches):
+                annotation = {'text': text}
+                
+                if i < len(class_matches):
+                    annotation['label'] = class_matches[i]
+                if i < len(conf_matches):
+                    annotation['confidence'] = float(conf_matches[i])
+                if i < len(start_matches):
+                    annotation['start'] = int(start_matches[i])
+                if i < len(end_matches):
+                    annotation['end'] = int(end_matches[i])
+                
+                if 'label' in annotation:  # Only add if we have both text and label
+                    recovered.append(annotation)
+                    
         except Exception as e:
-            logger.warning(f"Failed to parse spans from response: {e}")
+            logger.debug(f"Recovery attempt failed: {e}")
+            
+        return recovered
+    
+    def _validate_span_boundaries(
+        self, 
+        text: str, 
+        start: int, 
+        end: int,
+        span_text: str = ""
+    ) -> Tuple[bool, int, int]:
+        """
+        Validate and correct span boundaries.
         
-        return spans
+        Args:
+            text: Original text sequence
+            start: Start position (inclusive)
+            end: End position (inclusive for this method)
+            span_text: Expected text at this position
+            
+        Returns:
+            Tuple of (is_valid, corrected_start, corrected_end)
+        """
+        original_start, original_end = start, end
+        
+        # Fix negative start positions
+        if start < 0:
+            start = 0
+        
+        # Fix end positions beyond sequence length
+        if end >= len(text):
+            end = len(text) - 1
+        
+        # Fix inverted positions
+        if start >= end:
+            if original_start < len(text):
+                end = min(original_start + max(1, len(span_text)), len(text) - 1)
+            else:
+                return False, start, end
+        
+        # Validate against expected text if provided
+        if span_text and span_text.strip():
+            actual_text = text[start:end + 1]
+            if actual_text.strip() != span_text.strip():
+                # Try to find the text nearby
+                boundaries = self._extract_text_boundaries(text, span_text.strip())
+                if boundaries:
+                    best_start, best_end = boundaries[0]
+                    return True, best_start, best_end - 1  # Convert to inclusive
+        
+        # Final validation: ensure we have a valid span length
+        if end <= start:
+            return False, start, end
+        
+        return True, start, end
+    
+    def _extract_text_boundaries(self, text: str, target_text: str) -> List[Tuple[int, int]]:
+        """
+        Find all occurrences of target_text in the source text.
+        
+        Args:
+            text: Source text to search in
+            target_text: Text snippet to find
+            
+        Returns:
+            List of (start_pos, end_pos) tuples for all occurrences (end_pos is exclusive)
+        """
+        boundaries = []
+        if not target_text or not target_text.strip():
+            return boundaries
+            
+        # Clean target text
+        target_clean = target_text.strip()
+        
+        # Find all occurrences using regex with proper escaping
+        escaped_target = re.escape(target_clean)
+        
+        # Use finditer to get all matches with positions
+        for match in re.finditer(escaped_target, text):
+            start_pos = match.start()
+            end_pos = match.end()
+            boundaries.append((start_pos, end_pos))
+            
+        # If no exact matches found, try fuzzy matching for partial text
+        if not boundaries and len(target_clean) > 2:
+            # Try finding the target as a substring (case insensitive)
+            text_lower = text.lower()
+            target_lower = target_clean.lower()
+            start = 0
+            while True:
+                pos = text_lower.find(target_lower, start)
+                if pos == -1:
+                    break
+                boundaries.append((pos, pos + len(target_clean)))
+                start = pos + 1
+                
+        return boundaries
+    
+    def _normalize_xbar_class(self, xbar_class: str) -> str:
+        """
+        Normalize X-bar class label to standard format.
+        
+        Args:
+            xbar_class: Raw X-bar class from LLM
+            
+        Returns:
+            Normalized X-bar class
+        """
+        if not xbar_class:
+            return "unknown"
+            
+        # Remove extra whitespace and convert to standard case
+        normalized = xbar_class.strip()
+        
+        # Preserve detailed classifier names first, only fall back to abbreviations if needed
+        detailed_map = {
+            "determiner": "determiner",
+            "noun": "noun", 
+            "verb": "verb",
+            "adjective": "adjective",
+            "adverb": "adverb",
+            "preposition": "preposition",
+            "pronoun": "pronoun",
+            "conjunction": "conjunction",
+            "punctuation": "punctuation",
+            "noun_phrase": "noun_phrase",
+            "verb_phrase": "verb_phrase",
+            "adjective_phrase": "adjective_phrase",
+            "adverb_phrase": "adverb_phrase", 
+            "prepositional_phrase": "prepositional_phrase",
+            "main_clause": "main_clause",
+            "subordinate_clause": "subordinate_clause",
+            "relative_clause": "relative_clause",
+            "simple_sentence": "simple_sentence",
+            "compound_sentence": "compound_sentence",
+            "complex_sentence": "complex_sentence",
+            "head": "head",
+            "specifier": "specifier",
+            "modifier": "modifier", 
+            "complement": "complement",
+            "adjunct": "adjunct",
+        }
+        
+        # Try exact match first (case insensitive)
+        for key, value in detailed_map.items():
+            if normalized.lower() == key.lower():
+                return value
+        
+        # Legacy abbreviation fallbacks (only if no detailed match)
+        abbreviation_map = {
+            "noun phrase": "noun_phrase",
+            "verb phrase": "verb_phrase", 
+            "adjective phrase": "adjective_phrase",
+            "prepositional phrase": "prepositional_phrase",
+            "determiner phrase": "determiner_phrase",
+            "complementizer phrase": "complementizer_phrase",  
+            "np": "noun_phrase",
+            "vp": "verb_phrase",
+            "ap": "adjective_phrase",
+            "pp": "prepositional_phrase",
+            "dp": "determiner_phrase",
+            "cp": "complementizer_phrase",
+            "n": "noun",
+            "v": "verb",
+            "a": "adjective",
+            "adv": "adverb",
+            "d": "determiner",
+            "p": "preposition",
+            "pro": "pronoun",
+            "conj": "conjunction",
+        }
+        
+        # Try partial matches for abbreviations
+        for key, value in abbreviation_map.items():
+            if normalized.lower() == key.lower():
+                return value
+        
+        # Return original if no mapping found
+        return normalized
     
     def _validate_and_filter_spans(
         self, 
