@@ -304,7 +304,7 @@ Use these labels: {", ".join(label_names)}"""
         return unique_spans
     
     def _parse_json_response(self, response: str) -> List[Dict[str, Any]]:
-        """Parse JSON response with simple, fast error handling."""
+        """Parse JSON response with simple, fast error handling and basic repair."""
         response_stripped = response.strip()
         if not response_stripped:
             return []
@@ -328,13 +328,173 @@ Use these labels: {", ".join(label_names)}"""
                     logger.debug(f"Successfully parsed {len(annotations)} annotations directly")
                     break
                 except json.JSONDecodeError as e:
-                    logger.error(f"JSON parsing failed: {e}")
+                    logger.warning(f"JSON parsing failed, attempting repair: {e}")
+                    
+                    # Try basic JSON repair
+                    repaired_json = self._attempt_json_repair(match)
+                    if repaired_json != match:  # Only try if repair actually changed something
+                        try:
+                            parsed_data = json.loads(repaired_json)
+                            if isinstance(parsed_data, list):
+                                annotations.extend(parsed_data)
+                            elif isinstance(parsed_data, dict):
+                                annotations.append(parsed_data)
+                            logger.info(f"Successfully repaired and parsed JSON with {len(annotations)} annotations")
+                            break
+                        except json.JSONDecodeError as repair_error:
+                            logger.warning(f"JSON repair attempt failed: {repair_error}")
+                            logger.error(f"Original JSON content: {match[:200]}...")
+                            logger.error(f"Repaired JSON content: {repaired_json[:200]}...")
+                            raise ValueError(f"Failed to parse JSON annotation even after repair. Original error: {e}, Repair error: {repair_error}")
+                    
+                    logger.error(f"JSON parsing failed and no repair was attempted: {e}")
                     logger.error(f"Malformed JSON content: {match[:200]}...")
                     raise ValueError(f"Failed to parse JSON annotation. Pipeline will exit to prevent hanging on malformed JSON. Error: {e}")
             if annotations:
                 break
         
         return self._filter_valid_annotations(annotations)
+    
+    def _attempt_json_repair(self, json_str: str) -> str:
+        """Attempt basic JSON repair for common LLM errors and truncated responses."""
+        try:
+            # Debug: log the original malformed JSON
+            logger.debug(f"REPAIR INPUT: {repr(json_str)}")
+            
+            # Fix common issues
+            repaired = json_str.strip()
+            
+            # FIRST: Handle truncated responses aggressively
+            # If we have an incomplete JSON array that ends abruptly, try to close it
+            if repaired.startswith('[') and not repaired.endswith(']'):
+                # Look for incomplete object at the end
+                if repaired.count('{') > repaired.count('}'):
+                    # We have unclosed objects, try to close the last one
+                    missing_braces = repaired.count('{') - repaired.count('}')
+                    repaired += '}' * missing_braces
+                
+                # If we have odd number of quotes, close the string
+                if repaired.count('"') % 2 != 0:
+                    repaired += '"'
+                
+                # Close the array
+                if not repaired.endswith(']'):
+                    repaired += ']'
+            
+            # Fix common LLM JSON structure errors (order matters)
+            
+            # 1. Fix null values for xbar_label (replace with empty string or default)
+            repaired = re.sub(r'"xbar_label"\s*:\s*null', r'"xbar_label":"unknown"', repaired)
+            
+            # 1a. Fix unquoted null values (common LLM error)
+            repaired = re.sub(r':\s*null(?=\s*[,}])', r':"null"', repaired)
+            
+            # 1b. Fix other unquoted literal values that should be strings in our JSON schema
+            repaired = re.sub(r':\s*(true|false|undefined|none)(?=\s*[,}])', r':"\1"', repaired, flags=re.IGNORECASE)
+            
+            # 1c. Fix specific malformed pattern where we have text followed by unquoted null
+            repaired = re.sub(r'("text"\s*:\s*"[^"]*")\s*,\s*null(?=\s*})', r'\1,"xbar_label":"unknown"', repaired)
+            
+            # 2. Fix malformed entries like {"text","value","xbar_label":"label"}
+            repaired = re.sub(r'(\{"text")\s*,\s*("[^"]*")\s*,\s*("xbar_label")', r'\1:\2,\3', repaired)
+            
+            # 2a. Fix entries where xbar_label is missing after null: {"text":"value",null}
+            repaired = re.sub(r'(\{"text"\s*:\s*"[^"]*")\s*,\s*null\s*}', r'\1,"xbar_label":"unknown"}', repaired)
+            
+            # 3. Fix malformed entries like {"text","j", "xbar_label":"identifier"} (missing property name)
+            repaired = re.sub(r'(\{"text")\s*,\s*("[^"]*")\s*,\s*("xbar_label"\s*:\s*"[^"]*")', r'\1:\2,\3', repaired)
+            
+            # 4. Fix completely malformed structures like {"text","xbar_label":"",}
+            repaired = re.sub(r'(\{"text")\s*,\s*("xbar_label"\s*:\s*"[^"]*")\s*,?\s*}', r'\1:"",\2}', repaired)
+            
+            # 5. Fix empty or malformed text values like {"text","","xbar_label":"value"}
+            repaired = re.sub(r'(\{"text")\s*,\s*(""\s*,\s*"xbar_label")', r'\1:\2', repaired)
+            
+            # 6. Fix unquoted property names for our known properties
+            repaired = re.sub(r'([{,]\s*)(text|xbar_label)(\s*:)', r'\1"\2"\3', repaired)
+            
+            # 7. Fix missing quotes around string values for our properties (conservative)
+            repaired = re.sub(r'("(?:text|xbar_label)"\s*:\s*)([^",}\]]+)(?=\s*[,}])', r'\1"\2"', repaired)
+            
+            # 8. Fix missing colon between property name and value
+            repaired = re.sub(r'("(?:text|xbar_label)")\s+("[^"]*")(?=\s*[,}])', r'\1:\2', repaired)
+            
+            # 9. Fix unquoted labels like "proper noun" -> "noun"
+            repaired = re.sub(r'"xbar_label"\s*:\s*"proper\s+noun"', r'"xbar_label":"noun"', repaired)
+            
+            # 10. Fix other multi-word labels that should be single words
+            repaired = re.sub(r'"xbar_label"\s*:\s*"([^"]*\s+[^"]*)"', 
+                            lambda m: f'"xbar_label":"{m.group(1).replace(" ", "_")}"', repaired)
+            
+            # 11. Fix trailing commas before closing brackets/braces
+            repaired = re.sub(r',\s*([}\]])', r'\1', repaired)
+            
+            # 12. Fix missing commas between complete objects
+            repaired = re.sub(r'}\s*{', r'},{', repaired)
+            
+            # 13. Fix missing quotes around values (but be careful not to break valid JSON)
+            repaired = re.sub(r':\s*([^",\[\]{}\s]+)(?=\s*[,}\]])', r':"\1"', repaired)
+            
+            # 14. Fix specific unterminated string patterns more aggressively
+            lines = repaired.split('\n')
+            for i, line in enumerate(lines):
+                # Look for unterminated strings in JSON object lines
+                if '{"text"' in line and line.count('"') % 2 != 0:
+                    # If line ends without proper termination, try to fix it
+                    line = line.rstrip()
+                    if not line.endswith(('"}', '",', '"}')):
+                        # Add closing quote if it looks like it's missing
+                        if line.endswith(',') or line.endswith('}'):
+                            line = line[:-1] + '"' + line[-1]
+                        else:
+                            line += '"'
+                    lines[i] = line
+            repaired = '\n'.join(lines)
+            
+            # 15. Final aggressive truncation repair
+            # Try to salvage truncated JSON by looking for incomplete patterns
+            if repaired.count('"') % 2 != 0:
+                # Find the last incomplete string and try to close it
+                last_quote_pos = repaired.rfind('"')
+                if last_quote_pos > 0:
+                    # Look for incomplete patterns after the last quote
+                    after_quote = repaired[last_quote_pos + 1:].strip()
+                    if after_quote and not after_quote.endswith(('"}', '",', '"}')):
+                        # Truncated in middle of value, close it
+                        repaired = repaired[:last_quote_pos + 1] + '"'
+                        # Add closing brace/bracket if needed
+                        if repaired.count('{') > repaired.count('}'):
+                            repaired += '}'
+                        if repaired.startswith('[') and not repaired.endswith(']'):
+                            repaired += ']'
+            
+            # 16. Handle specific case of truncated array after repair
+            # Pattern: [{"text":"value","xbar_label":"label"},{"text":"partial_value"
+            if repaired.count('{') > repaired.count('}'):
+                # We have unclosed objects, try to close them
+                open_objects = repaired.count('{') - repaired.count('}')
+                repaired += '}' * open_objects
+            
+            # 17. Final structural check and repair
+            if repaired.startswith('[') and not repaired.endswith(']'):
+                repaired += ']'
+            
+            # 18. Fix specific malformed property patterns like {"text","xbar_label":"",}
+            # Pattern: {"text","xbar_label":"value",} should be {"text":"","xbar_label":"value"}
+            repaired = re.sub(r'{"text","xbar_label":"([^"]*)",}', r'{"text":"","xbar_label":"\1"}', repaired)
+            
+            # 19. Fix incomplete property names (missing quotes and colons)
+            # Pattern: "text": -> "text": ""
+            repaired = re.sub(r'("text")\s*,\s*("xbar_label")(\s*:)', r'\1:"",\2\3', repaired)
+            
+            # Debug: log the repaired JSON
+            logger.debug(f"REPAIR OUTPUT: {repr(repaired)}")
+            
+            return repaired
+            
+        except Exception as e:
+            logger.debug(f"REPAIR EXCEPTION: {e}")
+            return json_str  # Return original if repair fails
     
     def _filter_valid_annotations(self, annotations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Filter and deduplicate annotations."""
@@ -588,6 +748,11 @@ Use these labels: {", ".join(label_names)}"""
             
             logger.info(f"Successfully annotated sequence with {len(span_annotations)} spans")
             return annotation_record
+            
+        except ValueError as e:
+            # Re-raise ValueError (JSON parsing errors) to allow pipeline-level sequence skipping
+            logger.error(f"JSON parsing error in annotate_sequence: {e}")
+            raise
             
         except Exception as e:
             logger.error(f"Failed to annotate sequence: {e}", exc_info=True)

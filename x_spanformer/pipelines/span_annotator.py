@@ -185,7 +185,14 @@ class SpanAnnotatorPipeline:
                 if seq_num and seq_num in target_sequence_ids:
                     filtered_sequences.append(seq)
             
+            # Show range-specific message
             logger.info(f"Filtered to {len(filtered_sequences)}/{original_count} sequences")
+            if len(filtered_sequences) == 1:
+                seq_nums = sorted(target_sequence_ids)
+                logger.info(f"Selected sequence {seq_nums[0]}")
+            else:
+                seq_nums = sorted([seq.meta.sequence_number if hasattr(seq.meta, 'sequence_number') else seq.meta.get('sequence_number', '?') for seq in filtered_sequences])
+                logger.info(f"Selected sequences: {seq_nums}")
             sequences = filtered_sequences
         
         return sequences
@@ -540,9 +547,10 @@ class SpanAnnotatorPipeline:
             
             # Calculate current position in total sequences (already completed + current position)
             current_position = total_completed_already + i + 1
-            total_sequences = len(sequences)
+            total_sequences_to_process = len(sequences_to_process)
+            total_sequences_overall = self.pipeline_stats["total_sequences"]  # Use the original total from load_sequences
             
-            logger.info(f"Processing {current_position}/{total_sequences}: sequence {seq_id}")
+            logger.info(f"Processing {current_position}/{total_sequences_overall}: sequence {seq_id}")
             
             try:
                 # Annotate single sequence
@@ -561,8 +569,8 @@ class SpanAnnotatorPipeline:
                     # Calculate and log progress summary
                     current_time = datetime.now()
                     elapsed_seconds = (current_time - session_start_time).total_seconds()
-                    completed_count = successful_count + failed_count + skipped_count
-                    remaining_count = len(sequences_to_process) - completed_count
+                    completed_count = successful_count + failed_count  # Exclude skipped_count from ETA calculation
+                    remaining_count = len(sequences_to_process) - completed_count  # Skipped sequences still need to be processed
                     total_completed_overall = total_completed_already + completed_count
                     
                     if completed_count > 0 and elapsed_seconds > 0:
@@ -573,7 +581,7 @@ class SpanAnnotatorPipeline:
                         eta_formatted = format_eta_time(eta_minutes)
                         
                         logger.info("=" * 80)
-                        logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
+                        logger.info(f"{total_completed_overall}/{total_sequences_overall} sequences completed | "
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_formatted}")
                         logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']} | "
@@ -593,8 +601,8 @@ class SpanAnnotatorPipeline:
                     # Calculate and log progress summary
                     current_time = datetime.now()
                     elapsed_seconds = (current_time - session_start_time).total_seconds()
-                    completed_count = successful_count + failed_count + skipped_count
-                    remaining_count = len(sequences_to_process) - completed_count
+                    completed_count = successful_count + failed_count  # Exclude skipped_count from ETA calculation
+                    remaining_count = len(sequences_to_process) - completed_count  # Skipped sequences still need to be processed
                     total_completed_overall = total_completed_already + completed_count
                     
                     if completed_count > 0 and elapsed_seconds > 0:
@@ -605,7 +613,7 @@ class SpanAnnotatorPipeline:
                         eta_formatted = format_eta_time(eta_minutes)
                         
                         logger.info("=" * 80)
-                        logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
+                        logger.info(f"{total_completed_overall}/{total_sequences_overall} sequences completed | "
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_formatted}")
                         logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']} | "
@@ -645,7 +653,7 @@ class SpanAnnotatorPipeline:
                     eta_formatted = format_eta_time(eta_minutes)
                     
                     logger.info("=" * 80)
-                    logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
+                    logger.info(f"{total_completed_overall}/{total_sequences_overall} sequences completed | "
                               f"Avg: {sequences_per_minute:.1f} seq/min | "
                               f"ETA: {eta_formatted}")
                     logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']} | "
@@ -756,11 +764,19 @@ async def main():
         logger.info(f"Processed: {stats['processed_sequences']}")
         logger.info(f"Successful: {stats['successful_annotations']}")
         logger.info(f"Failed: {stats['failed_annotations']}")
+        logger.info(f"Skipped: {stats.get('skipped_annotations', 0)}")
         
-        session_stats = pipeline.session.get_statistics()
-        logger.info(f"Total spans: {session_stats.get('total_spans', 0)}")
-        logger.info(f"Success rate: {session_stats.get('success_rate', 0):.2%}")
-        logger.info(f"Avg spans/sequence: {session_stats.get('avg_spans_per_sequence', 0):.1f}")
+        # Calculate success rate and other metrics from pipeline stats
+        total_spans = stats.get('total_spans', 0)
+        successful_sequences = stats['successful_annotations']
+        total_processed = stats['processed_sequences']
+        
+        success_rate = (successful_sequences / total_processed) if total_processed > 0 else 0
+        avg_spans = (total_spans / successful_sequences) if successful_sequences > 0 else 0
+        
+        logger.info(f"Total spans: {total_spans}")
+        logger.info(f"Success rate: {success_rate:.2%}")
+        logger.info(f"Avg spans/sequence: {avg_spans:.1f}")
         
         logger.info(f"Results: {args.output}")
         logger.info(f"Working files: {args.output / 'working'}")
