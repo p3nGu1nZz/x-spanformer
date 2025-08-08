@@ -13,6 +13,7 @@ import re
 from typing import Optional, List, Dict, Any, Tuple, Union
 from enum import Enum
 from dataclasses import dataclass
+from collections import defaultdict
 
 from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.annotation_record import AnnotationRecord, SpanAnnotation
@@ -317,19 +318,122 @@ Use these labels: {", ".join(label_names)}"""
         return spans
     
     def _deduplicate_spans(self, spans: List[SpanLabel]) -> List[SpanLabel]:
-        """Remove duplicate spans based on position and label."""
-        unique_spans = []
-        seen_spans = set()
+        """
+        Remove duplicate spans with enhanced logic that preserves legitimate multiple occurrences.
         
-        for span in spans:
+        KEEP Strategy (legitimate multiple occurrences):
+        1. Same text at different positions (e.g., "," at pos 10, "," at pos 25) -> KEEP ALL
+        2. Same start position but different end positions -> KEEP ALL (different span lengths)
+        3. Separated occurrences with sufficient gaps -> KEEP ALL
+        
+        REMOVE Strategy (problematic duplicates):
+        1. Exact duplicates: Same text, same start, same end, same label -> Remove extras
+        2. Consecutive/overlapping duplicates: Same text+label in adjacent/overlapping positions -> Remove extras
+        3. Boundary conflicts: Same text+positions, different labels -> Pick most frequent label (greedy)
+        """
+        if not spans:
+            return spans
+        
+        # Count label frequency within this span set for greedy selection
+        from collections import Counter
+        label_counts = Counter(span.xbar_label for span in spans)
+        
+        # Sort spans by position for consecutive detection
+        sorted_spans = sorted(spans, key=lambda x: (x.span[0], x.span[1]))
+        
+        # Step 1: Group by exact match (text + start + end) to find true duplicates
+        exact_match_groups = defaultdict(list)
+        for span in sorted_spans:
             start_pos, end_pos = span.span
-            span_key = (start_pos, end_pos, span.xbar_label)
-            if span_key not in seen_spans:
-                seen_spans.add(span_key)
-                unique_spans.append(span)
+            exact_key = (span.text, start_pos, end_pos)
+            exact_match_groups[exact_key].append(span)
         
-        logger.info(f"Parsed {len(unique_spans)} unique spans from {len(spans)} total found")
-        return unique_spans
+        # Step 2: Process each exact match group
+        kept_spans = []
+        
+        for exact_key, duplicate_spans in exact_match_groups.items():
+            text, start_pos, end_pos = exact_key
+            
+            if len(duplicate_spans) == 1:
+                # No exact duplicates, keep as is
+                kept_spans.extend(duplicate_spans)
+            else:
+                # Handle exact duplicates (same text, same positions)
+                labels_in_group = [span.xbar_label for span in duplicate_spans]
+                unique_labels = set(labels_in_group)
+                
+                if len(unique_labels) == 1:
+                    # All have same label - true duplicates, keep only one
+                    kept_spans.append(duplicate_spans[0])
+                    logger.debug(f"Removed {len(duplicate_spans) - 1} exact duplicates of '{text}' at ({start_pos}, {end_pos})")
+                else:
+                    # Multiple labels for same position - boundary conflict, use greedy selection
+                    # Sort by: 1) label frequency (descending), 2) original order (ascending)
+                    def greedy_sort_key(span):
+                        label_freq = label_counts[span.xbar_label]
+                        original_index = duplicate_spans.index(span)  # Preserve original order for ties
+                        return (-label_freq, original_index)  # Negative for descending frequency
+                    
+                    sorted_spans_greedy = sorted(duplicate_spans, key=greedy_sort_key)
+                    winner = sorted_spans_greedy[0]
+                    kept_spans.append(winner)
+                    
+                    logger.debug(f"Boundary conflict for '{text}' at ({start_pos}, {end_pos}): kept '{winner.xbar_label}' (freq: {label_counts[winner.xbar_label]}), removed {len(duplicate_spans) - 1} others")
+        
+        # Step 3: Remove consecutive duplicates
+        # Sort kept spans and remove consecutive duplicates
+        kept_spans_sorted = sorted(kept_spans, key=lambda x: (x.span[0], x.span[1]))
+        final_spans = []
+        
+        i = 0
+        while i < len(kept_spans_sorted):
+            curr = kept_spans_sorted[i]
+            
+            # Check if this is part of a consecutive duplicate sequence
+            consecutive_group = [curr]
+            j = i + 1
+            
+            while j < len(kept_spans_sorted):
+                next_span = kept_spans_sorted[j]
+                
+                if (curr.text == next_span.text and 
+                    curr.xbar_label == next_span.xbar_label):
+                    
+                    curr_start, curr_end = curr.span
+                    next_start, next_end = next_span.span
+                    gap = next_start - curr_end
+                    
+                    # Flag as consecutive duplicate if:
+                    # - Overlapping (gap < 0) or immediately adjacent (gap <= 1)
+                    # - For single characters, more strict: gap <= 0
+                    is_single_char = len(curr.text) == 1
+                    max_allowed_gap = 0 if is_single_char else 1
+                    
+                    if gap <= max_allowed_gap:
+                        consecutive_group.append(next_span)
+                        curr = next_span  # Update for next iteration
+                        j += 1
+                    else:
+                        break
+                else:
+                    break
+            
+            # If we found consecutive duplicates, keep only the first one
+            if len(consecutive_group) > 1:
+                final_spans.append(consecutive_group[0])
+                logger.debug(f"Removed {len(consecutive_group) - 1} consecutive duplicates of '{curr.text}' ({curr.xbar_label})")
+            else:
+                final_spans.append(curr)
+            
+            i = j if j > i + 1 else i + 1
+        
+        removed_count = len(spans) - len(final_spans)
+        if removed_count > 0:
+            logger.info(f"Deduplication: kept {len(final_spans)} spans, removed {removed_count} duplicates from {len(spans)} total")
+        else:
+            logger.info(f"Parsed {len(final_spans)} unique spans from {len(spans)} total found")
+        
+        return final_spans
     
     
     # JSON parsing and repair methods have been moved to xbar_json.py
@@ -591,6 +695,7 @@ Use these labels: {", ".join(label_names)}"""
                     continue
                 
                 # Check for duplicates - allow multiple labels on same position, but not identical spans
+                # Note: Main deduplication is handled by _deduplicate_spans, this is just basic filtering
                 span_key = (start_pos, end_pos, xbar_label)
                 if span_key not in seen_spans:
                     seen_spans.add(span_key)

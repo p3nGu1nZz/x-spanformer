@@ -72,67 +72,96 @@ def analyze_hierarchical_structure(annotations):
     
     return hierarchy_analysis
 
-def deduplicate_spans(annotations):
+def analyze_span_quality(annotations):
     """
-    Deduplicate spans with identical boundaries but different X-bar labels.
-    Strategy: Pick the label with the most occurrences globally. If tied, pick the first one.
-    """
-    # Count label frequency globally
-    label_counts = Counter(ann['xbar_label'] for ann in annotations)
+    Analyze the quality and patterns of span annotations without modifying them.
     
+    This function analyzes:
+    1. Multiple occurrences of the same text at different positions (legitimate)
+    2. Potential duplicate patterns that might indicate annotation issues
+    3. Consistency of labeling across occurrences
+    """
     # Group by sequence
     by_sequence = defaultdict(list)
     for ann in annotations:
         by_sequence[ann['sequence_number']].append(ann)
     
-    deduplicated = []
-    dedup_stats = {'removed': 0, 'kept': 0, 'decisions': []}
+    quality_stats = {
+        'multiple_occurrences': [],
+        'potential_issues': [],
+        'consistency_analysis': []
+    }
     
     for seq_num, seq_anns in by_sequence.items():
-        # Group by boundary + text
-        boundary_groups = defaultdict(list)
-        for ann in seq_anns:
-            boundary_key = (ann['start_pos'], ann['end_pos'], ann['text'])
-            boundary_groups[boundary_key].append(ann)
+        # Sort annotations by start position for analysis
+        seq_anns_sorted = sorted(seq_anns, key=lambda x: (x['start_pos'], x['end_pos']))
         
-        # Process each boundary group
-        for boundary_key, duplicate_anns in boundary_groups.items():
-            if len(duplicate_anns) == 1:
-                # No duplicates, keep as is
-                deduplicated.extend(duplicate_anns)
-                dedup_stats['kept'] += 1
-            else:
-                # Multiple labels for same boundary - resolve conflict
-                start_pos, end_pos, text = boundary_key
+        # Group by text to find multiple occurrences
+        text_occurrences = defaultdict(list)
+        for ann in seq_anns:
+            text_occurrences[ann['text']].append(ann)
+        
+        # Analyze multiple occurrences
+        for text, occurrences in text_occurrences.items():
+            if len(occurrences) > 1:
+                # Sort by position
+                occurrences_sorted = sorted(occurrences, key=lambda x: x['start_pos'])
                 
-                # Sort by: 1) global label frequency (desc), 2) original order (asc)
-                def sort_key(ann):
-                    return (-label_counts[ann['xbar_label']], ann['id'])
+                positions = [(ann['start_pos'], ann['end_pos']) for ann in occurrences_sorted]
+                labels = [ann['xbar_label'] for ann in occurrences_sorted]
+                unique_labels = set(labels)
                 
-                sorted_anns = sorted(duplicate_anns, key=sort_key)
-                winner = sorted_anns[0]
-                losers = sorted_anns[1:]
+                # Check for consecutive occurrences that might be problematic
+                consecutive_pairs = []
+                for i in range(len(positions) - 1):
+                    curr_start, curr_end = positions[i]
+                    next_start, next_end = positions[i + 1]
+                    gap = next_start - curr_end
+                    
+                    # Flag if very close together (especially for single chars)
+                    is_single_char = len(text) == 1
+                    max_allowed_gap = 0 if is_single_char else 1
+                    
+                    if gap <= max_allowed_gap:
+                        consecutive_pairs.append({
+                            'positions': [(curr_start, curr_end), (next_start, next_end)],
+                            'gap': gap,
+                            'labels': [labels[i], labels[i + 1]]
+                        })
                 
-                deduplicated.append(winner)
-                dedup_stats['kept'] += 1
-                dedup_stats['removed'] += len(losers)
-                
-                # Log the decision
-                decision = {
+                quality_stats['multiple_occurrences'].append({
                     'sequence': seq_num,
                     'text': text,
-                    'positions': (start_pos, end_pos),
-                    'winner': winner['xbar_label'],
-                    'winner_count': label_counts[winner['xbar_label']],
-                    'losers': [{'label': ann['xbar_label'], 'count': label_counts[ann['xbar_label']]} 
-                              for ann in losers]
-                }
-                dedup_stats['decisions'].append(decision)
+                    'count': len(occurrences),
+                    'positions': positions,
+                    'labels': labels,
+                    'unique_labels': list(unique_labels),
+                    'is_consistent': len(unique_labels) == 1,
+                    'consecutive_pairs': consecutive_pairs
+                })
+                
+                # Flag potential issues
+                if consecutive_pairs:
+                    quality_stats['potential_issues'].append({
+                        'type': 'consecutive_duplicates',
+                        'sequence': seq_num,
+                        'text': text,
+                        'count': len(consecutive_pairs),
+                        'details': consecutive_pairs
+                    })
+                
+                if len(unique_labels) > 1:
+                    quality_stats['consistency_analysis'].append({
+                        'sequence': seq_num,
+                        'text': text,
+                        'labels': list(unique_labels),
+                        'occurrences': len(occurrences)
+                    })
     
-    return deduplicated, dedup_stats
+    return quality_stats
 
 def find_anomalies(annotations):
-    """Find potential anomalies in span annotations."""
+    """Find potential anomalies in span annotations with enhanced position-aware detection."""
     anomalies = []
     
     # Group by sequence
@@ -141,7 +170,10 @@ def find_anomalies(annotations):
         by_sequence[ann['sequence_number']].append(ann)
     
     for seq_num, seq_anns in by_sequence.items():
-        # Check for exact duplicates (boundary + text + label)
+        # Sort by position for better analysis
+        seq_anns_sorted = sorted(seq_anns, key=lambda x: (x['start_pos'], x['end_pos']))
+        
+        # Check for exact duplicates (boundary + text + label - true duplicates)
         seen_exact = set()
         for ann in seq_anns:
             exact_key = (ann['start_pos'], ann['end_pos'], ann['text'], ann['xbar_label'])
@@ -149,11 +181,12 @@ def find_anomalies(annotations):
                 anomalies.append({
                     'type': 'exact_duplicate',
                     'sequence': seq_num,
-                    'span': ann
+                    'span': ann,
+                    'severity': 'high'
                 })
             seen_exact.add(exact_key)
         
-        # Check for boundary duplicates (boundary + text, different labels)
+        # Check for boundary duplicates (same position + text, different labels)
         boundary_groups = defaultdict(list)
         for ann in seq_anns:
             boundary_key = (ann['start_pos'], ann['end_pos'], ann['text'])
@@ -161,7 +194,6 @@ def find_anomalies(annotations):
         
         for boundary_key, duplicate_anns in boundary_groups.items():
             if len(duplicate_anns) > 1:
-                # Get unique labels
                 labels = set(ann['xbar_label'] for ann in duplicate_anns)
                 if len(labels) > 1:
                     anomalies.append({
@@ -170,61 +202,204 @@ def find_anomalies(annotations):
                         'text': boundary_key[2],
                         'positions': (boundary_key[0], boundary_key[1]),
                         'labels': list(labels),
-                        'count': len(duplicate_anns)
+                        'count': len(duplicate_anns),
+                        'severity': 'medium'
                     })
         
-        # Check for suspiciously short spans
+        # Enhanced: Check for overlapping spans with same text (potential over-annotation)
+        for i in range(len(seq_anns_sorted) - 1):
+            curr = seq_anns_sorted[i]
+            for j in range(i + 1, len(seq_anns_sorted)):
+                next_ann = seq_anns_sorted[j]
+                
+                # Skip if next span starts after current ends
+                if next_ann['start_pos'] >= curr['end_pos']:
+                    break
+                
+                # Check for overlapping spans with same text
+                if (curr['text'] == next_ann['text'] and 
+                    curr['xbar_label'] == next_ann['xbar_label'] and
+                    curr['start_pos'] != next_ann['start_pos']):
+                    
+                    overlap_start = max(curr['start_pos'], next_ann['start_pos'])
+                    overlap_end = min(curr['end_pos'], next_ann['end_pos'])
+                    overlap_length = overlap_end - overlap_start
+                    
+                    if overlap_length > 0:
+                        anomalies.append({
+                            'type': 'overlapping_identical_spans',
+                            'sequence': seq_num,
+                            'text': curr['text'],
+                            'label': curr['xbar_label'],
+                            'span1': (curr['start_pos'], curr['end_pos']),
+                            'span2': (next_ann['start_pos'], next_ann['end_pos']),
+                            'overlap_length': overlap_length,
+                            'severity': 'medium'
+                        })
+        
+        # Check for suspiciously short spans (refined logic)
         for ann in seq_anns:
-            # Single-character spans are valid for:
-            # - Code/mixed domains: identifiers, variables, operators, literals, punctuation
-            # - Natural language: punctuation, articles, prepositions
+            # Single-character spans that are typically valid
             valid_short_labels = [
                 'operator', 'literal', 'identifier', 'punctuation', 
                 'conjunction', 'preposition', 'determiner', 'pronoun'
             ]
             
-            # For code/mixed domains, single char spans are generally acceptable
+            # Common single-character words that are valid
+            valid_single_chars = ['a', 'i', 's', 'j', 'c', 'x', 'y', 'z', 'n', 'm', 'k', 
+                                 'o', 'p', 'q', 'r', 't', 'u', 'v', 'w', '.', ',', ';', 
+                                 ':', '!', '?', '(', ')', '[', ']', '{', '}', '"', "'"]
+            
             domain_type = ann.get('domain_type', 'mixed')
             
             if (len(ann['text']) <= 1 and 
                 ann['xbar_label'] not in valid_short_labels and
-                domain_type == 'natural'):  # Only flag in pure natural language
+                ann['text'].lower() not in valid_single_chars and
+                domain_type == 'natural'):
                 
-                # Additional check: skip common single letters that are valid
-                if ann['text'].lower() not in ['a', 'i', 's', 'j', 'c', 'x', 'y', 'z', 'n', 'm', 'k']:
-                    anomalies.append({
-                        'type': 'suspicious_short_span',
-                        'sequence': seq_num,
-                        'span': ann
-                    })
+                anomalies.append({
+                    'type': 'suspicious_short_span',
+                    'sequence': seq_num,
+                    'span': ann,
+                    'severity': 'low'
+                })
         
-        # Check for repetitive patterns
+        # Enhanced: Check for repetitive patterns (same text, many occurrences)
         text_counts = Counter(ann['text'] for ann in seq_anns)
         for text, count in text_counts.items():
-            if count > 3:  # More than 3 occurrences might be suspicious
+            # Be more lenient with punctuation and common words
+            is_punctuation = text in [',', '.', ';', ':', '!', '?', '(', ')', '"', "'"]
+            is_common_word = text.lower() in ['the', 'a', 'an', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'for']
+            
+            threshold = 10 if is_punctuation else 6 if is_common_word else 3
+            
+            if count > threshold:
+                # Get all positions for this text
+                positions = [(ann['start_pos'], ann['end_pos']) for ann in seq_anns if ann['text'] == text]
+                
                 anomalies.append({
                     'type': 'repetitive_text',
                     'sequence': seq_num,
                     'text': text,
-                    'count': count
+                    'count': count,
+                    'positions': positions[:5],  # Show first 5 positions
+                    'severity': 'low' if is_punctuation or is_common_word else 'medium'
                 })
         
-        # Check for inconsistent labeling of same text
+        # Enhanced: Check for inconsistent labeling across positions
         text_to_labels = defaultdict(set)
+        text_to_positions = defaultdict(list)
         for ann in seq_anns:
             text_to_labels[ann['text']].add(ann['xbar_label'])
+            text_to_positions[ann['text']].append((ann['start_pos'], ann['end_pos'], ann['xbar_label']))
         
         for text, labels in text_to_labels.items():
-            # Allow reasonable variations (e.g., noun + noun_phrase is fine)
-            if len(labels) > 2:
+            # Allow reasonable variations but flag excessive inconsistency
+            if len(labels) > 3:  # More than 3 different labels for same text
+                positions_with_labels = text_to_positions[text]
+                
                 anomalies.append({
                     'type': 'inconsistent_labeling',
                     'sequence': seq_num,
                     'text': text,
-                    'labels': list(labels)
+                    'labels': list(labels),
+                    'occurrences': len(positions_with_labels),
+                    'examples': positions_with_labels[:3],  # Show first 3 examples
+                    'severity': 'medium'
                 })
+        
+        # New: Check for gaps in annotation coverage
+        if seq_anns_sorted:
+            raw_text = seq_anns_sorted[0].get('raw', '')
+            if raw_text:
+                covered_positions = set()
+                for ann in seq_anns:
+                    for pos in range(ann['start_pos'], ann['end_pos']):
+                        covered_positions.add(pos)
+                
+                total_chars = len(raw_text)
+                covered_chars = len(covered_positions)
+                coverage_ratio = covered_chars / total_chars if total_chars > 0 else 0
+                
+                if coverage_ratio < 0.5:  # Less than 50% coverage
+                    anomalies.append({
+                        'type': 'low_coverage',
+                        'sequence': seq_num,
+                        'coverage_ratio': coverage_ratio,
+                        'covered_chars': covered_chars,
+                        'total_chars': total_chars,
+                        'severity': 'medium'
+                    })
     
     return anomalies
+
+def analyze_multiple_occurrences(annotations):
+    """
+    Analyze multiple occurrences of the same text to ensure we're properly handling
+    legitimate repeated spans at different positions.
+    """
+    # Group by sequence
+    by_sequence = defaultdict(list)
+    for ann in annotations:
+        by_sequence[ann['sequence_number']].append(ann)
+    
+    occurrence_analysis = []
+    
+    for seq_num, seq_anns in by_sequence.items():
+        # Group by text to find multiple occurrences
+        text_occurrences = defaultdict(list)
+        for ann in seq_anns:
+            text_occurrences[ann['text']].append(ann)
+        
+        # Analyze texts with multiple occurrences
+        for text, occurrences in text_occurrences.items():
+            if len(occurrences) > 1:
+                # Sort by position
+                occurrences_sorted = sorted(occurrences, key=lambda x: x['start_pos'])
+                
+                # Analyze the pattern
+                positions = [(ann['start_pos'], ann['end_pos']) for ann in occurrences_sorted]
+                labels = [ann['xbar_label'] for ann in occurrences_sorted]
+                
+                # Check for consistency
+                unique_labels = set(labels)
+                is_consistent = len(unique_labels) == 1
+                
+                # Check for appropriate spacing (not overlapping unless expected)
+                overlaps = []
+                for i in range(len(positions) - 1):
+                    curr_start, curr_end = positions[i]
+                    next_start, next_end = positions[i + 1]
+                    
+                    if next_start < curr_end:  # Overlap detected
+                        overlap_length = curr_end - next_start
+                        overlaps.append({
+                            'positions': (positions[i], positions[i + 1]),
+                            'overlap_length': overlap_length
+                        })
+                
+                # Calculate spacing between occurrences
+                gaps = []
+                for i in range(len(positions) - 1):
+                    gap = positions[i + 1][0] - positions[i][1]
+                    gaps.append(gap)
+                
+                occurrence_analysis.append({
+                    'sequence': seq_num,
+                    'text': text,
+                    'count': len(occurrences),
+                    'positions': positions,
+                    'labels': labels,
+                    'unique_labels': list(unique_labels),
+                    'is_consistent': is_consistent,
+                    'overlaps': overlaps,
+                    'gaps': gaps,
+                    'avg_gap': sum(gaps) / len(gaps) if gaps else 0,
+                    'min_gap': min(gaps) if gaps else 0,
+                    'max_gap': max(gaps) if gaps else 0
+                })
+    
+    return occurrence_analysis
 
 def analyze_boundary_alignment(annotations):
     """Analyze if boundary predictions align with word boundaries."""
@@ -259,39 +434,115 @@ def main():
     print("=" * 50)
     
     # Load annotations
-    original_annotations = load_annotations(annotations_file)
-    print(f"📊 Loaded {len(original_annotations)} original annotations")
+    annotations = load_annotations(annotations_file)
+    print(f"📊 Loaded {len(annotations)} annotations for analysis")
     
-    # Deduplicate spans
-    print("\n🚿 DEDUPLICATING SPANS")
+    # Span quality analysis
+    print("\n🎯 SPAN QUALITY ANALYSIS")
     print("-" * 40)
-    annotations, dedup_stats = deduplicate_spans(original_annotations)
+    quality_stats = analyze_span_quality(annotations)
     
-    if dedup_stats['removed'] > 0:
-        print(f"✨ Deduplication completed:")
-        print(f"  - Original annotations: {len(original_annotations)}")
-        print(f"  - After deduplication: {len(annotations)}")
-        print(f"  - Removed duplicates: {dedup_stats['removed']}")
-        print(f"  - Deduplication decisions: {len(dedup_stats['decisions'])}")
+    if quality_stats['multiple_occurrences']:
+        print(f"📊 Multiple occurrence summary:")
+        print(f"  - Texts with multiple occurrences: {len(quality_stats['multiple_occurrences'])}")
         
-        print(f"\n📋 Deduplication decisions:")
-        for decision in dedup_stats['decisions']:
-            winner_info = f"{decision['winner']} (appears {decision['winner_count']} times)"
-            loser_info = ", ".join([f"{l['label']} ({l['count']})" for l in decision['losers']])
-            print(f"  '{decision['text']}' @ {decision['positions']}: kept {winner_info}, removed {loser_info}")
+        # Show examples of high-frequency occurrences
+        high_frequency = [mo for mo in quality_stats['multiple_occurrences'] if mo['count'] >= 5]
+        if high_frequency:
+            print(f"\n� High frequency texts (5+ occurrences):")
+            for mo in sorted(high_frequency, key=lambda x: x['count'], reverse=True)[:5]:
+                consistent_info = "✅ consistent" if mo['is_consistent'] else f"❌ inconsistent ({len(mo['unique_labels'])} labels)"
+                print(f"  '{mo['text']}': {mo['count']} occurrences, {consistent_info}")
+                if mo['consecutive_pairs']:
+                    print(f"    ⚠️  {len(mo['consecutive_pairs'])} consecutive occurrence pairs")
         
-        # Save deduplicated annotations
-        dedup_file = annotations_file.parent / "annotations_deduplicated.jsonl"
-        with open(dedup_file, 'w', encoding='utf-8') as f:
-            for ann in annotations:
-                f.write(json.dumps(ann, ensure_ascii=False) + '\n')
-        print(f"\n💾 Saved deduplicated annotations to: {dedup_file}")
+        # Check for punctuation and common words
+        punctuation_texts = [mo for mo in quality_stats['multiple_occurrences'] if mo['text'] in [',', '.', ';', ':', '!', '?', '(', ')', '"', "'"]]
+        if punctuation_texts:
+            print(f"\n📝 Punctuation analysis:")
+            for mo in sorted(punctuation_texts, key=lambda x: x['count'], reverse=True):
+                print(f"  '{mo['text']}': {mo['count']} occurrences")
+                if mo['consecutive_pairs']:
+                    print(f"    ⚠️  {len(mo['consecutive_pairs'])} consecutive pairs detected")
+    
+    # Potential issues
+    if quality_stats['potential_issues']:
+        print(f"\n⚠️  POTENTIAL ISSUES DETECTED:")
+        consecutive_issues = [pi for pi in quality_stats['potential_issues'] if pi['type'] == 'consecutive_duplicates']
+        if consecutive_issues:
+            print(f"  - Consecutive duplicates: {len(consecutive_issues)} cases")
+            for issue in consecutive_issues[:3]:  # Show first 3
+                print(f"    '{issue['text']}' has {issue['count']} consecutive pairs in sequence {issue['sequence']}")
+    
+    # Consistency analysis
+    if quality_stats['consistency_analysis']:
+        print(f"\n🔍 CONSISTENCY ANALYSIS:")
+        print(f"  - Texts with inconsistent labeling: {len(quality_stats['consistency_analysis'])}")
+        for ca in quality_stats['consistency_analysis'][:3]:  # Show first 3
+            print(f"    '{ca['text']}': {ca['labels']} ({ca['occurrences']} occurrences)")
+    
+    if not quality_stats['multiple_occurrences']:
+        print("✅ No multiple occurrences found - all texts appear only once!")
+    
+    if not quality_stats['potential_issues']:
+        print("✅ No potential issues detected!")
+    
+    if not quality_stats['consistency_analysis']:
+        print("✅ All repeated texts have consistent labeling!")
+    
+    # Multiple occurrence analysis
+    print("\n🔄 MULTIPLE OCCURRENCE ANALYSIS")
+    print("-" * 40)
+    occurrence_analysis = analyze_multiple_occurrences(annotations)
+    
+    if occurrence_analysis:
+        # Group by text frequency
+        high_frequency = [oa for oa in occurrence_analysis if oa['count'] >= 5]
+        medium_frequency = [oa for oa in occurrence_analysis if 3 <= oa['count'] < 5]
+        low_frequency = [oa for oa in occurrence_analysis if 2 <= oa['count'] < 3]
+        
+        print(f"📊 Multiple occurrence summary:")
+        print(f"  - High frequency (5+ occurrences): {len(high_frequency)} texts")
+        print(f"  - Medium frequency (3-4 occurrences): {len(medium_frequency)} texts")
+        print(f"  - Low frequency (2 occurrences): {len(low_frequency)} texts")
+        print(f"  - Total texts with multiple occurrences: {len(occurrence_analysis)}")
+        
+        # Show examples of high-frequency occurrences
+        if high_frequency:
+            print(f"\n🔥 High frequency texts:")
+            for oa in sorted(high_frequency, key=lambda x: x['count'], reverse=True)[:5]:
+                consistent_info = "✅ consistent" if oa['is_consistent'] else f"❌ inconsistent ({len(oa['unique_labels'])} labels)"
+                print(f"  '{oa['text']}': {oa['count']} occurrences, {consistent_info}")
+                if oa['overlaps']:
+                    print(f"    ⚠️  {len(oa['overlaps'])} overlapping occurrences")
+                if oa['gaps']:
+                    print(f"    📏 Avg gap: {oa['avg_gap']:.1f} chars (min: {oa['min_gap']}, max: {oa['max_gap']})")
+        
+        # Check for punctuation and common words
+        punctuation_texts = [oa for oa in occurrence_analysis if oa['text'] in [',', '.', ';', ':', '!', '?', '(', ')', '"', "'"]]
+        if punctuation_texts:
+            print(f"\n📝 Punctuation analysis:")
+            for oa in sorted(punctuation_texts, key=lambda x: x['count'], reverse=True):
+                print(f"  '{oa['text']}': {oa['count']} occurrences across {len(set(ann[0] for ann in [(oa['sequence'], pos) for pos in oa['positions']]))} sequences")
+        
+        # Flag potential issues
+        inconsistent_texts = [oa for oa in occurrence_analysis if not oa['is_consistent']]
+        if inconsistent_texts:
+            print(f"\n⚠️  Inconsistent labeling across positions: {len(inconsistent_texts)} texts")
+            for oa in inconsistent_texts[:3]:
+                print(f"  '{oa['text']}': labels {oa['unique_labels']}")
+        
+        overlapping_texts = [oa for oa in occurrence_analysis if oa['overlaps']]
+        if overlapping_texts:
+            print(f"\n🔄 Texts with overlapping occurrences: {len(overlapping_texts)}")
+            for oa in overlapping_texts[:3]:
+                print(f"  '{oa['text']}': {len(oa['overlaps'])} overlaps")
     else:
-        print("✅ No duplicates found - all annotations are unique!")
+        print("✅ No multiple occurrences found - all texts appear only once!")
     
     # Sequence summary
     sequences = set(ann['sequence_number'] for ann in annotations)
-    print(f"\n📝 Sequences analyzed: {sorted(sequences)}")
+    print(f"\n📝 Sequences analyzed: {len(sequences)} sequences ({min(sequences)} to {max(sequences)})")
     print()
     
     # Hierarchical structure analysis
@@ -362,25 +613,54 @@ def main():
     if not anomalies:
         print("✅ No anomalies detected!")
     else:
+        # Group anomalies by type and severity
         anomaly_types = Counter(a['type'] for a in anomalies)
-        for anomaly_type, count in anomaly_types.items():
-            print(f"{anomaly_type}: {count} instances")
+        severity_counts = Counter(a.get('severity', 'unknown') for a in anomalies)
         
-        print("\nDetailed anomalies:")
-        for anomaly in anomalies[:10]:  # Show first 10
-            if anomaly['type'] == 'exact_duplicate':
-                print(f"  🔄 Exact duplicate in seq {anomaly['sequence']}: '{anomaly['span']['text']}' ({anomaly['span']['xbar_label']})")
-            elif anomaly['type'] == 'boundary_duplicate':
-                print(f"  🏷️  Boundary duplicate in seq {anomaly['sequence']}: '{anomaly['text']}' @ {anomaly['positions']} has labels {anomaly['labels']}")
-            elif anomaly['type'] == 'suspicious_short_span':
-                print(f"  ⚠️  Short span in seq {anomaly['sequence']}: '{anomaly['span']['text']}' ({anomaly['span']['xbar_label']})")
-            elif anomaly['type'] == 'repetitive_text':
-                print(f"  🔁 Repetitive in seq {anomaly['sequence']}: '{anomaly['text']}' appears {anomaly['count']} times")
-            elif anomaly['type'] == 'inconsistent_labeling':
-                print(f"  🏷️  Inconsistent labels in seq {anomaly['sequence']}: '{anomaly['text']}' -> {anomaly['labels']}")
+        print(f"📊 Anomaly summary:")
+        print(f"  - Total anomalies: {len(anomalies)}")
+        print(f"  - By severity: {dict(severity_counts)}")
+        print(f"  - By type: {dict(anomaly_types)}")
         
-        if len(anomalies) > 10:
-            print(f"  ... and {len(anomalies) - 10} more anomalies")
+        # Group by severity for reporting
+        high_severity = [a for a in anomalies if a.get('severity') == 'high']
+        medium_severity = [a for a in anomalies if a.get('severity') == 'medium']
+        low_severity = [a for a in anomalies if a.get('severity') == 'low']
+        
+        if high_severity:
+            print(f"\n🔴 HIGH SEVERITY ANOMALIES ({len(high_severity)}):")
+            for anomaly in high_severity[:5]:
+                if anomaly['type'] == 'exact_duplicate':
+                    print(f"  🔄 Exact duplicate in seq {anomaly['sequence']}: '{anomaly['span']['text']}' ({anomaly['span']['xbar_label']})")
+                elif anomaly['type'] == 'overlapping_identical_spans':
+                    print(f"  📐 Overlapping identical spans in seq {anomaly['sequence']}: '{anomaly['text']}' ({anomaly['label']}) - overlap: {anomaly['overlap_length']} chars")
+            if len(high_severity) > 5:
+                print(f"  ... and {len(high_severity) - 5} more high severity anomalies")
+        
+        if medium_severity:
+            print(f"\n🟡 MEDIUM SEVERITY ANOMALIES ({len(medium_severity)}):")
+            for anomaly in medium_severity[:5]:
+                if anomaly['type'] == 'boundary_duplicate':
+                    print(f"  🏷️  Boundary duplicate in seq {anomaly['sequence']}: '{anomaly['text']}' @ {anomaly['positions']} has labels {anomaly['labels']}")
+                elif anomaly['type'] == 'inconsistent_labeling':
+                    print(f"  🏷️  Inconsistent labels in seq {anomaly['sequence']}: '{anomaly['text']}' -> {anomaly['labels']} ({anomaly['occurrences']} occurrences)")
+                elif anomaly['type'] == 'low_coverage':
+                    print(f"  📊 Low coverage in seq {anomaly['sequence']}: {anomaly['coverage_ratio']:.1%} ({anomaly['covered_chars']}/{anomaly['total_chars']} chars)")
+                elif anomaly['type'] == 'repetitive_text':
+                    severity_marker = "📊" if anomaly.get('severity') == 'medium' else "🔁"
+                    print(f"  {severity_marker} Repetitive in seq {anomaly['sequence']}: '{anomaly['text']}' appears {anomaly['count']} times")
+            if len(medium_severity) > 5:
+                print(f"  ... and {len(medium_severity) - 5} more medium severity anomalies")
+        
+        if low_severity:
+            print(f"\n🟢 LOW SEVERITY ANOMALIES ({len(low_severity)}):")
+            for anomaly in low_severity[:3]:  # Show fewer low severity
+                if anomaly['type'] == 'suspicious_short_span':
+                    print(f"  ⚠️  Short span in seq {anomaly['sequence']}: '{anomaly['span']['text']}' ({anomaly['span']['xbar_label']})")
+                elif anomaly['type'] == 'repetitive_text':
+                    print(f"  🔁 Repetitive in seq {anomaly['sequence']}: '{anomaly['text']}' appears {anomaly['count']} times")
+            if len(low_severity) > 3:
+                print(f"  ... and {len(low_severity) - 3} more low severity anomalies")
     print()
     
     # Boundary alignment check

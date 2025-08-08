@@ -64,9 +64,11 @@ class XBarJsonParser:
         return []
     
     def filter_valid_annotations(self, annotations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Filter and deduplicate annotations."""
-        seen_annotations = set()
-        unique_annotations = []
+        """Filter and deduplicate annotations with greedy label selection."""
+        from collections import Counter
+        
+        # First pass: collect all valid annotations
+        valid_annotations = []
         
         for annotation in annotations:
             if not isinstance(annotation, dict):
@@ -119,12 +121,40 @@ class XBarJsonParser:
             if len(text) == 1 and text.isspace():
                 continue
             
-            # Deduplicate: allow multiple labels on same text, but not same text+label combination
-            # This allows overlapping spans with different labels
-            key = (text.lower(), xbar_label.lower())
-            if key not in seen_annotations:
-                seen_annotations.add(key)
-                unique_annotations.append({'text': text, 'xbar_label': xbar_label})
+            valid_annotations.append({'text': text, 'xbar_label': xbar_label})
+        
+        # Second pass: implement greedy deduplication for same text with different labels
+        # Count label frequency for greedy selection
+        label_counts = Counter(ann['xbar_label'] for ann in valid_annotations)
+        
+        # Group by text (case-insensitive)
+        text_groups = {}
+        for i, annotation in enumerate(valid_annotations):
+            text_key = annotation['text'].lower()
+            if text_key not in text_groups:
+                text_groups[text_key] = []
+            text_groups[text_key].append((annotation, i))  # Store annotation with original index
+        
+        # Apply greedy selection for each text group
+        unique_annotations = []
+        for text_key, annotations_with_indices in text_groups.items():
+            if len(annotations_with_indices) == 1:
+                # Only one annotation for this text, keep it
+                unique_annotations.append(annotations_with_indices[0][0])
+            else:
+                # Multiple labels for same text - apply greedy selection
+                # Sort by: 1) label frequency (descending), 2) original order (ascending)
+                def greedy_sort_key(ann_with_index):
+                    annotation, original_index = ann_with_index
+                    label_freq = label_counts[annotation['xbar_label']]
+                    return (-label_freq, original_index)  # Negative for descending frequency
+                
+                sorted_annotations = sorted(annotations_with_indices, key=greedy_sort_key)
+                winner = sorted_annotations[0][0]  # Take the annotation, not the index
+                unique_annotations.append(winner)
+                
+                if len(annotations_with_indices) > 1:
+                    logger.debug(f"Greedy selection for '{winner['text']}': kept '{winner['xbar_label']}' (freq: {label_counts[winner['xbar_label']]}), removed {len(annotations_with_indices) - 1} alternatives")
         
         logger.debug(f"Filtered to {len(unique_annotations)} unique valid annotations")
         return unique_annotations
