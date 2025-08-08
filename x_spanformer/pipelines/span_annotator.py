@@ -575,7 +575,8 @@ class SpanAnnotatorPipeline:
                         logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_formatted}")
-                        logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']}")
+                        logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']} | "
+                                  f"Total errors: {failed_count}")
                         logger.info("=" * 80)
                 else:
                     error_msg = result.error_message or "Annotation failed"
@@ -606,7 +607,8 @@ class SpanAnnotatorPipeline:
                         logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_formatted}")
-                        logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']}")
+                        logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']} | "
+                                  f"Total errors: {failed_count}")
                         logger.info("=" * 80)
                     
             except Exception as e:
@@ -637,7 +639,8 @@ class SpanAnnotatorPipeline:
                     logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
                               f"Avg: {sequences_per_minute:.1f} seq/min | "
                               f"ETA: {eta_formatted}")
-                    logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']}")
+                    logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']} | "
+                              f"Total errors: {failed_count}")
                     logger.info("=" * 80)
         
         # Update statistics
