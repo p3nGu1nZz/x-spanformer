@@ -314,7 +314,6 @@ Return a JSON array with all identified spans using the format specified in the 
             annotation_record = AnnotationRecord(
                 raw=text,
                 sequence_id=getattr(pretrain_record.meta, 'sequence_number', 0) if pretrain_record.meta else 0,
-                embedding_chunk_id=getattr(pretrain_record, 'embedding_chunk_id', 1),
                 total_positions=position_mapper.get_text_length(),
                 span_annotations=span_annotations,
                 agent_metadata={

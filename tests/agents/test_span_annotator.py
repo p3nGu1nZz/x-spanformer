@@ -1,7 +1,21 @@
 """
 Simplified test suite for span_annotator_session.py - Basic functionality tests.
 
-Tests the core functionality of the unified span annotation session.
+Tests the        result = AnnotationResult(
+            sequence_number=1,
+            annotation_record=None,
+            success=False,
+            error_message="Model timeout",
+            processing_time=2.0,
+            turns_used=0
+        )
+        
+        self.assertEqual(result.sequence_number, 1)
+        self.assertIsNone(result.annotation_record)
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_message, "Model timeout")
+        self.assertEqual(result.processing_time, 2.0)
+        self.assertEqual(result.turns_used, 0)lity of the unified span annotation session.
 """
 
 import unittest
@@ -17,8 +31,7 @@ from x_spanformer.agents.session.span_annotator_session import (
 )
 from x_spanformer.schema.annotation_record import (
     SpanAnnotation,
-    AnnotationRecord,
-    AnnotationBatch
+    AnnotationRecord
 )
 from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.metadata import RecordMeta
@@ -45,17 +58,15 @@ class TestAnnotationTask(unittest.TestCase):
         )
         
         task = AnnotationTask(
-            sequence_id=1,
+            sequence_number=1,
             text="Test text for annotation",
-            embedding_chunk_id=0,
             pretrain_record=pretrain_record,
             priority=1,
             retry_count=0
         )
         
-        self.assertEqual(task.sequence_id, 1)
+        self.assertEqual(task.sequence_number, 1)
         self.assertEqual(task.text, "Test text for annotation")
-        self.assertEqual(task.embedding_chunk_id, 0)
         self.assertEqual(task.priority, 1)
         self.assertEqual(task.retry_count, 0)
         self.assertEqual(task.pretrain_record, pretrain_record)
@@ -78,20 +89,19 @@ class TestAnnotationResult(unittest.TestCase):
         annotation_record = AnnotationRecord(
             sequence_id=1,
             raw="Test text",
-            embedding_chunk_id=0,
             total_positions=10,
             span_annotations=[span_annotation]
         )
         
         result = AnnotationResult(
-            sequence_id=1,
+            sequence_number=1,
             annotation_record=annotation_record,
             success=True,
             processing_time=1.5,
             turns_used=3
         )
         
-        self.assertEqual(result.sequence_id, 1)
+        self.assertEqual(result.sequence_number, 1)
         self.assertIsNotNone(result.annotation_record)
         self.assertTrue(result.success)
         self.assertIsNone(result.error_message)
@@ -101,7 +111,7 @@ class TestAnnotationResult(unittest.TestCase):
     def test_annotation_result_failure(self):
         """Test failed annotation result."""
         result = AnnotationResult(
-            sequence_id=1,
+            sequence_number=1,
             annotation_record=None,
             success=False,
             error_message="Model timeout",
@@ -109,7 +119,7 @@ class TestAnnotationResult(unittest.TestCase):
             turns_used=0
         )
         
-        self.assertEqual(result.sequence_id, 1)
+        self.assertEqual(result.sequence_number, 1)
         self.assertIsNone(result.annotation_record)
         self.assertFalse(result.success)
         self.assertEqual(result.error_message, "Model timeout")
@@ -196,18 +206,36 @@ class TestErrorHandling(unittest.TestCase):
             conversation_timeout=1.0  # Short timeout for testing
         )
     
-    def test_empty_batch_handling(self):
-        """Test handling of empty batches."""
+    def test_empty_sequence_handling(self):
+        """Test handling of sequences with minimal content."""
         async def run_test():
-            batch = await self.session.annotate_batch([])
+            # Create minimal pretrain record
+            minimal_record = PretrainRecord(
+                raw="",
+                type="natural",
+                meta=RecordMeta(
+                    sequence_number=0,
+                    doc_language="en",
+                    extracted_by="test",
+                    confidence=0.9,
+                    source_file="test.txt",
+                    notes="empty test record",
+                    timestamp="2025-01-01",
+                    source="test"
+                )
+            )
             
-            self.assertIsInstance(batch, AnnotationBatch)
-            self.assertEqual(len(batch.records), 0)
-            # Check that batch has basic structure
-            self.assertIsNotNone(batch.batch_id)
-            self.assertIsInstance(batch.embedding_chunk_ids, list)
-            self.assertIsInstance(batch.batch_metadata, dict)
+            # Mock the annotator to return a simple result
+            with patch.object(self.session, 'annotator') as mock_annotator:
+                mock_annotator.annotate_sequence = AsyncMock(return_value=None)
+                
+                result = await self.session.annotate_single_sequence(minimal_record)
+                
+                # Should handle empty sequence gracefully
+                self.assertIsInstance(result, AnnotationResult)
+                self.assertFalse(result.success)
         
+        # Run the async test
         asyncio.run(run_test())
 
 

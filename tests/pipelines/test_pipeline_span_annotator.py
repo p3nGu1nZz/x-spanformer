@@ -257,16 +257,15 @@ class TestProcessingIntegration:
             with open(corpus_file, 'w') as f:
                 f.write(json.dumps(test_data) + '\n')
             
-            # Mock successful annotation with proper attributes
-            mock_record = Mock()
-            mock_record.sequence_id = 1
-            mock_record.span_annotations = []
-            mock_record.agent_metadata = {"test": "data"}  # JSON serializable
+            # Mock successful annotation result
+            mock_result = Mock()
+            mock_result.success = True
+            mock_result.annotation_record = Mock()
+            mock_result.annotation_record.span_annotations = []
+            mock_result.annotation_record.agent_metadata = {"test": "data"}
+            mock_result.error_message = None
             
-            mock_annotation_batch = Mock()
-            mock_annotation_batch.records = [mock_record]
-            
-            with patch.object(pipeline.session, 'annotate_batch', return_value=mock_annotation_batch):
+            with patch.object(pipeline.session, 'annotate_single_sequence', return_value=mock_result):
                 stats = await pipeline.process_sequences(corpus_file, output_dir)
                 
                 assert stats["total_sequences"] == 1

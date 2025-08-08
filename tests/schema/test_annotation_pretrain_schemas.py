@@ -6,13 +6,13 @@ and span annotation pipeline integration.
 """
 
 import unittest
+import pytest
 from typing import List, Dict, Any
 from pydantic import ValidationError
 
 from x_spanformer.schema.annotation_record import (
     SpanAnnotation, 
-    AnnotationRecord,
-    AnnotationBatch
+    AnnotationRecord
 )
 from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.identifier import RecordID
@@ -112,14 +112,12 @@ class TestAnnotationRecord(unittest.TestCase):
         record = AnnotationRecord(
             raw="The quick brown fox",
             sequence_id=42,
-            embedding_chunk_id=1,
             span_annotations=self.sample_annotations,
             total_positions=19
         )
         
         self.assertEqual(record.raw, "The quick brown fox")
         self.assertEqual(record.sequence_id, 42)
-        self.assertEqual(record.embedding_chunk_id, 1)
         self.assertEqual(len(record.span_annotations), 4)
         self.assertEqual(record.total_positions, 19)
     
@@ -128,7 +126,6 @@ class TestAnnotationRecord(unittest.TestCase):
         record = AnnotationRecord(
             raw="Complex sentence requiring multi-turn analysis.",
             sequence_id=100,
-            embedding_chunk_id=5,
             span_annotations=self.sample_annotations,
             total_positions=47,
             conversation_turns=self.sample_conversation,
@@ -147,7 +144,6 @@ class TestAnnotationRecord(unittest.TestCase):
         record = AnnotationRecord(
             raw="Short.",
             sequence_id=1,
-            embedding_chunk_id=1,
             total_positions=6
         )
         
@@ -160,7 +156,6 @@ class TestAnnotationRecord(unittest.TestCase):
         record = AnnotationRecord(
             raw="Valid text",
             sequence_id=1,
-            embedding_chunk_id=1,
             total_positions=10
         )
         
@@ -174,54 +169,11 @@ class TestAnnotationRecord(unittest.TestCase):
         record_with_overlaps = AnnotationRecord(
             raw="Test text",
             sequence_id=2,
-            embedding_chunk_id=1,
             span_annotations=overlapping_spans,
             total_positions=9
         )
         
         self.assertEqual(len(record_with_overlaps.span_annotations), 3)
-
-
-class TestAnnotationBatch(unittest.TestCase):
-    """Test AnnotationBatch schema for batch processing."""
-    
-    def test_annotation_batch_creation(self):
-        """Test annotation batch creation."""
-        records = [
-            AnnotationRecord(
-                raw="First sentence.",
-                sequence_id=1,
-                embedding_chunk_id=1,
-                total_positions=15
-            ),
-            AnnotationRecord(
-                raw="Second sentence is longer.",
-                sequence_id=2,
-                embedding_chunk_id=1,
-                total_positions=26
-            )
-        ]
-        
-        batch = AnnotationBatch(
-            records=records,
-            batch_id="test-batch-001",
-            embedding_chunk_ids=[1],
-            batch_metadata={"processor": "span_annotator_agent"}
-        )
-        
-        self.assertEqual(len(batch.records), 2)
-        self.assertEqual(batch.batch_id, "test-batch-001")
-        self.assertEqual(batch.embedding_chunk_ids, [1])
-    
-    def test_annotation_batch_empty(self):
-        """Test empty annotation batch."""
-        batch = AnnotationBatch(
-            records=[],
-            batch_id="empty-batch",
-            embedding_chunk_ids=[1]
-        )
-        
-        self.assertEqual(len(batch.records), 0)
 
 
 class TestPretrainRecord(unittest.TestCase):
@@ -277,7 +229,10 @@ class TestPretrainRecord(unittest.TestCase):
             confidence=0.95,
             extracted_by="test_pipeline",
             source_file="test_corpus.jsonl",
-            notes="Test metadata"
+            notes="Test metadata",
+            sequence_number=1,
+            timestamp="2025-01-01T00:00:00",
+            source="test"
         )
         
         record = PretrainRecord(
@@ -323,7 +278,6 @@ class TestSchemaIntegration(unittest.TestCase):
         pretrain = PretrainRecord(
             raw="Integration test sequence.",
             sequence_number=123,
-            embedding_chunk_id=5,
             embedding_positions=26
         )
         
@@ -331,7 +285,6 @@ class TestSchemaIntegration(unittest.TestCase):
         annotation = AnnotationRecord(
             raw=pretrain.raw,
             sequence_id=pretrain.sequence_number or 123,
-            embedding_chunk_id=pretrain.embedding_chunk_id or 5,
             span_annotations=[
                 SpanAnnotation(start_pos=0, end_pos=11, xbar_class="NP"),
                 SpanAnnotation(start_pos=12, end_pos=16, xbar_class="N"),
@@ -343,7 +296,6 @@ class TestSchemaIntegration(unittest.TestCase):
         # Verify alignment
         self.assertEqual(pretrain.raw, annotation.raw)
         self.assertEqual(pretrain.sequence_number, annotation.sequence_id)
-        self.assertEqual(pretrain.embedding_chunk_id, annotation.embedding_chunk_id)
         self.assertEqual(pretrain.embedding_positions, annotation.total_positions)
     
     def test_position_boundary_validation(self):
@@ -360,7 +312,6 @@ class TestSchemaIntegration(unittest.TestCase):
         record = AnnotationRecord(
             raw="A" * sequence_length,  # 20 characters
             sequence_id=1,
-            embedding_chunk_id=1,
             span_annotations=valid_annotations,
             total_positions=sequence_length
         )

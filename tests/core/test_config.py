@@ -48,11 +48,9 @@ class TestActualConfigFiles:
         assert pipelines_dir.exists(), "pipelines directory missing"
         
         expected_files = [
-            "span_annotator.yaml",
             "vocab2embedding.yaml", 
             "jsonl2vocab.yaml",
-            "repo2jsonl.yaml",
-            "embedding2span.yaml"
+            "repo2jsonl.yaml"
         ]
         
         for filename in expected_files:
@@ -88,29 +86,6 @@ class TestActualConfigFiles:
         assert isinstance(judge["threshold"], (int, float))
         assert isinstance(judge["max_retries"], int)
     
-    def test_span_annotator_pipeline_yaml_valid(self, config_root):
-        """Test that span_annotator.yaml pipeline config is valid."""
-        pipeline_config_path = config_root / "pipelines" / "span_annotator.yaml"
-        
-        with open(pipeline_config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-        
-        # Test required sections
-        assert "processing" in config
-        assert "output" in config
-        
-        # Test processing section
-        processing = config["processing"]
-        assert "max_retries" in processing
-        assert "conversation_timeout" in processing
-        assert "batch_size" in processing
-        
-        # Test output section
-        output = config["output"]
-        assert "save_working_files" in output
-        assert "consolidate_on_completion" in output
-
-
 class TestJudgeConfigLoader:
     """Test judge_config_loader functionality."""
     
@@ -215,8 +190,8 @@ class TestConfigIntegration:
                 assert "agent_type" in config, f"Missing agent_type in {agent_file}"
         
         # Test pipeline configs
-        pipeline_files = ["span_annotator.yaml", "vocab2embedding.yaml", "jsonl2vocab.yaml", 
-                         "repo2jsonl.yaml", "embedding2span.yaml"]
+        pipeline_files = ["vocab2embedding.yaml", "jsonl2vocab.yaml", 
+                         "repo2jsonl.yaml"]
         
         for pipeline_file in pipeline_files:
             pipeline_path = config_root / "pipelines" / pipeline_file

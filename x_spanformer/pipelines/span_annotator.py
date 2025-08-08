@@ -306,7 +306,7 @@ class SpanAnnotatorPipeline:
         corpus_file: Path,
         output_dir: Path,
         range_spec: Optional[str] = None,
-        resume: bool = True
+stream: bool = False
     ) -> Dict[str, Any]:
         """
         Process sequences with comprehensive annotation.
@@ -315,7 +315,7 @@ class SpanAnnotatorPipeline:
             corpus_file: Path to corpus.jsonl file
             output_dir: Output directory for results
             range_spec: Range specification (e.g., "1-100")
-            resume: Whether to resume from existing results
+            stream: Stream results to console in real-time
             
         Returns:
             Processing statistics
@@ -333,8 +333,8 @@ class SpanAnnotatorPipeline:
             logger.warning("No sequences to process")
             return self.pipeline_stats
         
-        # Load existing results for resume
-        existing_results = self.load_existing_results(output_dir) if resume else {}
+        # Load existing results for resume (always enabled)
+        existing_results = self.load_existing_results(output_dir)
         
         # Filter sequences to process
         sequences_to_process = []
@@ -347,10 +347,16 @@ class SpanAnnotatorPipeline:
                 elif isinstance(seq.meta, dict) and 'sequence_number' in seq.meta:
                     seq_id = seq.meta['sequence_number']
                     
-            if not resume or seq_id not in existing_results or existing_results[seq_id] != "completed":
+            if seq_id not in existing_results or existing_results[seq_id] != "completed":
                 sequences_to_process.append(seq)
         
         logger.info(f"Processing {len(sequences_to_process)} sequences (skipped {len(sequences) - len(sequences_to_process)} completed)")
+        
+        # Stream initial message if enabled
+        if stream:
+            print("Starting span annotation with real-time streaming...")
+            print(f"Processing {len(sequences_to_process)} sequences")
+            print("=" * 60)
         
         # Progress tracking
         async def progress_callback(progress_info):
@@ -358,43 +364,62 @@ class SpanAnnotatorPipeline:
             if progress_info.get('total_spans'):
                 logger.info(f"[PROGRESS] Total spans: {progress_info['total_spans']}")
         
-        # Process sequences in batches (sequential processing)
-        batch_size = min(5, len(sequences_to_process))  # Fixed batch size for sequential processing
+        # Process sequences individually (sequential processing)
         successful_count = 0
         failed_count = 0
         
-        for i in range(0, len(sequences_to_process), batch_size):
-            batch = sequences_to_process[i:i + batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1}: sequences {i+1}-{min(i+batch_size, len(sequences_to_process))}")
+        for i, sequence in enumerate(sequences_to_process):
+            # Get sequence number from meta field  
+            seq_id = 0
+            if hasattr(sequence, 'meta') and sequence.meta:
+                if hasattr(sequence.meta, 'sequence_number'):
+                    seq_id = sequence.meta.sequence_number
+                elif isinstance(sequence.meta, dict) and 'sequence_number' in sequence.meta:
+                    seq_id = sequence.meta['sequence_number']
             
-            # Process batch
-            annotation_batch = await self.session.annotate_batch(batch, progress_callback=progress_callback)
+            logger.info(f"Processing sequence {i+1}/{len(sequences_to_process)}: ID {seq_id}")
             
-            # Save results
-            for j, sequence in enumerate(batch):
-                # Get sequence number from meta field  
-                seq_id = 0
-                if hasattr(sequence, 'meta') and sequence.meta:
-                    if hasattr(sequence.meta, 'sequence_number'):
-                        seq_id = sequence.meta.sequence_number
-                    elif isinstance(sequence.meta, dict) and 'sequence_number' in sequence.meta:
-                        seq_id = sequence.meta['sequence_number']
+            try:
+                # Annotate single sequence
+                result = await self.session.annotate_single_sequence(sequence, progress_callback=progress_callback)
                 
-                # Find corresponding annotation record
-                annotation_record = None
-                for record in annotation_batch.records:
-                    if record.sequence_id == seq_id:
-                        annotation_record = record
-                        break
-                
-                if annotation_record:
+                if result.success and result.annotation_record:
+                    annotation_record = result.annotation_record
                     self.save_working_file(output_dir, sequence, annotation_record)
                     successful_count += 1
-                    logger.info(f"Successfully annotated sequence {seq_id} with {len(annotation_record.span_annotations)} spans")
+                    
+                    span_count = len(annotation_record.span_annotations)
+                    logger.info(f"Successfully annotated sequence {seq_id} with {span_count} spans")
+                    
+                    # Stream to console if enabled
+                    if stream:
+                        print(f"SUCCESS: Sequence {seq_id}: {span_count} spans extracted")
+                        for span in annotation_record.span_annotations[:3]:  # Show first 3 spans
+                            span_text = sequence.raw[span.start_pos:span.end_pos] if span.end_pos <= len(sequence.raw) else "..."
+                            print(f"   - {span.xbar_class}: '{span_text}' [{span.start_pos}:{span.end_pos}]")
+                        if span_count > 3:
+                            print(f"   ... and {span_count - 3} more spans")
+                        print()
                 else:
-                    self.save_working_file(output_dir, sequence, error_message="Annotation failed")
+                    error_msg = result.error_message or "Annotation returned None"
+                    self.save_working_file(output_dir, sequence, error_message=error_msg)
                     failed_count += 1
-                    logger.warning(f"Failed to annotate sequence {seq_id}")
+                    logger.warning(f"Failed to annotate sequence {seq_id}: {error_msg}")
+                    
+                    # Stream to console if enabled
+                    if stream:
+                        print(f"FAILED: Sequence {seq_id}: Failed - {error_msg}")
+                        print()
+                    
+            except Exception as e:
+                self.save_working_file(output_dir, sequence, error_message=str(e))
+                failed_count += 1
+                logger.error(f"Failed to annotate sequence {seq_id}: {e}", exc_info=True)
+                
+                # Stream to console if enabled
+                if stream:
+                    print(f"ERROR: Sequence {seq_id}: Exception - {str(e)}")
+                    print()
         
         # Update statistics
         self.pipeline_stats["processed_sequences"] = len(sequences_to_process)
@@ -422,6 +447,7 @@ async def main():
     parser.add_argument("--temperature", type=float, default=0.2, help="Model temperature")
     parser.add_argument("--timeout", type=float, default=180.0, help="Conversation timeout (seconds)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser.add_argument("--stream", "-s", action="store_true", help="Stream results to console in real-time")
     
     args = parser.parse_args()
     
@@ -474,7 +500,7 @@ async def main():
             corpus_file=args.corpus,
             output_dir=args.output,
             range_spec=args.range,
-            resume=True  # Always resume
+            stream=args.stream
         )
         
         # Display final results
@@ -504,7 +530,7 @@ async def main():
         sys.exit(1)
     except Exception as e:
         logger.error(f"Pipeline failed: {e}", exc_info=True)
-        print(f"\n❌ Pipeline failed: {e}")
+        print(f"\nPipeline failed: {e}")
         sys.exit(1)
 
 

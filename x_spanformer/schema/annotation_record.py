@@ -38,7 +38,6 @@ class AnnotationRecord(BaseModel):
     # Core sequence data
     raw: str = Field(..., description="Original Unicode text sequence")
     sequence_id: int = Field(..., description="Sequential position in corpus for embedding lookup")
-    embedding_chunk_id: int = Field(..., description="Chunk ID containing contextual embeddings")
     
     # Position-wise span annotations
     span_annotations: List[SpanAnnotation] = Field(default_factory=list, description="List of position-indexed span annotations")
@@ -57,7 +56,6 @@ class AnnotationRecord(BaseModel):
             "example": {
                 "raw": "The quick brown fox jumps over the lazy dog.",
                 "sequence_id": 1,
-                "embedding_chunk_id": 1,
                 "span_annotations": [
                     {
                         "start_pos": 0,
@@ -107,36 +105,6 @@ class AnnotationRecord(BaseModel):
                     "source_file": "corpus.jsonl",
                     "sequence_number": 1,
                     "status": "annotated"
-                }
-            }
-        }
-    )
-
-
-class AnnotationBatch(BaseModel):
-    """
-    Batch of annotation records for efficient processing.
-    
-    Groups related sequences for batch annotation processing
-    while maintaining individual record integrity.
-    """
-    records: List[AnnotationRecord] = Field(..., description="List of annotation records in batch")
-    batch_id: str = Field(..., description="Unique identifier for this batch")
-    embedding_chunk_ids: List[int] = Field(..., description="List of embedding chunk IDs covered by this batch")
-    batch_metadata: Dict[str, Any] = Field(default_factory=dict, description="Batch processing metadata")
-
-    model_config = ConfigDict(
-        json_schema_extra = {
-            "example": {
-                "records": [],  # Would contain AnnotationRecord examples
-                "batch_id": "batch-20250723-001",
-                "embedding_chunk_ids": [1, 2, 3],
-                "batch_metadata": {
-                    "total_sequences": 300,
-                    "total_annotations": 1247,
-                    "processing_date": "2025-07-23",
-                    "agent_model": "gpt-4o",
-                    "avg_confidence": 0.89
                 }
             }
         }
