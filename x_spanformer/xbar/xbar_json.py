@@ -46,27 +46,51 @@ class XBarJsonParser:
         
         # Try standard JSON parsing first
         for pattern in patterns:
-            for match in re.findall(pattern, response_cleaned, re.DOTALL):
-                try:
-                    # Try direct parsing - no repair
-                    parsed_data = json.loads(match)
-                    if isinstance(parsed_data, list):
-                        annotations = parsed_data
-                    elif isinstance(parsed_data, dict):
-                        annotations = [parsed_data]
-                    else:
+            matches = re.findall(pattern, response_cleaned, re.DOTALL)
+            if not matches:
+                continue
+                
+            # Special handling for individual object pattern - collect all matches
+            if pattern == r'(\{[^{}]*"text"[^{}]*"xbar_label"[^{}]*\})':
+                annotations = []
+                for match in matches:
+                    try:
+                        parsed_data = json.loads(match)
+                        if isinstance(parsed_data, dict):
+                            annotations.append(parsed_data)
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"JSON parsing failed for individual object '{match[:50]}...': {e}")
                         continue
-                        
-                    logger.debug(f"Successfully parsed {len(annotations)} annotations")
+                
+                if annotations:
+                    logger.debug(f"Successfully parsed {len(annotations)} individual object annotations")
                     filtered_annotations = self.filter_valid_annotations(annotations)
-                    # Remove duplicates at JSON parse level before passing to annotator
                     deduplicated_annotations = self._remove_duplicates(filtered_annotations)
                     logger.debug(f"Removed {len(filtered_annotations) - len(deduplicated_annotations)} duplicates at JSON parse level")
                     return deduplicated_annotations
-                    
-                except json.JSONDecodeError as e:
-                    logger.warning(f"JSON parsing failed for match '{match[:100]}...': {e}")
-                    continue
+            else:
+                # Normal handling for array patterns - take first successful match
+                for match in matches:
+                    try:
+                        # Try direct parsing - no repair
+                        parsed_data = json.loads(match)
+                        if isinstance(parsed_data, list):
+                            annotations = parsed_data
+                        elif isinstance(parsed_data, dict):
+                            annotations = [parsed_data]
+                        else:
+                            continue
+                            
+                        logger.debug(f"Successfully parsed {len(annotations)} annotations")
+                        filtered_annotations = self.filter_valid_annotations(annotations)
+                        # Remove duplicates at JSON parse level before passing to annotator
+                        deduplicated_annotations = self._remove_duplicates(filtered_annotations)
+                        logger.debug(f"Removed {len(filtered_annotations) - len(deduplicated_annotations)} duplicates at JSON parse level")
+                        return deduplicated_annotations
+                        
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"JSON parsing failed for match '{match[:100]}...': {e}")
+                        continue
         
         # If standard JSON parsing fails, try regex-based extraction
         # This handles cases where quotes inside text break JSON structure
