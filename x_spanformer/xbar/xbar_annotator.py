@@ -346,6 +346,12 @@ Use these labels: {", ".join(label_names)}"""
         """
         annotations = []
         
+        # Check for obviously truncated responses
+        if response.strip().endswith(('"}', '"}}', '"]')) and not response.strip().endswith(']}'):
+            logger.warning("Detected truncated response - attempting recovery")
+            # Try to append missing closing bracket
+            response = response.strip() + ']'
+        
         # Try to extract JSON from response with comprehensive patterns
         json_patterns = [
             r'```json\s*(\[.*?\])\s*```',       # JSON code block with array
@@ -367,7 +373,8 @@ Use these labels: {", ".join(label_names)}"""
                         annotations.extend(parsed_data)
                     elif isinstance(parsed_data, dict):
                         annotations.append(parsed_data)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
+                    logger.debug(f"JSON parsing failed: {e}")
                     # Try fixing malformed JSON
                     try:
                         fixed_json = self._fix_malformed_json(match)
@@ -376,7 +383,8 @@ Use these labels: {", ".join(label_names)}"""
                             annotations.extend(parsed_data)
                         elif isinstance(parsed_data, dict):
                             annotations.append(parsed_data)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e2:
+                        logger.debug(f"JSON fix failed: {e2}")
                         # Try regex recovery as last resort
                         recovered_annotations = self._recover_malformed_json(match)
                         annotations.extend(recovered_annotations)
@@ -401,6 +409,16 @@ Use these labels: {", ".join(label_names)}"""
     
     def _fix_malformed_json(self, json_str: str) -> str:
         """Fix common JSON formatting issues."""
+        # Handle truncated JSON - if it ends with incomplete objects
+        if json_str.strip().endswith(('"}', '"}}')):
+            if not json_str.strip().endswith((']}', ')]')):
+                # Try to close incomplete arrays
+                json_str = json_str.strip() + ']'
+        
+        # Handle incomplete object at end
+        if json_str.strip().endswith(','):
+            json_str = json_str.strip()[:-1]  # Remove trailing comma
+        
         # Remove trailing commas before closing brackets
         json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
         
@@ -409,6 +427,12 @@ Use these labels: {", ".join(label_names)}"""
         
         # Fix missing commas between objects in arrays
         json_str = re.sub(r'}\s*{', '}, {', json_str)
+        
+        # Fix incomplete objects at the end of arrays
+        # If we have pattern like: [{"text":"word"}{"text": without closing
+        if re.search(r'\}\s*\{\s*"[^"]*":\s*"[^"]*"\s*$', json_str):
+            # Complete the incomplete object and close array
+            json_str = re.sub(r'(\}\s*\{\s*"[^"]*":\s*"[^"]*")\s*$', r'\1"}]', json_str)
         
         return json_str
     
