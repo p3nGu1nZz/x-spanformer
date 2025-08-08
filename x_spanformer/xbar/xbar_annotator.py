@@ -18,6 +18,7 @@ from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.annotation_record import AnnotationRecord, SpanAnnotation
 from x_spanformer.schema.span import SpanLabel
 from x_spanformer.xbar.xbar_map import XBarLabelMap, DomainType
+from x_spanformer.xbar.xbar_json import XBarJsonParser
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class XBarAnnotator:
     
     def __init__(self, model_config: ModelConfig):
         self.model_config = model_config
+        self.json_parser = XBarJsonParser()
     
     def _detect_domain_from_record(self, pretrain_record: PretrainRecord) -> DomainType:
         """Detect domain type from the pretrain record."""
@@ -142,8 +144,11 @@ Available labels:
 
 Extract accurate spans using ONLY these labels. Be precise and consistent."""
 
+        # Escape text for JSON-safe prompt generation
+        escaped_text = self._escape_text_for_prompt(text_snippet)
+        
         user_prompt = f"""Analyze this {domain.value} text and identify {config["description"]}:
-"{text_snippet}"
+"{escaped_text}"
 
 Return ONLY a JSON array with this exact format. Do not include any explanations, notes, or additional text:
 [{{"text":"extracted_text","xbar_label":"label_name"}}]
@@ -153,6 +158,26 @@ Examples: {config["examples"]}
 Use these labels: {", ".join(label_names)}"""
 
         return system_prompt, user_prompt
+    
+    def _escape_text_for_prompt(self, text: str) -> str:
+        """Escape text for safe inclusion in JSON-generating prompts."""
+        # Escape characters that can confuse JSON generation
+        escaped = text.replace('\\', '\\\\')  # Escape backslashes first
+        escaped = escaped.replace('"', '\\"')  # Escape quotes
+        escaped = escaped.replace('\n', '\\n')  # Escape newlines
+        escaped = escaped.replace('\t', '\\t')  # Escape tabs
+        escaped = escaped.replace('\r', '\\r')  # Escape carriage returns
+        return escaped
+    
+    def _unescape_text_for_matching(self, text: str) -> str:
+        """Unescape text to match against original raw text."""
+        # Reverse the escaping process
+        unescaped = text.replace('\\r', '\r')
+        unescaped = unescaped.replace('\\t', '\t')  
+        unescaped = unescaped.replace('\\n', '\n')
+        unescaped = unescaped.replace('\\"', '"')
+        unescaped = unescaped.replace('\\\\', '\\')  # Unescape backslashes last
+        return unescaped
     
     async def _extract_spans_via_dialogue(
         self, 
@@ -197,7 +222,7 @@ Use these labels: {", ".join(label_names)}"""
     def _parse_spans_from_response(self, response: str, text: str) -> List[SpanLabel]:
         """Parse spans from LLM response using regex-based text matching."""
         spans = []
-        json_annotations = self._parse_json_response(response)
+        json_annotations = self.json_parser.parse_json_response(response)
         
         if json_annotations:
             logger.debug(f"Successfully parsed {len(json_annotations)} JSON annotations, now attempting text matching")
@@ -215,26 +240,29 @@ Use these labels: {", ".join(label_names)}"""
                     logger.debug(f"Skipping annotation with empty text='{span_text}' or label='{xbar_label}'")
                     continue
                 
+                # Unescape the span text to match against original raw text
+                unescaped_span_text = self._unescape_text_for_matching(span_text)
+                
                 # Find matches using regex
-                escaped_text = re.escape(span_text)
+                escaped_text = re.escape(unescaped_span_text)
                 matches = list(re.finditer(escaped_text, text, re.IGNORECASE))
                 
                 if matches:
-                    best_match = self._select_best_match(matches, span_text, text)
+                    best_match = self._select_best_match(matches, unescaped_span_text, text)
                     start_pos, end_pos = best_match.start(), best_match.end() - 1
                     actual_text = text[start_pos:end_pos + 1]
                     
-                    if actual_text.lower() == span_text.lower():
+                    if actual_text.lower() == unescaped_span_text.lower():
                         span_label = SpanLabel(span=(start_pos, end_pos), xbar_label=xbar_label, text=actual_text)
                         spans.append(span_label)
                     else:
-                        logger.debug(f"Text mismatch: expected '{span_text}', got '{actual_text}' at {start_pos}-{end_pos}")
-                elif len(span_text) > 10:  # Try fuzzy matching for longer phrases
-                    fuzzy_span = self._try_fuzzy_match(span_text, text, xbar_label)
+                        logger.debug(f"Text mismatch: expected '{unescaped_span_text}', got '{actual_text}' at {start_pos}-{end_pos}")
+                elif len(unescaped_span_text) > 10:  # Try fuzzy matching for longer phrases
+                    fuzzy_span = self._try_fuzzy_match(unescaped_span_text, text, xbar_label)
                     if fuzzy_span:
                         spans.append(fuzzy_span)
                 else:
-                    logger.debug(f"Could not find text '{span_text}' in source text")
+                    logger.debug(f"Could not find text '{unescaped_span_text}' in source text")
                     
             except Exception as e:
                 logger.debug(f"Failed to parse annotation: {annotation}, error: {e}")
@@ -303,236 +331,10 @@ Use these labels: {", ".join(label_names)}"""
         logger.info(f"Parsed {len(unique_spans)} unique spans from {len(spans)} total found")
         return unique_spans
     
-    def _parse_json_response(self, response: str) -> List[Dict[str, Any]]:
-        """Parse JSON response with simple, fast error handling and basic repair."""
-        response_stripped = response.strip()
-        if not response_stripped:
-            return []
-        
-        # JSON extraction patterns
-        patterns = [
-            r'```json\s*(\[.*?\])\s*```',       # JSON code block
-            r'```\s*(\[.*?\])\s*```',           # Generic code block  
-            r'(\[.*?\])',                       # Simple array pattern
-        ]
-        
-        annotations = []
-        for pattern in patterns:
-            for match in re.findall(pattern, response_stripped, re.DOTALL):
-                try:
-                    parsed_data = json.loads(match)
-                    if isinstance(parsed_data, list):
-                        annotations.extend(parsed_data)
-                    elif isinstance(parsed_data, dict):
-                        annotations.append(parsed_data)
-                    logger.debug(f"Successfully parsed {len(annotations)} annotations directly")
-                    break
-                except json.JSONDecodeError as e:
-                    logger.warning(f"JSON parsing failed, attempting repair: {e}")
-                    
-                    # Try basic JSON repair
-                    repaired_json = self._attempt_json_repair(match)
-                    if repaired_json != match:  # Only try if repair actually changed something
-                        try:
-                            parsed_data = json.loads(repaired_json)
-                            if isinstance(parsed_data, list):
-                                annotations.extend(parsed_data)
-                            elif isinstance(parsed_data, dict):
-                                annotations.append(parsed_data)
-                            logger.info(f"Successfully repaired and parsed JSON with {len(annotations)} annotations")
-                            break
-                        except json.JSONDecodeError as repair_error:
-                            logger.warning(f"JSON repair attempt failed: {repair_error}")
-                            logger.error(f"Original JSON content: {match[:200]}...")
-                            logger.error(f"Repaired JSON content: {repaired_json[:200]}...")
-                            raise ValueError(f"Failed to parse JSON annotation even after repair. Original error: {e}, Repair error: {repair_error}")
-                    
-                    logger.error(f"JSON parsing failed and no repair was attempted: {e}")
-                    logger.error(f"Malformed JSON content: {match[:200]}...")
-                    raise ValueError(f"Failed to parse JSON annotation. Pipeline will exit to prevent hanging on malformed JSON. Error: {e}")
-            if annotations:
-                break
-        
-        return self._filter_valid_annotations(annotations)
     
-    def _attempt_json_repair(self, json_str: str) -> str:
-        """Attempt basic JSON repair for common LLM errors and truncated responses."""
-        try:
-            # Debug: log the original malformed JSON
-            logger.debug(f"REPAIR INPUT: {repr(json_str)}")
-            
-            # Fix common issues
-            repaired = json_str.strip()
-            
-            # FIRST: Handle truncated responses aggressively
-            # If we have an incomplete JSON array that ends abruptly, try to close it
-            if repaired.startswith('[') and not repaired.endswith(']'):
-                # Look for incomplete object at the end
-                if repaired.count('{') > repaired.count('}'):
-                    # We have unclosed objects, try to close the last one
-                    missing_braces = repaired.count('{') - repaired.count('}')
-                    repaired += '}' * missing_braces
-                
-                # If we have odd number of quotes, close the string
-                if repaired.count('"') % 2 != 0:
-                    repaired += '"'
-                
-                # Close the array
-                if not repaired.endswith(']'):
-                    repaired += ']'
-            
-            # Fix common LLM JSON structure errors (order matters)
-            
-            # 1. Fix null values for xbar_label (replace with empty string or default)
-            repaired = re.sub(r'"xbar_label"\s*:\s*null', r'"xbar_label":"unknown"', repaired)
-            
-            # 1a. Fix unquoted null values (common LLM error)
-            repaired = re.sub(r':\s*null(?=\s*[,}])', r':"null"', repaired)
-            
-            # 1b. Fix other unquoted literal values that should be strings in our JSON schema
-            repaired = re.sub(r':\s*(true|false|undefined|none)(?=\s*[,}])', r':"\1"', repaired, flags=re.IGNORECASE)
-            
-            # 1c. Fix specific malformed pattern where we have text followed by unquoted null
-            repaired = re.sub(r'("text"\s*:\s*"[^"]*")\s*,\s*null(?=\s*})', r'\1,"xbar_label":"unknown"', repaired)
-            
-            # 2. Fix malformed entries like {"text","value","xbar_label":"label"}
-            repaired = re.sub(r'(\{"text")\s*,\s*("[^"]*")\s*,\s*("xbar_label")', r'\1:\2,\3', repaired)
-            
-            # 2a. Fix entries where xbar_label is missing after null: {"text":"value",null}
-            repaired = re.sub(r'(\{"text"\s*:\s*"[^"]*")\s*,\s*null\s*}', r'\1,"xbar_label":"unknown"}', repaired)
-            
-            # 3. Fix malformed entries like {"text","j", "xbar_label":"identifier"} (missing property name)
-            repaired = re.sub(r'(\{"text")\s*,\s*("[^"]*")\s*,\s*("xbar_label"\s*:\s*"[^"]*")', r'\1:\2,\3', repaired)
-            
-            # 4. Fix completely malformed structures like {"text","xbar_label":"",}
-            repaired = re.sub(r'(\{"text")\s*,\s*("xbar_label"\s*:\s*"[^"]*")\s*,?\s*}', r'\1:"",\2}', repaired)
-            
-            # 5. Fix empty or malformed text values like {"text","","xbar_label":"value"}
-            repaired = re.sub(r'(\{"text")\s*,\s*(""\s*,\s*"xbar_label")', r'\1:\2', repaired)
-            
-            # 6. Fix unquoted property names for our known properties
-            repaired = re.sub(r'([{,]\s*)(text|xbar_label)(\s*:)', r'\1"\2"\3', repaired)
-            
-            # 7. Fix missing quotes around string values for our properties (conservative)
-            repaired = re.sub(r'("(?:text|xbar_label)"\s*:\s*)([^",}\]]+)(?=\s*[,}])', r'\1"\2"', repaired)
-            
-            # 8. Fix missing colon between property name and value
-            repaired = re.sub(r'("(?:text|xbar_label)")\s+("[^"]*")(?=\s*[,}])', r'\1:\2', repaired)
-            
-            # 9. Fix unquoted labels like "proper noun" -> "noun"
-            repaired = re.sub(r'"xbar_label"\s*:\s*"proper\s+noun"', r'"xbar_label":"noun"', repaired)
-            
-            # 10. Fix other multi-word labels that should be single words
-            repaired = re.sub(r'"xbar_label"\s*:\s*"([^"]*\s+[^"]*)"', 
-                            lambda m: f'"xbar_label":"{m.group(1).replace(" ", "_")}"', repaired)
-            
-            # 11. Fix trailing commas before closing brackets/braces
-            repaired = re.sub(r',\s*([}\]])', r'\1', repaired)
-            
-            # 12. Fix missing commas between complete objects
-            repaired = re.sub(r'}\s*{', r'},{', repaired)
-            
-            # 13. Fix missing quotes around values (but be careful not to break valid JSON)
-            repaired = re.sub(r':\s*([^",\[\]{}\s]+)(?=\s*[,}\]])', r':"\1"', repaired)
-            
-            # 14. Fix specific unterminated string patterns more aggressively
-            lines = repaired.split('\n')
-            for i, line in enumerate(lines):
-                # Look for unterminated strings in JSON object lines
-                if '{"text"' in line and line.count('"') % 2 != 0:
-                    # If line ends without proper termination, try to fix it
-                    line = line.rstrip()
-                    if not line.endswith(('"}', '",', '"}')):
-                        # Add closing quote if it looks like it's missing
-                        if line.endswith(',') or line.endswith('}'):
-                            line = line[:-1] + '"' + line[-1]
-                        else:
-                            line += '"'
-                    lines[i] = line
-            repaired = '\n'.join(lines)
-            
-            # 15. Final aggressive truncation repair
-            # Try to salvage truncated JSON by looking for incomplete patterns
-            if repaired.count('"') % 2 != 0:
-                # Find the last incomplete string and try to close it
-                last_quote_pos = repaired.rfind('"')
-                if last_quote_pos > 0:
-                    # Look for incomplete patterns after the last quote
-                    after_quote = repaired[last_quote_pos + 1:].strip()
-                    if after_quote and not after_quote.endswith(('"}', '",', '"}')):
-                        # Truncated in middle of value, close it
-                        repaired = repaired[:last_quote_pos + 1] + '"'
-                        # Add closing brace/bracket if needed
-                        if repaired.count('{') > repaired.count('}'):
-                            repaired += '}'
-                        if repaired.startswith('[') and not repaired.endswith(']'):
-                            repaired += ']'
-            
-            # 16. Handle specific case of truncated array after repair
-            # Pattern: [{"text":"value","xbar_label":"label"},{"text":"partial_value"
-            if repaired.count('{') > repaired.count('}'):
-                # We have unclosed objects, try to close them
-                open_objects = repaired.count('{') - repaired.count('}')
-                repaired += '}' * open_objects
-            
-            # 17. Final structural check and repair
-            if repaired.startswith('[') and not repaired.endswith(']'):
-                repaired += ']'
-            
-            # 18. Fix specific malformed property patterns like {"text","xbar_label":"",}
-            # Pattern: {"text","xbar_label":"value",} should be {"text":"","xbar_label":"value"}
-            repaired = re.sub(r'{"text","xbar_label":"([^"]*)",}', r'{"text":"","xbar_label":"\1"}', repaired)
-            
-            # 19. Fix incomplete property names (missing quotes and colons)
-            # Pattern: "text": -> "text": ""
-            repaired = re.sub(r'("text")\s*,\s*("xbar_label")(\s*:)', r'\1:"",\2\3', repaired)
-            
-            # Debug: log the repaired JSON
-            logger.debug(f"REPAIR OUTPUT: {repr(repaired)}")
-            
-            return repaired
-            
-        except Exception as e:
-            logger.debug(f"REPAIR EXCEPTION: {e}")
-            return json_str  # Return original if repair fails
+    # JSON parsing and repair methods have been moved to xbar_json.py
+    # Use self.json_parser for JSON-related functionality
     
-    def _filter_valid_annotations(self, annotations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Filter and deduplicate annotations."""
-        seen_annotations = set()
-        unique_annotations = []
-        empty_count = 0
-        
-        for annotation in annotations:
-            if not isinstance(annotation, dict):
-                continue
-                
-            text = (annotation.get('text', '') or '').strip()
-            xbar_label = (annotation.get('xbar_label', '') or annotation.get('label', '') or 
-                         annotation.get('xbar_class', '') or annotation.get('class', '') or '').strip()
-            
-            if not text or not xbar_label:
-                empty_count += 1
-                continue
-            
-            # Filter out literal field names
-            if text in ['text', 'label', 'xbar_label'] or xbar_label in ['text', 'label', 'xbar_label']:
-                continue
-            
-            key = (text, xbar_label)
-            if key not in seen_annotations:
-                seen_annotations.add(key)
-                unique_annotations.append(annotation)
-        
-        if empty_count > 10:
-            logger.warning(f"Detected {empty_count} empty/invalid JSON objects - possible LLM output quality issue")
-        
-        logger.debug(f"Parsed {len(unique_annotations)} unique annotations from {len(annotations)} total found")
-        return unique_annotations
-    
-
-
-
-
     def _validate_span_boundaries(
         self, 
         text: str, 

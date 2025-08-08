@@ -324,27 +324,9 @@ class SpanAnnotatorPipeline:
         working_files = list(working_dir.glob("*.json"))
         logger.info(f"Consolidating {len(working_files)} working files")
         
-        # Define label hierarchy for deduplication (higher value = more specific)
-        label_hierarchy = {
-            # Clause-level (most specific)
-            "main_clause": 3, "subordinate_clause": 3, "relative_clause": 3,
-            "if_statement": 3, "loop_statement": 3, "function_definition": 3,
-            "class_definition": 3, "import_statement": 3, "return_statement": 3,
-            "sentence": 3, "fragment": 3,
-            
-            # Phrase-level (medium specificity)
-            "noun_phrase": 2, "verb_phrase": 2, "adjective_phrase": 2, "adverb_phrase": 2,
-            "prepositional_phrase": 2, "expression": 2, "function_call": 2, "assignment": 2,
-            "parameter_list": 2, "argument_list": 2, "code_block": 2, "documentation_comment": 2,
-            
-            # Word-level (least specific)
-            "noun": 1, "verb": 1, "adjective": 1, "adverb": 1, "preposition": 1,
-            "determiner": 1, "pronoun": 1, "conjunction": 1, "keyword": 1, "identifier": 1,
-            "operator": 1, "literal": 1, "inline_code": 1, "punctuation": 1, "proper_noun": 1
-        }
-        
-        # Collect all valid annotations with deduplication
-        all_annotations = {}  # Key: (sequence_number, start_pos, end_pos, text) -> annotation
+        # Collect all valid annotations preserving overlapping spans and multiple labels
+        # No deduplication - allow multiple spans with different labels for same positions
+        all_annotations = []  # List to preserve all annotations including overlaps
         
         for working_file in sorted(working_files):
             try:
@@ -364,10 +346,7 @@ class SpanAnnotatorPipeline:
                             # Check if the extracted text matches (use exclusive end for extraction)
                             actual_text = raw_text[start_pos:end_pos]
                             if actual_text == expected_text:
-                                # Create deduplication key
-                                dup_key = (data["sequence_number"], start_pos, end_pos, expected_text)
-                                
-                                # Create flattened record with id first (will be set during output)
+                                # Create flattened record - preserve all spans including overlaps
                                 flattened_record = {
                                     "sequence_number": data["sequence_number"],
                                     "raw": data["raw_text"],
@@ -380,22 +359,9 @@ class SpanAnnotatorPipeline:
                                     "timestamp": data["timestamp"]
                                 }
                                 
-                                # Apply deduplication logic
-                                if dup_key in all_annotations:
-                                    # Keep the annotation with higher hierarchy (more specific label)
-                                    existing_label = all_annotations[dup_key]["xbar_label"]
-                                    new_label = span_annotation["xbar_label"]
-                                    
-                                    existing_priority = label_hierarchy.get(existing_label, 0)
-                                    new_priority = label_hierarchy.get(new_label, 0)
-                                    
-                                    if new_priority > existing_priority:
-                                        all_annotations[dup_key] = flattened_record
-                                        logger.debug(f"Updated {existing_label} to {new_label}: '{expected_text[:20]}...'")
-                                    else:
-                                        logger.debug(f"Kept {existing_label} over {new_label}: '{expected_text[:20]}...'")
-                                else:
-                                    all_annotations[dup_key] = flattened_record
+                                # Add all valid spans - no deduplication to preserve overlapping annotations
+                                all_annotations.append(flattened_record)
+                                logger.debug(f"Added {span_annotation['xbar_label']}: '{expected_text[:20]}...' at {start_pos}-{end_pos}")
                             else:
                                 logger.warning(f"Text mismatch seq {data['sequence_number']}: expected '{expected_text}' at {start_pos}-{end_pos}")
                         else:
@@ -404,10 +370,10 @@ class SpanAnnotatorPipeline:
             except Exception as e:
                 logger.warning(f"Consolidation error {working_file.name}: {e}")
         
-        # Write deduplicated annotations to file with unique IDs
+        # Write all annotations to file with unique IDs (preserving overlaps)
         total_annotations = len(all_annotations)
         with open(annotations_file, 'w', encoding='utf-8') as outf:
-            for span_id, annotation in enumerate(all_annotations.values()):
+            for span_id, annotation in enumerate(all_annotations):
                 # Create ordered record with id first
                 ordered_record = {
                     "id": span_id,
