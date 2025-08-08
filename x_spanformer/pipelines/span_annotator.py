@@ -81,6 +81,18 @@ class SpanAnnotatorPipeline:
             "completed_at": None
         }
     
+    def get_sequence_number(self, sequence: PretrainRecord) -> int:
+        """Extract sequence number from PretrainRecord, checking meta field first."""
+        # Check meta field first (same logic as in filtering)
+        if hasattr(sequence, 'meta') and sequence.meta:
+            if hasattr(sequence.meta, 'sequence_number'):
+                return sequence.meta.sequence_number or 0
+            elif isinstance(sequence.meta, dict) and 'sequence_number' in sequence.meta:
+                return sequence.meta['sequence_number'] or 0
+        
+        # Fallback to direct sequence_number field
+        return getattr(sequence, 'sequence_number', 0)
+    
     def parse_range_specification(self, range_spec: str) -> List[int]:
         """Parse range specification into list of sequence numbers."""
         sequence_ids = []
@@ -179,8 +191,8 @@ class SpanAnnotatorPipeline:
         """Save annotation result to working file."""
         working_dir = output_dir / "working"
         
-        # Get sequence number directly from the sequence
-        sequence_number = sequence.sequence_number or 0
+        # Get sequence number using consistent helper method
+        sequence_number = self.get_sequence_number(sequence)
         
         working_file = working_dir / f"sequence-{sequence_number:08d}.json"
         
@@ -214,7 +226,7 @@ class SpanAnnotatorPipeline:
         logger.debug(f"Saved working file for sequence {sequence_number}")
     
     def consolidate_results(self, output_dir: Path):
-        """Consolidate working files into final annotation format."""
+        """Consolidate working files into final annotation format with one span per record."""
         working_dir = output_dir / "working"
         annotations_file = output_dir / "annotations.jsonl"  # Save in same dir as metadata.json
         
@@ -229,22 +241,42 @@ class SpanAnnotatorPipeline:
                         data = json.load(inf)
                     
                     if data.get("status") == "completed" and data.get("span_annotations"):
-                        # Write consolidated annotation record
-                        consolidated_record = {
-                            "sequence_number": data["sequence_number"],
-                            "raw": data["raw_text"],
-                            "domain_type": data["domain_type"],
-                            "span_annotations": data["span_annotations"],
-                            "total_spans": data["total_spans"],
-                            "metadata": {
-                                "annotation_strategy": "three_turn_unified",
-                                "model": self.model_name,
-                                "timestamp": data["timestamp"]
-                            }
-                        }
-                        
-                        outf.write(json.dumps(consolidated_record, ensure_ascii=False) + '\n')
-                        total_annotations += data["total_spans"]
+                        # Write one record per span annotation (flattened)
+                        for span_annotation in data["span_annotations"]:
+                            # Validate span positions before writing
+                            start_pos = span_annotation["start_pos"]
+                            end_pos = span_annotation["end_pos"]
+                            expected_text = span_annotation["text"]
+                            raw_text = data["raw_text"]
+                            
+                            # Check if positions are valid and match expected text
+                            if start_pos >= 0 and end_pos <= len(raw_text) and start_pos < end_pos:
+                                # Check if the extracted text matches (use exclusive end for extraction)
+                                actual_text = raw_text[start_pos:end_pos]
+                                if actual_text == expected_text:
+                                    flattened_record = {
+                                        "sequence_number": data["sequence_number"],
+                                        "raw": data["raw_text"],
+                                        "domain_type": data["domain_type"],
+                                        "start_pos": span_annotation["start_pos"],
+                                        "end_pos": span_annotation["end_pos"],
+                                        "xbar_label": span_annotation["xbar_label"],
+                                        "text": span_annotation["text"],
+                                        "metadata": {
+                                            "annotation_strategy": "three_turn_unified",
+                                            "model": self.model_name,
+                                            "timestamp": data["timestamp"]
+                                        }
+                                    }
+                                    
+                                    outf.write(json.dumps(flattened_record, ensure_ascii=False) + '\n')
+                                    total_annotations += 1
+                                else:
+                                    logger.warning(f"Position validation failed for sequence {data['sequence_number']}: "
+                                                 f"expected '{expected_text}' at {start_pos}-{end_pos}, got '{actual_text}'")
+                            else:
+                                logger.warning(f"Invalid span bounds for sequence {data['sequence_number']}: "
+                                             f"{start_pos}-{end_pos} for text length {len(raw_text)}")
                 
                 except Exception as e:
                     logger.warning(f"Failed to consolidate {working_file}: {e}")
@@ -330,8 +362,8 @@ class SpanAnnotatorPipeline:
         # Filter sequences to process
         sequences_to_process = []
         for seq in sequences:
-            # Get sequence number directly from the sequence
-            seq_id = seq.sequence_number or 0
+            # Get sequence number using consistent helper method
+            seq_id = self.get_sequence_number(seq)
                     
             if seq_id not in existing_results or existing_results[seq_id] != "completed":
                 sequences_to_process.append(seq)
@@ -347,10 +379,11 @@ class SpanAnnotatorPipeline:
         # Process sequences individually (sequential processing)
         successful_count = 0
         failed_count = 0
+        session_start_time = datetime.now()
         
         for i, sequence in enumerate(sequences_to_process):
-            # Get sequence number directly from the sequence
-            seq_id = sequence.sequence_number or 0
+            # Get sequence number using consistent helper method
+            seq_id = self.get_sequence_number(sequence)
             
             logger.info(f"Processing sequence {i+1}/{len(sequences_to_process)}: ID {seq_id}")
             
@@ -365,16 +398,67 @@ class SpanAnnotatorPipeline:
                     
                     span_count = len(annotation_record.span_annotations)
                     logger.info(f"Successfully annotated sequence {seq_id} with {span_count} spans")
+                    
+                    # Calculate and log progress summary
+                    current_time = datetime.now()
+                    elapsed_seconds = (current_time - session_start_time).total_seconds()
+                    completed_count = successful_count + failed_count
+                    remaining_count = len(sequences_to_process) - completed_count
+                    
+                    if completed_count > 0:
+                        avg_time_per_sequence = elapsed_seconds / completed_count
+                        eta_seconds = remaining_count * avg_time_per_sequence
+                        eta_minutes = eta_seconds / 60
+                        
+                        logger.info("=" * 80)
+                        logger.info(f"{completed_count}/{len(sequences_to_process)} sequences completed | "
+                                  f"Avg: {avg_time_per_sequence:.1f}s/seq | "
+                                  f"ETA: {eta_minutes:.1f} min")
+                        logger.info("=" * 80)
                 else:
                     error_msg = result.error_message or "Annotation returned None"
                     self.save_working_file(output_dir, sequence, error_message=error_msg)
                     failed_count += 1
                     logger.warning(f"Failed to annotate sequence {seq_id}: {error_msg}")
                     
+                    # Calculate and log progress summary
+                    current_time = datetime.now()
+                    elapsed_seconds = (current_time - session_start_time).total_seconds()
+                    completed_count = successful_count + failed_count
+                    remaining_count = len(sequences_to_process) - completed_count
+                    
+                    if completed_count > 0:
+                        avg_time_per_sequence = elapsed_seconds / completed_count
+                        eta_seconds = remaining_count * avg_time_per_sequence
+                        eta_minutes = eta_seconds / 60
+                        
+                        logger.info("=" * 80)
+                        logger.info(f"{completed_count}/{len(sequences_to_process)} sequences completed | "
+                                  f"Avg: {avg_time_per_sequence:.1f}s/seq | "
+                                  f"ETA: {eta_minutes:.1f} min")
+                        logger.info("=" * 80)
+                    
             except Exception as e:
                 self.save_working_file(output_dir, sequence, error_message=str(e))
                 failed_count += 1
                 logger.error(f"Failed to annotate sequence {seq_id}: {e}", exc_info=True)
+                
+                # Calculate and log progress summary
+                current_time = datetime.now()
+                elapsed_seconds = (current_time - session_start_time).total_seconds()
+                completed_count = successful_count + failed_count
+                remaining_count = len(sequences_to_process) - completed_count
+                
+                if completed_count > 0:
+                    avg_time_per_sequence = elapsed_seconds / completed_count
+                    eta_seconds = remaining_count * avg_time_per_sequence
+                    eta_minutes = eta_seconds / 60
+                    
+                    logger.info("=" * 80)
+                    logger.info(f"{completed_count}/{len(sequences_to_process)} sequences completed | "
+                              f"Avg: {avg_time_per_sequence:.1f}s/seq | "
+                              f"ETA: {eta_minutes:.1f} min")
+                    logger.info("=" * 80)
         
         # Update statistics
         self.pipeline_stats["processed_sequences"] = len(sequences_to_process)

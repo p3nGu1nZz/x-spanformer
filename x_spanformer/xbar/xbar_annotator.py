@@ -92,8 +92,8 @@ Extract spans and classify them using only the labels above. Focus on accuracy a
             from x_spanformer.agents.ollama_client import chat
             from x_spanformer.agents.dialogue import DialogueManager
             
-            # Build focused prompt for this turn - use shorter text to avoid timeouts
-            text_snippet = text[:100] if len(text) > 100 else text
+            # Build focused prompt for this turn - use larger text window for better context
+            text_snippet = text[:200] if len(text) > 200 else text
             
             # Create turn-specific prompts
             if turn_focus == "word_level":
@@ -111,8 +111,13 @@ Use these labels: noun, verb, adjective, adverb, preposition, determiner, pronou
                 user_prompt = f"""Analyze this text and identify PHRASES (groups of related words):
 "{text_snippet}"
 
-Return a JSON array with this exact format:
-[{{"text":"noun phrase","xbar_label":"noun_phrase"}}]
+Extract ACTUAL phrases from the text above. Return a JSON array with this exact format:
+[{{"text":"each span candidate","xbar_label":"noun_phrase"}}]
+
+Extract real phrases like:
+- "each span candidate" (noun_phrase)
+- "to a contiguous subsequence" (prepositional_phrase) 
+- "will be considered" (verb_phrase)
 
 Use these labels: noun_phrase, verb_phrase, prepositional_phrase, adjective_phrase, adverb_phrase"""
                 
@@ -121,8 +126,14 @@ Use these labels: noun_phrase, verb_phrase, prepositional_phrase, adjective_phra
                 user_prompt = f"""Analyze this text and identify CLAUSES and major syntactic structures:
 "{text_snippet}"
 
-Return a JSON array with this exact format:
-[{{"text":"main clause","xbar_label":"main_clause"}}]
+Extract ACTUAL clauses from the text above. Return a JSON array with this exact format:
+[{{"text":"each span candidate corresponds to a contiguous subsequence","xbar_label":"main_clause"}}]
+
+Look for:
+- Complete clauses with subject and predicate
+- Subordinate clauses introduced by conjunctions
+- Relative clauses
+- Sentence fragments
 
 Use these labels: main_clause, subordinate_clause, relative_clause, sentence, fragment"""
             
@@ -137,6 +148,9 @@ Use these labels: main_clause, subordinate_clause, relative_clause, sentence, fr
                 temperature=0.1,
                 timeout=90.0
             )
+            
+            # Add assistant response to dialogue for logging
+            dm.add("assistant", response)
             
             # Parse spans from response
             spans = self._parse_spans_from_response(response, text)
@@ -174,7 +188,11 @@ Use these labels: main_clause, subordinate_clause, relative_clause, sentence, fr
                     continue
                 
                 # Use regex to find all occurrences of this text in the original text
-                # Escape special regex characters in the span text
+                # Escape special regex characters in the span text and clean whitespace
+                span_text = span_text.strip()  # Remove leading/trailing whitespace
+                if not span_text:  # Skip empty spans
+                    continue
+                    
                 escaped_text = re.escape(span_text)
                 
                 # Find all matches (case-sensitive first, then case-insensitive)
@@ -184,10 +202,16 @@ Use these labels: main_clause, subordinate_clause, relative_clause, sentence, fr
                     matches = list(re.finditer(escaped_text, text, re.IGNORECASE))
                 
                 if matches:
-                    # Use the first match for now
-                    match = matches[0]
-                    start_pos = match.start()
-                    end_pos = match.end() - 1  # Convert to inclusive end
+                    # Choose the best match based on context and position
+                    best_match = self._select_best_match(matches, span_text, text)
+                    start_pos = best_match.start()
+                    end_pos = best_match.end() - 1  # Convert to inclusive end for internal storage
+                    
+                    # Validate that extracted text matches exactly
+                    actual_text = text[start_pos:end_pos + 1]
+                    if actual_text != span_text:
+                        logger.debug(f"Text mismatch: expected '{span_text}', got '{actual_text}' at {start_pos}-{end_pos}")
+                        continue
                     
                     # Create SpanLabel object
                     span_label = SpanLabel(
@@ -447,87 +471,59 @@ Use these labels: main_clause, subordinate_clause, relative_clause, sentence, fr
                 
         return boundaries
     
-    def _normalize_xbar_class(self, xbar_class: str) -> str:
+    def _select_best_match(self, matches: List[re.Match], span_text: str, full_text: str) -> re.Match:
         """
-        Normalize X-bar class label to standard format.
+        Select the best match from multiple occurrences of the same text.
+        
+        Prioritizes matches that:
+        1. Are at word boundaries
+        2. Are not nested within other matches
+        3. Appear earlier in the text (for deterministic results)
         
         Args:
-            xbar_class: Raw X-bar class from LLM
+            matches: List of regex matches for the same text
+            span_text: The text being matched
+            full_text: Full source text
             
         Returns:
-            Normalized X-bar class
+            The best match object
         """
-        if not xbar_class:
-            return "unknown"
+        if len(matches) == 1:
+            return matches[0]
+        
+        # Score each match
+        scored_matches = []
+        for match in matches:
+            score = 0
+            start_pos = match.start()
+            end_pos = match.end()
             
-        # Remove extra whitespace and convert to standard case
-        normalized = xbar_class.strip()
+            # Prefer word boundaries (not in middle of words)
+            if start_pos == 0 or not full_text[start_pos - 1].isalnum():
+                score += 2
+            if end_pos >= len(full_text) or not full_text[end_pos].isalnum():
+                score += 2
+                
+            # Prefer earlier positions for consistency
+            score -= start_pos / len(full_text)
+            
+            scored_matches.append((score, match))
         
-        # Preserve detailed classifier names first, only fall back to abbreviations if needed
-        detailed_map = {
-            "determiner": "determiner",
-            "noun": "noun", 
-            "verb": "verb",
-            "adjective": "adjective",
-            "adverb": "adverb",
-            "preposition": "preposition",
-            "pronoun": "pronoun",
-            "conjunction": "conjunction",
-            "punctuation": "punctuation",
-            "noun_phrase": "noun_phrase",
-            "verb_phrase": "verb_phrase",
-            "adjective_phrase": "adjective_phrase",
-            "adverb_phrase": "adverb_phrase", 
-            "prepositional_phrase": "prepositional_phrase",
-            "main_clause": "main_clause",
-            "subordinate_clause": "subordinate_clause",
-            "relative_clause": "relative_clause",
-            "simple_sentence": "simple_sentence",
-            "compound_sentence": "compound_sentence",
-            "complex_sentence": "complex_sentence",
-            "head": "head",
-            "specifier": "specifier",
-            "modifier": "modifier", 
-            "complement": "complement",
-            "adjunct": "adjunct",
-        }
+        # Return the highest scored match
+        scored_matches.sort(key=lambda x: x[0], reverse=True)
+        return scored_matches[0][1]
+    
+    def _normalize_xbar_class(self, xbar_class: str) -> str:
+        """
+        Normalize XBar class label using the mapping from XBarLabelMap.
         
-        # Try exact match first (case insensitive)
-        for key, value in detailed_map.items():
-            if normalized.lower() == key.lower():
-                return value
-        
-        # Legacy abbreviation fallbacks (only if no detailed match)
-        abbreviation_map = {
-            "noun phrase": "noun_phrase",
-            "verb phrase": "verb_phrase", 
-            "adjective phrase": "adjective_phrase",
-            "prepositional phrase": "prepositional_phrase",
-            "determiner phrase": "determiner_phrase",
-            "complementizer phrase": "complementizer_phrase",  
-            "np": "noun_phrase",
-            "vp": "verb_phrase",
-            "ap": "adjective_phrase",
-            "pp": "prepositional_phrase",
-            "dp": "determiner_phrase",
-            "cp": "complementizer_phrase",
-            "n": "noun",
-            "v": "verb",
-            "a": "adjective",
-            "adv": "adverb",
-            "d": "determiner",
-            "p": "preposition",
-            "pro": "pronoun",
-            "conj": "conjunction",
-        }
-        
-        # Try partial matches for abbreviations
-        for key, value in abbreviation_map.items():
-            if normalized.lower() == key.lower():
-                return value
-        
-        # Return original if no mapping found
-        return normalized
+        Args:
+            xbar_class: Input label (can be abbreviation or full name)
+            
+        Returns:
+            Normalized full label name
+        """
+        return XBarLabelMap.normalize_xbar_class(xbar_class)
     
     async def annotate_sequence(self, pretrain_record: PretrainRecord) -> Optional[AnnotationRecord]:
         """
@@ -661,17 +657,24 @@ Use these labels: main_clause, subordinate_clause, relative_clause, sentence, fr
         for span in spans:
             try:
                 start_pos, end_pos = span.span
+                span_text = span.text or ""
                 
-                # Create SpanAnnotation
+                # Validate span boundaries one more time
+                actual_text = text[start_pos:end_pos + 1]
+                if actual_text != span_text:
+                    logger.debug(f"Skipping span with mismatched text: expected '{span_text}', got '{actual_text}' at {start_pos}-{end_pos}")
+                    continue
+                
+                # Create SpanAnnotation with correct end position (keep inclusive internally)
                 annotation = SpanAnnotation(
                     start_pos=start_pos,
-                    end_pos=end_pos + 1,  # Convert to exclusive end
+                    end_pos=end_pos + 1,  # Convert to exclusive end only for final output
                     xbar_label=span.xbar_label,
                     linguistic_features={
-                        'extracted_text': span.text,
+                        'extracted_text': span_text,
                         'character_span': {
                             'start_char': start_pos,
-                            'end_char': end_pos
+                            'end_char': end_pos  # Keep original inclusive end in metadata
                         }
                     }
                 )
