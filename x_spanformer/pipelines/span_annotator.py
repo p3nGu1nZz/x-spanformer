@@ -193,7 +193,7 @@ class SpanAnnotatorPipeline:
         (output_dir / "working").mkdir(exist_ok=True)
     
     def load_existing_results(self, output_dir: Path) -> Dict[int, str]:
-        """Load existing annotation results for resume capability."""
+        """Load existing annotation results for resume capability with span count validation."""
         existing_results = {}
         working_dir = output_dir / "working"
         
@@ -203,20 +203,44 @@ class SpanAnnotatorPipeline:
         working_files = list(working_dir.glob("*.json"))
         logger.info(f"Checking {len(working_files)} existing results")
         
+        total_existing_spans = 0
+        completed_sequences = 0
+        failed_sequences = 0
+        
         for working_file in working_files:
             try:
                 with open(working_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
                 sequence_number = data.get("sequence_number", 0)
-                status = "completed" if data.get("span_annotations") else "failed"
+                span_annotations = data.get("span_annotations", [])
+                
+                if span_annotations:
+                    status = "completed"
+                    span_count = len(span_annotations)
+                    total_existing_spans += span_count
+                    completed_sequences += 1
+                    logger.debug(f"Sequence {sequence_number}: {span_count} spans")
+                else:
+                    status = "failed"
+                    failed_sequences += 1
+                    logger.debug(f"Sequence {sequence_number}: failed/no spans")
+                
                 existing_results[sequence_number] = status
                 
             except Exception as e:
                 logger.warning(f"Load error {working_file.name}: {e}")
+                failed_sequences += 1
         
         if existing_results:
-            logger.info(f"Found {len(existing_results)} completed sequences")
+            logger.info(f"Found {len(existing_results)} existing sequences:")
+            logger.info(f"  - {completed_sequences} completed sequences")
+            logger.info(f"  - {failed_sequences} failed sequences") 
+            logger.info(f"  - {total_existing_spans} total spans in working files")
+            
+            # Update pipeline stats with existing span count
+            self.pipeline_stats["total_spans"] = total_existing_spans
+            
         return existing_results
     
     def save_working_file(
@@ -338,7 +362,7 @@ class SpanAnnotatorPipeline:
                                     
                                     if new_priority > existing_priority:
                                         all_annotations[dup_key] = flattened_record
-                                        logger.debug(f"Updated {existing_label}->{new_label}: '{expected_text[:20]}...'")
+                                        logger.debug(f"Updated {existing_label} to {new_label}: '{expected_text[:20]}...'")
                                     else:
                                         logger.debug(f"Kept {existing_label} over {new_label}: '{expected_text[:20]}...'")
                                 else:
@@ -370,7 +394,7 @@ class SpanAnnotatorPipeline:
                 }
                 outf.write(json.dumps(ordered_record, ensure_ascii=False) + '\n')
         
-        logger.info(f"Consolidated {total_annotations} spans -> {annotations_file.name}")
+        logger.info(f"Consolidated {total_annotations} spans into {annotations_file.name}")
     
     def update_metadata(self, output_dir: Path):
         """Update global metadata file."""
@@ -493,6 +517,8 @@ class SpanAnnotatorPipeline:
                     successful_count += 1
                     
                     span_count = len(annotation_record.span_annotations)
+                    # Update total span count in pipeline stats
+                    self.pipeline_stats["total_spans"] += span_count
                     logger.info(f"SUCCESS: Sequence {seq_id}: {span_count} spans annotated")
                     
                     # Calculate and log progress summary
@@ -513,6 +539,7 @@ class SpanAnnotatorPipeline:
                         logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_formatted}")
+                        logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']}")
                         logger.info("=" * 80)
                 else:
                     error_msg = result.error_message or "Annotation failed"
@@ -543,6 +570,7 @@ class SpanAnnotatorPipeline:
                         logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
                                   f"Avg: {sequences_per_minute:.1f} seq/min | "
                                   f"ETA: {eta_formatted}")
+                        logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']}")
                         logger.info("=" * 80)
                     
             except Exception as e:
@@ -573,6 +601,7 @@ class SpanAnnotatorPipeline:
                     logger.info(f"{total_completed_overall}/{total_sequences} sequences completed | "
                               f"Avg: {sequences_per_minute:.1f} seq/min | "
                               f"ETA: {eta_formatted}")
+                    logger.info(f"Total spans annotated: {self.pipeline_stats['total_spans']}")
                     logger.info("=" * 80)
         
         # Update statistics
