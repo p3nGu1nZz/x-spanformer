@@ -220,16 +220,21 @@ class SpanAnnotatorPipeline:
                     span_count = len(span_annotations)
                     total_existing_spans += span_count
                     completed_sequences += 1
-                    logger.debug(f"Sequence {sequence_number}: {span_count} spans")
+                    existing_results[sequence_number] = status
                 else:
-                    status = "failed"
+                    # Remove working file if no spans - force retry
+                    logger.info(f"Removing empty working file for sequence {sequence_number}: {working_file.name}")
+                    working_file.unlink()
                     failed_sequences += 1
-                    logger.debug(f"Sequence {sequence_number}: failed/no spans")
-                
-                existing_results[sequence_number] = status
                 
             except Exception as e:
                 logger.warning(f"Load error {working_file.name}: {e}")
+                # Remove corrupted working file - force retry
+                logger.info(f"Removing corrupted working file: {working_file.name}")
+                try:
+                    working_file.unlink()
+                except:
+                    pass
                 failed_sequences += 1
         
         if existing_results:
