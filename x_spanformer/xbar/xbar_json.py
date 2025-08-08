@@ -74,6 +74,15 @@ class XBarJsonParser:
             (r',\s*xbar_label\s*:', r', "xbar_label":', 'fix_unquoted_property_general'),
             (r':\s*"\(\s*",\s*xbar_label\s*:\s*"([^"]*)"', r': "(", "xbar_label": "\1"', 'fix_specific_char_358_pattern'),
             
+            # PARENTHESES-SPECIFIC FIXES - August 2025 production issue
+            # Fix the exact pattern that failed in sequence 10: {"text":"(",xbar_label":"operator"}
+            (r'\{"text":"(\(|\))"\s*,\s*xbar_label\s*:\s*"([^"]*)"', r'{"text":"\1","xbar_label":"\2"}', 'fix_parentheses_missing_quotes'),
+            (r'\{"text":\s*"(\(|\))"\s*,\s*xbar_label\s*:\s*"([^"]*)"', r'{"text":"\1","xbar_label":"\2"}', 'fix_parentheses_unquoted_property'),
+            # Handle parentheses in any context with missing property quotes
+            (r'(\{"text":\s*"[^"]*")\s*,\s*xbar_label\s*:\s*"([^"]*)"', r'\1,"xbar_label":"\2"', 'fix_any_unquoted_xbar_label_property'),
+            # Fix malformed parentheses patterns with missing quote after text value
+            (r'\{"text":"(\(|\))"?,\s*xbar_label\s*:\s*"([^"]*)"', r'{"text":"\1","xbar_label":"\2"}', 'fix_parentheses_malformed_quote_pattern'),
+            
             # Empty text removal patterns
             (r',?\s*\{"text"\s*:\s*""\s*,\s*"xbar_label"\s*:\s*"[^"]*"\s*\}\s*,?', r'', 'remove_empty_text_entries'),
             
