@@ -240,7 +240,7 @@ class TestSpanParsing:
             assert annotation["text"] in ["The", "fox"]
     
     def test_parse_json_response_missing_quotes_on_keys(self, annotator):
-        """Test parsing JSON with missing quotes on keys - completely malformed."""
+        """Test parsing JSON with missing quotes on keys - can be auto-fixed."""
         response = '''```json
 [
     {text: "The", xbar_label: "determiner"},
@@ -248,9 +248,13 @@ class TestSpanParsing:
 ]
 ```'''
 
-        # This is completely malformed - no valid JSON objects can be extracted
+        # Enhanced parser fixes missing quotes on property names
         annotations = annotator.json_parser.parse_json_response(response)
-        assert len(annotations) == 0  # Completely malformed JSON is skipped
+        assert len(annotations) == 2  # Parser can fix missing quotes and extract both objects
+        assert annotations[0]["text"] == "The"
+        assert annotations[0]["xbar_label"] == "determiner"
+        assert annotations[1]["text"] == "fox"
+        assert annotations[1]["xbar_label"] == "noun"
     
     def test_parse_json_response_missing_commas(self, annotator):
         """Test parsing JSON with missing commas - may extract valid individual objects."""
@@ -295,7 +299,7 @@ plus "text":"fox" with "xbar_label":"noun"'''
         assert annotations == []
     
     def test_parse_json_response_duplicate_handling(self, annotator):
-        """Test handling of duplicate annotations."""
+        """Test that parser doesn't handle duplicates - deduplication happens at sequence level."""
         response = '''```json
 [
     {"text": "The", "xbar_label": "determiner"},
@@ -305,13 +309,12 @@ plus "text":"fox" with "xbar_label":"noun"'''
 ```'''
         
         annotations = annotator.json_parser.parse_json_response(response)
-        assert len(annotations) == 2  # Duplicates should be removed
+        assert len(annotations) == 3  # Parser doesn't deduplicate - done at sequence level
         
-        # Verify we have unique text entries
+        # Verify all entries are preserved at parse level
         texts = [ann["text"] for ann in annotations]
-        assert "The" in texts
-        assert "fox" in texts
-        assert texts.count("The") == 1  # Should only appear once
+        assert texts.count("The") == 2  # Both duplicates preserved
+        assert texts.count("fox") == 1
     
     def test_parse_json_missing_colon_errors(self, annotator):
         """Test parsing JSON with missing colon delimiter errors - should skip malformed sequences."""
@@ -360,14 +363,16 @@ plus "text":"fox" with "xbar_label":"noun"'''
         assert isinstance(annotations, list)  # May be empty if pattern doesn't match
     
     def test_parse_json_property_name_errors(self, annotator):
-        """Test parsing JSON with property name errors - should skip malformed sequences."""
-        # Scenario 1: Property name without quotes - should skip malformed JSON
+        """Test parsing JSON with property name errors - enhanced parser can fix some cases."""
+        # Scenario 1: Property name without quotes - can be auto-fixed
         response1 = '''```json
 [{text: "word", xbar_label: "noun"}]
 ```'''
-        # Should skip malformed JSON and return empty list
+        # Enhanced parser fixes missing quotes on property names
         annotations = annotator.json_parser.parse_json_response(response1)
-        assert len(annotations) == 0  # Malformed JSON is skipped
+        assert len(annotations) == 1  # Parser can fix missing quotes
+        assert annotations[0]["text"] == "word"
+        assert annotations[0]["xbar_label"] == "noun"
         
         # Scenario 2: Extra data after valid JSON - may not match pattern
         response2 = '''```json
