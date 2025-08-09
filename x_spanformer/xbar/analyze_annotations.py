@@ -17,8 +17,14 @@ logger = logging.getLogger(__name__)
 class AnnotationAnalyzer:
     """Clean annotation analyzer with logging integration."""
     
-    def __init__(self, annotations_file: str):
-        self.annotations_file = annotations_file
+    def __init__(self, spans_file: str = "data/annotations/spans.jsonl"):
+        """
+        Initialize analyzer with spans file.
+        
+        Args:
+            spans_file: Path to spans.jsonl (position-based format)
+        """
+        self.annotations_file = spans_file
         self.annotations = []
     
     @staticmethod
@@ -516,8 +522,8 @@ class AnnotationAnalyzer:
         }
 
 
-def analyze_annotations(annotations_file: str = "data/annotations/annotations.jsonl") -> Dict[str, Any]:
+def analyze_annotations(spans_file: str = "data/annotations/spans.jsonl") -> Dict[str, Any]:
     """Run annotation analysis and return summary."""
-    analyzer = AnnotationAnalyzer(annotations_file)
+    analyzer = AnnotationAnalyzer(spans_file)
     return analyzer.analyze_and_report()
 

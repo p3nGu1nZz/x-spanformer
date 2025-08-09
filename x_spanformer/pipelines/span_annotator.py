@@ -33,6 +33,7 @@ from x_spanformer.schema.annotation_record import AnnotationRecord, SpanAnnotati
 from x_spanformer.agents.session.span_annotator_session import SpanAnnotatorSession
 from x_spanformer.agents.ollama_client import check_ollama_connection
 from x_spanformer.xbar.analyze_annotations import AnnotationAnalyzer
+from x_spanformer.xbar.xbar_dict import get_global_dict
 
 # Constants
 DEFAULT_MODEL = "llama3.2:3b"
@@ -324,16 +325,22 @@ class SpanAnnotatorPipeline:
         logger.debug(f"Saved working file: sequence {sequence_number}")
     
     def consolidate_results(self, output_dir: Path):
-        """Consolidate working files into final annotation format with one span per record."""
+        """Consolidate working files into final annotation formats with dictionary building."""
         working_dir = output_dir / "working"
-        annotations_file = output_dir / "annotations.jsonl"  # Save in same dir as metadata.json
+        spans_file = output_dir / "spans.jsonl"  # Renamed from annotations.jsonl
         
         working_files = list(working_dir.glob("*.json"))
         logger.info(f"Consolidating {len(working_files)} working files")
         
+        # Get global dictionary instance
+        xbar_dict = get_global_dict()
+        
         # Collect all valid annotations preserving overlapping spans and multiple labels
         # No deduplication - allow multiple spans with different labels for same positions
         all_annotations = []  # List to preserve all annotations including overlaps
+        
+        # Dictionary building structures
+        domain_spans = {}  # domain -> level -> list of spans
         
         for working_file in sorted(working_files):
             try:
@@ -341,12 +348,23 @@ class SpanAnnotatorPipeline:
                     data = json.load(inf)
                 
                 if data.get("status") == "completed" and data.get("span_annotations"):
+                    domain_type = data.get("domain_type", "unknown")
+                    
+                    # Initialize domain spans tracking
+                    if domain_type not in domain_spans:
+                        domain_spans[domain_type] = {
+                            "word_level": [],
+                            "phrase_level": [],
+                            "clause_level": []
+                        }
+                    
                     for span_annotation in data["span_annotations"]:
                         # Validate span positions before processing
                         start_pos = span_annotation["start_pos"]
                         end_pos = span_annotation["end_pos"]
                         expected_text = span_annotation["text"]
                         raw_text = data["raw_text"]
+                        xbar_label = span_annotation["xbar_label"]
                         
                         # Check if positions are valid and match expected text
                         if start_pos >= 0 and end_pos <= len(raw_text) and start_pos < end_pos:
@@ -357,10 +375,10 @@ class SpanAnnotatorPipeline:
                                 flattened_record = {
                                     "sequence_number": data["sequence_number"],
                                     "raw": data["raw_text"],
-                                    "domain_type": data["domain_type"],
+                                    "domain_type": domain_type,
                                     "start_pos": start_pos,
                                     "end_pos": end_pos,
-                                    "xbar_label": span_annotation["xbar_label"],
+                                    "xbar_label": xbar_label,
                                     "text": expected_text,
                                     "model": self.model_name,
                                     "timestamp": data["timestamp"]
@@ -368,6 +386,12 @@ class SpanAnnotatorPipeline:
                                 
                                 # Add all valid spans - no deduplication to preserve overlapping annotations
                                 all_annotations.append(flattened_record)
+                                
+                                # Add to dictionary building - determine hierarchical level
+                                hierarchical_level = self._determine_hierarchical_level(xbar_label)
+                                if hierarchical_level:
+                                    domain_spans[domain_type][hierarchical_level].append(expected_text)
+                                    
                             else:
                                 logger.warning(f"Text mismatch seq {data['sequence_number']}: expected '{expected_text}' at {start_pos}-{end_pos}")
                         else:
@@ -376,9 +400,26 @@ class SpanAnnotatorPipeline:
             except Exception as e:
                 logger.warning(f"Consolidation error {working_file.name}: {e}")
         
-        # Write all annotations to file with unique IDs (preserving overlaps)
+        # Build dictionaries from collected spans
+        logger.info("Building X-bar dictionaries from processed spans...")
+        total_new_spans = 0
+        for domain_type, levels in domain_spans.items():
+            new_counts = xbar_dict.add_sequence_spans(
+                domain_type=domain_type,
+                word_spans=levels["word_level"],
+                phrase_spans=levels["phrase_level"],
+                clause_spans=levels["clause_level"]
+            )
+            domain_new = sum(new_counts.values())
+            total_new_spans += domain_new
+            if domain_new > 0:
+                logger.info(f"Added {domain_new} new unique spans for domain '{domain_type}' "
+                           f"(word: {new_counts['word_level']}, phrase: {new_counts['phrase_level']}, "
+                           f"clause: {new_counts['clause_level']})")
+        
+        # Write all annotations to spans.jsonl file with unique IDs (preserving overlaps)
         total_annotations = len(all_annotations)
-        with open(annotations_file, 'w', encoding='utf-8') as outf:
+        with open(spans_file, 'w', encoding='utf-8') as outf:
             for span_id, annotation in enumerate(all_annotations):
                 # Create ordered record with id first
                 ordered_record = {
@@ -395,7 +436,59 @@ class SpanAnnotatorPipeline:
                 }
                 outf.write(json.dumps(ordered_record, ensure_ascii=False) + '\n')
         
-        logger.info(f"Consolidated {total_annotations} spans into {annotations_file.name}")
+        logger.info(f"Consolidated {total_annotations} spans into {spans_file.name}")
+        logger.info(f"Dictionary building: {total_new_spans} new unique spans added across all domains")
+        
+        # Save dictionaries and generate annotations.jsonl
+        xbar_dict.save_dictionaries(output_dir)
+        xbar_dict.generate_annotations_jsonl(output_dir)
+        
+        # Log dictionary statistics
+        xbar_dict.log_statistics()
+    
+    def _determine_hierarchical_level(self, xbar_label: str) -> Optional[str]:
+        """
+        Determine hierarchical level from X-bar label.
+        
+        Args:
+            xbar_label: The X-bar label
+            
+        Returns:
+            Hierarchical level or None if unknown
+        """
+        # Word-level labels
+        word_labels = {
+            'noun', 'verb', 'adjective', 'adverb', 'determiner', 'preposition', 
+            'pronoun', 'conjunction', 'punctuation', 'keyword', 'identifier', 
+            'operator', 'literal', 'delimiter', 'type_name', 'comment'
+        }
+        
+        # Phrase-level labels
+        phrase_labels = {
+            'noun_phrase', 'verb_phrase', 'adjective_phrase', 'adverb_phrase', 
+            'prepositional_phrase', 'expression', 'function_call', 'assignment', 
+            'parameter_list', 'argument_list', 'inline_code', 'code_block'
+        }
+        
+        # Clause-level labels
+        clause_labels = {
+            'main_clause', 'subordinate_clause', 'relative_clause', 'if_statement', 
+            'loop_statement', 'function_definition', 'class_definition', 
+            'import_statement', 'return_statement', 'documentation_comment'
+        }
+        
+        # Normalize label for checking
+        normalized_label = xbar_label.lower().strip()
+        
+        if normalized_label in word_labels:
+            return "word_level"
+        elif normalized_label in phrase_labels:
+            return "phrase_level"
+        elif normalized_label in clause_labels:
+            return "clause_level"
+        else:
+            logger.debug(f"Unknown hierarchical level for label: {xbar_label}")
+            return None
     
     def update_metadata(self, output_dir: Path):
         """Update global metadata file."""
@@ -461,6 +554,17 @@ class SpanAnnotatorPipeline:
         
         # Ensure output structure
         self.ensure_output_structure(output_dir)
+        
+        # Initialize or load global dictionary
+        xbar_dict = get_global_dict()
+        logger.info("Initializing X-bar dictionary system...")
+        
+        # Try to load existing dictionaries if they exist
+        try:
+            xbar_dict.load_dictionaries(output_dir)
+            logger.info("Loaded existing X-bar dictionaries")
+        except Exception as e:
+            logger.debug(f"No existing dictionaries to load: {e}")
         
         # Load sequences
         sequences = self.load_sequences(corpus_file, range_spec)
@@ -662,12 +766,12 @@ class SpanAnnotatorPipeline:
         self.consolidate_results(output_dir)
         self.update_metadata(output_dir)
         
-        # Run annotation analysis if annotations were created
-        annotations_file = output_dir / "annotations.jsonl"
-        if annotations_file.exists():
+        # Run annotation analysis if spans were created
+        spans_file = output_dir / "spans.jsonl"
+        if spans_file.exists():
             try:
                 logger.info("Running annotation analysis...")
-                analyzer = AnnotationAnalyzer(str(annotations_file))
+                analyzer = AnnotationAnalyzer(str(spans_file))
                 analyzer.analyze_and_report(str(output_dir))
             except Exception as e:
                 logger.warning(f"Annotation analysis failed: {e}")
