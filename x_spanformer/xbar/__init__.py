@@ -13,6 +13,7 @@ from .xbar_map import XBarLabelMap, DomainType
 from .xbar_annotator import XBarAnnotator, ModelConfig
 from .analyze_annotations import AnnotationAnalyzer, analyze_annotations
 from .xbar_dict import XBarDictionary, get_global_dict
+from .validate_annotations import AnnotationValidator, ValidationReport, ValidationIssue, validate_annotations
 
 __all__ = [
     "XBarLabelMap", 
@@ -22,5 +23,9 @@ __all__ = [
     "AnnotationAnalyzer",
     "analyze_annotations",
     "XBarDictionary",
-    "get_global_dict"
+    "get_global_dict",
+    "AnnotationValidator",
+    "ValidationReport", 
+    "ValidationIssue",
+    "validate_annotations"
 ]

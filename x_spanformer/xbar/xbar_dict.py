@@ -262,6 +262,306 @@ class XBarDictionary:
             logger.info(f"    total: {domain_stats['total']}")
         logger.info("=" * 40)
     
+    def generate_annotations_from_dictionary(self, corpus_file: Path, output_dir: Path) -> int:
+        """
+        Generate annotations.jsonl by systematically matching dictionary spans against corpus sequences.
+        
+        This approach provides better coverage and overlapping spans compared to direct LLM output.
+        
+        Args:
+            corpus_file: Path to corpus.jsonl file
+            output_dir: Output directory for annotations.jsonl
+            
+        Returns:
+            Number of annotations generated
+        """
+        import json
+        import re
+        from pathlib import Path
+        from datetime import datetime
+        
+        logger.info("Generating annotations from dictionary spans...")
+        
+        # Load corpus sequences
+        sequences = []
+        with open(corpus_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                sequences.append(json.loads(line))
+        
+        logger.info(f"Loaded {len(sequences)} sequences from corpus")
+        
+        # Collect all annotations
+        all_annotations = []
+        annotation_id = 0
+        total_sequences = len(sequences)
+        
+        # Prepare output file for incremental writing
+        annotations_file = output_dir / "annotations.jsonl"
+        
+        # Clear the file first
+        with open(annotations_file, 'w', encoding='utf-8') as f:
+            pass  # Just clear the file
+        
+        for seq_idx, seq in enumerate(sequences, 1):
+            sequence_number = seq['meta']['sequence_number']
+            raw_text = seq['raw']
+            domain_type = seq.get('type', 'mixed')
+            text_length = len(raw_text)
+            
+            sequence_annotations = []
+            
+            # Process each domain and hierarchical level
+            for check_domain in ['natural', 'code', 'mixed']:
+                # Focus on the sequence's domain and mixed (which covers cross-domain spans)
+                if check_domain != domain_type and check_domain != 'mixed':
+                    continue
+                    
+                for level in ['word_level', 'phrase_level', 'clause_level']:
+                    spans_to_find = self.get_spans_filtered(check_domain, level)
+                    level_matches = 0
+                    
+                    for span_text in spans_to_find:
+                        # Apply basic filtering similar to xbar_json
+                        span_text = str(span_text).strip()
+                        if not span_text:
+                            continue
+                            
+                        # Skip obvious artifacts (repeated characters)
+                        if len(set(span_text)) == 1 and len(span_text) > 3:
+                            continue
+                            
+                        # Skip repetitive punctuation patterns
+                        if len(span_text) > 1 and all(c in '.,;:!?-_()[]{}' for c in span_text):
+                            continue
+                            
+                        # Skip very short non-meaningful text
+                        if len(span_text) == 1 and span_text.isspace():
+                            continue
+                        
+                        # Skip placeholder/garbage values
+                        if span_text in ['text', 'label', 'xbar_label', 'unknown']:
+                            continue
+                            
+                        # Additional filtering for word-level spans to reduce noise
+                        if level == 'word_level':
+                            # Skip multi-word spans at word level
+                            if len(span_text.split()) > 1:
+                                continue
+                            # Skip very common single characters and short words
+                            if len(span_text) <= 2 and span_text.lower() in ['a', 'an', 'the', 'of', 'in', 'on', 'at', 'to', 'for', 'by', 'as', 'is', 'it', 'or', 'and', 'but']:
+                                continue
+                            # Skip pure numeric strings longer than 1 character (years, page numbers, etc.)
+                            if span_text.isdigit() and len(span_text) > 1:
+                                continue
+                            # Skip single punctuation marks
+                            if len(span_text) == 1 and span_text in '.,;:!?()[]{}"\'-_/\\':
+                                continue
+                        
+                        span_len = len(span_text)
+                        if span_len == 0:
+                            continue
+                            
+                        # Use regex for boundary-aware matching
+                        pattern = re.escape(span_text)
+                        
+                        # Find all matches with proper word boundaries
+                        for match in re.finditer(pattern, raw_text, re.IGNORECASE):
+                            start_pos = match.start()
+                            end_pos = match.end()
+                            
+                            # Check if this is a valid linguistic boundary
+                            if not self._is_valid_span_boundary(raw_text, start_pos, end_pos, span_text):
+                                continue
+                            
+                            # Create annotation record
+                            annotation = {
+                                "id": annotation_id,
+                                "sequence_number": sequence_number,
+                                "raw": raw_text,
+                                "domain_type": domain_type,
+                                "start_pos": start_pos,
+                                "end_pos": end_pos,
+                                "xbar_label": self._get_xbar_label_for_level(level),
+                                "text": span_text,
+                                "source": "dictionary_match",
+                                "matched_domain": check_domain,
+                                "hierarchical_level": level,
+                                "timestamp": datetime.now().isoformat()
+                            }
+                            
+                            sequence_annotations.append(annotation)
+                            annotation_id += 1
+                            level_matches += 1
+                    
+                    # Log each level processing
+                    logger.debug(f"Seq {seq_idx}/{total_sequences} | {check_domain}:{level} | found {level_matches} matches")
+            
+            # Remove exact duplicates per sequence according to X-Spanformer paper
+            # Overlapping spans are allowed, but exact duplicates (same start AND end) are not
+            deduplicated_annotations = self._remove_exact_duplicates(sequence_annotations)
+            
+            # Log deduplication results
+            removed_count = len(sequence_annotations) - len(deduplicated_annotations)
+            if removed_count > 0:
+                logger.debug(f"Seq {seq_idx}: Removed {removed_count} exact duplicates")
+            
+            # Add deduplicated sequence annotations to overall list
+            all_annotations.extend(deduplicated_annotations)
+            
+            # Write annotations incrementally for debugging
+            with open(annotations_file, 'a', encoding='utf-8') as f:
+                for annotation in deduplicated_annotations:
+                    f.write(json.dumps(annotation, ensure_ascii=False) + '\n')
+            
+            # Enhanced logging with telemetry
+            logger.debug(f"Processing sequence {sequence_number} ({seq_idx}/{total_sequences}) | domain: {domain_type} | text_len: {text_length} | seq_annotations: {len(deduplicated_annotations)} | total_so_far: {len(all_annotations)}")
+        
+        # Final summary logging
+        logger.info(f"Generated {len(all_annotations)} annotations from dictionary matching")
+        logger.info(f"Saved annotations to {annotations_file}")
+        
+        return len(all_annotations)
+
+    def _is_valid_span_boundary(self, text: str, start_pos: int, end_pos: int, span_text: str) -> bool:
+        """
+        Check if a span has valid linguistic boundaries according to X-Spanformer paper.
+        
+        Valid spans should:
+        1. Start at word boundaries (beginning of text, after whitespace, or after punctuation)
+        2. End at word boundaries (end of text, before whitespace, or before punctuation)
+        3. Not be substrings within larger words
+        
+        Args:
+            text: The full text containing the span
+            start_pos: Start position of the span
+            end_pos: End position of the span  
+            span_text: The actual span text
+            
+        Returns:
+            True if this is a valid linguistic span boundary
+        """
+        # Check start boundary
+        if start_pos > 0:
+            char_before = text[start_pos - 1]
+            # Valid start: after whitespace, punctuation, or word boundary characters
+            if not (char_before.isspace() or 
+                   char_before in '.,;:!?()[]{}"\'-_/\\|`~@#$%^&*+=<>' or
+                   char_before.isdigit() != span_text[0].isdigit()):  # Number/letter boundary
+                return False
+        
+        # Check end boundary  
+        if end_pos < len(text):
+            char_after = text[end_pos]
+            # Valid end: before whitespace, punctuation, or word boundary characters
+            if not (char_after.isspace() or 
+                   char_after in '.,;:!?()[]{}"\'-_/\\|`~@#$%^&*+=<>' or
+                   char_after.isdigit() != span_text[-1].isdigit()):  # Number/letter boundary
+                return False
+        
+        # Additional validation for single character spans
+        if len(span_text) == 1:
+            # Single letters should only be valid if they're standalone words or meaningful punctuation
+            if span_text.isalpha():
+                # Single letters like "a", "I" are valid if they have word boundaries
+                return (start_pos == 0 or text[start_pos - 1].isspace()) and \
+                       (end_pos == len(text) or text[end_pos].isspace())
+            elif span_text in '.,;:!?()[]{}"\'-':
+                # Punctuation is valid if it's at proper boundaries
+                return True
+                
+        # Multi-character spans are valid if they pass boundary checks above
+        return True
+    
+    def _remove_exact_duplicates(self, annotations: List[Dict]) -> List[Dict]:
+        """
+        Remove exact duplicates and invalid multi-word spans from sequence annotations 
+        according to X-Spanformer paper.
+        
+        From Section 3.3: The factorized pointer network assumes independence between 
+        start and end boundary decisions. Exact duplicates (same start AND end positions)
+        violate this assumption and should be removed to maintain theoretical consistency.
+        
+        When multiple hierarchical levels conflict at the same position, we choose the most
+        linguistically appropriate level based on the span content and structure.
+        
+        Args:
+            annotations: List of annotation dictionaries for a single sequence
+            
+        Returns:
+            Deduplicated and filtered list of annotations
+        """
+        if not annotations:
+            return annotations
+        
+        # First filter out invalid multi-word spans at word level
+        filtered = []
+        for annotation in annotations:
+            text = annotation.get('text', '')
+            level = annotation.get('hierarchical_level', '')
+            
+            # Word-level spans should contain only single words (no spaces)
+            if level == 'word_level' and len(text.split()) > 1:
+                continue  # Skip multi-word spans at word level
+                
+            filtered.append(annotation)
+        
+        # Group annotations by exact position to resolve conflicts
+        position_groups = defaultdict(list)
+        for annotation in filtered:
+            position_key = (annotation['start_pos'], annotation['end_pos'])
+            position_groups[position_key].append(annotation)
+        
+        # For each position, choose the most appropriate annotation
+        deduplicated = []
+        for position_key, conflicting_annotations in position_groups.items():
+            if len(conflicting_annotations) == 1:
+                # No conflict, keep the single annotation
+                deduplicated.append(conflicting_annotations[0])
+            else:
+                # Multiple annotations at same position - choose the most appropriate
+                best_annotation = self._choose_best_hierarchical_level(conflicting_annotations)
+                deduplicated.append(best_annotation)
+        
+        # Sort by position for consistent ordering
+        deduplicated.sort(key=lambda x: (x['start_pos'], x['end_pos']))
+        
+        return deduplicated
+    
+    def _choose_best_hierarchical_level(self, conflicting_annotations: List[Dict]) -> Dict:
+        """
+        Choose the most appropriate hierarchical level when multiple levels conflict 
+        at the same position using greedy selection.
+        
+        Greedy selection priority: word_level > phrase_level > clause_level
+        Always prefer the lowest/most specific hierarchical level available.
+        
+        Args:
+            conflicting_annotations: List of annotations at the same position
+            
+        Returns:
+            The annotation with the lowest hierarchical level (highest priority)
+        """
+        if len(conflicting_annotations) == 1:
+            return conflicting_annotations[0]
+        
+        # Define priority order (lower number = higher priority)
+        level_priority = {'word_level': 1, 'phrase_level': 2, 'clause_level': 3}
+        
+        # Find annotation with highest priority (lowest number)
+        best_annotation = min(conflicting_annotations, 
+                             key=lambda ann: level_priority.get(ann['hierarchical_level'], 999))
+        
+        return best_annotation
+    
+    def _get_xbar_label_for_level(self, hierarchical_level: str) -> str:
+        """Map hierarchical level to appropriate X-bar label."""
+        level_mapping = {
+            'word_level': 'noun',  # Default word-level label
+            'phrase_level': 'noun_phrase',  # Default phrase-level label  
+            'clause_level': 'clause'  # Default clause-level label
+        }
+        return level_mapping.get(hierarchical_level, 'unknown')
+    
     def save_dictionaries(self, output_dir: Path) -> int:
         """
         Save dictionaries to a single dictionary.jsonl file.
