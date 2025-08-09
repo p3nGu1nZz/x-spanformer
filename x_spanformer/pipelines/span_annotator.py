@@ -326,22 +326,18 @@ class SpanAnnotatorPipeline:
         logger.debug(f"Saved working file: sequence {sequence_number}")
     
     def consolidate_results(self, output_dir: Path):
-        """Consolidate working files into final annotation formats with dictionary building."""
+        """Build X-bar dictionaries from working files (dictionary-only approach)."""
         working_dir = output_dir / "working"
-        spans_file = output_dir / "spans.jsonl"  # Renamed from annotations.jsonl
         
         working_files = list(working_dir.glob("*.json"))
-        logger.info(f"Consolidating {len(working_files)} working files")
+        logger.info(f"Building X-bar dictionaries from {len(working_files)} working files")
         
         # Get global dictionary instance
         xbar_dict = get_global_dict()
         
-        # Collect all valid annotations preserving overlapping spans and multiple labels
-        # No deduplication - allow multiple spans with different labels for same positions
-        all_annotations = []  # List to preserve all annotations including overlaps
-        
         # Dictionary building structures
         domain_spans = {}  # domain -> level -> list of spans
+        total_spans_processed = 0
         
         for working_file in sorted(working_files):
             try:
@@ -372,21 +368,7 @@ class SpanAnnotatorPipeline:
                             # Check if the extracted text matches (use exclusive end for extraction)
                             actual_text = raw_text[start_pos:end_pos]
                             if actual_text == expected_text:
-                                # Create flattened record - preserve all spans including overlaps
-                                flattened_record = {
-                                    "sequence_number": data["sequence_number"],
-                                    "raw": data["raw_text"],
-                                    "domain_type": domain_type,
-                                    "start_pos": start_pos,
-                                    "end_pos": end_pos,
-                                    "xbar_label": xbar_label,
-                                    "text": expected_text,
-                                    "model": self.model_name,
-                                    "timestamp": data["timestamp"]
-                                }
-                                
-                                # Add all valid spans - no deduplication to preserve overlapping annotations
-                                all_annotations.append(flattened_record)
+                                total_spans_processed += 1
                                 
                                 # Add to dictionary building - determine hierarchical level
                                 hierarchical_level = self._determine_hierarchical_level(xbar_label)
@@ -418,31 +400,11 @@ class SpanAnnotatorPipeline:
                            f"(word: {new_counts['word_level']}, phrase: {new_counts['phrase_level']}, "
                            f"clause: {new_counts['clause_level']})")
         
-        # Write all annotations to spans.jsonl file with unique IDs (preserving overlaps)
-        total_annotations = len(all_annotations)
-        with open(spans_file, 'w', encoding='utf-8') as outf:
-            for span_id, annotation in enumerate(all_annotations):
-                # Create ordered record with id first
-                ordered_record = {
-                    "id": span_id,
-                    "sequence_number": annotation["sequence_number"],
-                    "raw": annotation["raw"],
-                    "domain_type": annotation["domain_type"],
-                    "start_pos": annotation["start_pos"],
-                    "end_pos": annotation["end_pos"],
-                    "xbar_label": annotation["xbar_label"],
-                    "text": annotation["text"],
-                    "model": annotation["model"],
-                    "timestamp": annotation["timestamp"]
-                }
-                outf.write(json.dumps(ordered_record, ensure_ascii=False) + '\n')
-        
-        logger.info(f"Consolidated {total_annotations} spans into {spans_file.name}")
+        logger.info(f"Processed {total_spans_processed} spans for dictionary building")
         logger.info(f"Dictionary building: {total_new_spans} new unique spans added across all domains")
         
-        # Save dictionaries and generate annotations.jsonl
+        # Save dictionaries
         xbar_dict.save_dictionaries(output_dir)
-        xbar_dict.generate_annotations_jsonl(output_dir)
         
         # Log dictionary statistics
         xbar_dict.log_statistics()
@@ -498,7 +460,7 @@ class SpanAnnotatorPipeline:
                 return None
     
     def update_metadata(self, output_dir: Path):
-        """Update global metadata file."""
+        """Update global metadata file with dictionary statistics."""
         metadata_file = output_dir / "metadata.json"
         
         # Calculate actual stats from working files
@@ -522,17 +484,32 @@ class SpanAnnotatorPipeline:
             except:
                 failed_count += 1
         
+        # Get dictionary statistics
+        from x_spanformer.xbar.xbar_dict import get_global_dict
+        xbar_dict = get_global_dict()
+        
+        # Get comprehensive dictionary stats
+        all_stats = xbar_dict.get_all_stats()
+        
+        dict_stats = {
+            "total_unique_spans": all_stats.get("total_unique_spans", 0),
+            "domain_distribution": all_stats.get("domain_totals", {}),
+            "level_distribution": all_stats.get("level_totals", {}),
+            "detailed_breakdown": all_stats.get("detailed_breakdown", {})
+        }
+        
         metadata = {
-            "pipeline": "unified_span_annotator",
+            "pipeline": "dictionary_builder",
             "model": self.model_name,
             "last_updated": datetime.now().isoformat(),
             "processing_stats": {
                 "total_sequences": self.pipeline_stats["total_sequences"],
                 "successful_annotations": successful_count,
                 "failed_annotations": failed_count,
-                "total_spans": total_spans,
+                "total_raw_spans": total_spans,
                 "success_rate": successful_count / max(1, successful_count + failed_count)
             },
+            "dictionary_stats": dict_stats,
             "session_stats": self.session.get_statistics()
         }
         

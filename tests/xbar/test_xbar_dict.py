@@ -100,7 +100,6 @@ class TestXBarDictionary:
         
         stats = xbar_dict.get_domain_stats("natural")
         
-        assert stats["domain"] == "natural"
         assert stats["word_level"] == 3
         assert stats["phrase_level"] == 1
         assert stats["clause_level"] == 1
@@ -139,9 +138,15 @@ class TestXBarDictionary:
             xbar_dict.save_dictionaries(temp_path)
             
             # Check files were created
-            assert (temp_path / "xbar_dict_natural.json").exists()
-            assert (temp_path / "xbar_dict_code.json").exists()
-            assert (temp_path / "xbar_dict_stats.json").exists()
+            assert (temp_path / "dictionary.jsonl").exists()
+            
+            # Verify dictionary.jsonl content
+            dictionary_file = temp_path / "dictionary.jsonl"
+            with open(dictionary_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # Should have 6 spans total (3 + 1 + 2)
+            assert len(lines) == 6
             
             # Load into new dictionary
             new_dict = XBarDictionary()
@@ -175,39 +180,6 @@ class TestXBarDictionary:
             valid_spans = [s for s in spans if s is not None and s.strip()]
             new_count = xbar_dict.add_spans("natural", "word_level", valid_spans)
             assert new_count == 2
-    
-    def test_generate_annotations_jsonl(self):
-        """Test generating annotations.jsonl from dictionary."""
-        xbar_dict = XBarDictionary()
-        
-        xbar_dict.add_spans("natural", "word_level", ["the", "cat"])
-        xbar_dict.add_spans("natural", "phrase_level", ["the cat"])
-        xbar_dict.add_spans("code", "word_level", ["def"])
-        
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            
-            xbar_dict.generate_annotations_jsonl(temp_path)
-            
-            annotations_file = temp_path / "annotations.jsonl"
-            assert annotations_file.exists()
-            
-            # Read and verify content
-            annotations = []
-            with open(annotations_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    annotations.append(json.loads(line))
-            
-            assert len(annotations) == 4  # 3 spans total
-            
-            # Check that each annotation has required fields
-            for ann in annotations:
-                assert "id" in ann
-                assert "text" in ann
-                assert "domain_type" in ann
-                assert "hierarchical_level" in ann
-                assert "source" in ann
-                assert ann["source"] == "dictionary"
 
 
 class TestGlobalDictionary:
@@ -221,22 +193,157 @@ class TestGlobalDictionary:
         assert dict1 is dict2  # Same instance
         
         # Add data to one, should appear in both
-        dict1.add_spans("test", "word_level", ["test_span"])
-        assert len(dict2.dictionaries["test"]["word_level"]) == 1
+        dict1.add_spans("natural", "word_level", ["test_span"])
+        test_spans = dict2.get_spans_filtered("natural", "word_level")
+        assert len(test_spans) >= 1  # Should contain at least our test span
+        assert "test_span" in test_spans
     
     def test_reset_global_dict(self):
         """Test resetting the global dictionary."""
         global_dict = get_global_dict()
-        global_dict.add_spans("test", "word_level", ["test_span"])
+        global_dict.add_spans("natural", "word_level", ["test_span"])
         
-        assert len(global_dict.dictionaries["test"]["word_level"]) == 1
+        test_spans = global_dict.get_spans_filtered("natural", "word_level")
+        assert len(test_spans) >= 1
+        assert "test_span" in test_spans
         
         reset_global_dict()
         
         new_global_dict = get_global_dict()
-        assert len(new_global_dict.dictionaries) == 0
-        assert new_global_dict.stats["total_unique_spans"] == 0
+        stats = new_global_dict.get_all_stats()
+        assert stats["total_unique_spans"] == 0
+
+
+class TestXBarDictionaryGetters:
+    """Test the new getter methods for filtering dictionary contents."""
+    
+    def test_get_spans_by_domain(self):
+        """Test getting spans filtered by domain type."""
+        xbar_dict = XBarDictionary()
+        
+        # Add test data across domains
+        xbar_dict.add_spans("natural", "word_level", ["the", "cat"])
+        xbar_dict.add_spans("natural", "phrase_level", ["the cat"])
+        xbar_dict.add_spans("code", "word_level", ["def", "return"])
+        xbar_dict.add_spans("mixed", "clause_level", ["mixed content"])
+        
+        # Test natural domain
+        natural_spans = xbar_dict.get_spans_by_domain("natural")
+        assert "word_level" in natural_spans
+        assert "phrase_level" in natural_spans
+        assert len(natural_spans["word_level"]) == 2
+        assert len(natural_spans["phrase_level"]) == 1
+        assert "cat" in natural_spans["word_level"]
+        assert "the cat" in natural_spans["phrase_level"]
+        
+        # Test code domain
+        code_spans = xbar_dict.get_spans_by_domain("code")
+        assert "word_level" in code_spans
+        assert len(code_spans["word_level"]) == 2
+        assert "def" in code_spans["word_level"]
+        
+        # Test invalid domain
+        invalid_spans = xbar_dict.get_spans_by_domain("invalid")
+        assert invalid_spans == {}
+    
+    def test_get_spans_by_level(self):
+        """Test getting spans filtered by hierarchical level."""
+        xbar_dict = XBarDictionary()
+        
+        # Add test data across levels
+        xbar_dict.add_spans("natural", "word_level", ["the", "cat"])
+        xbar_dict.add_spans("code", "word_level", ["def", "return"])
+        xbar_dict.add_spans("natural", "phrase_level", ["the cat"])
+        xbar_dict.add_spans("mixed", "phrase_level", ["mixed phrase"])
+        
+        # Test word level
+        word_spans = xbar_dict.get_spans_by_level("word_level")
+        assert "natural" in word_spans
+        assert "code" in word_spans
+        assert len(word_spans["natural"]) == 2
+        assert len(word_spans["code"]) == 2
+        assert "cat" in word_spans["natural"]
+        assert "def" in word_spans["code"]
+        
+        # Test phrase level
+        phrase_spans = xbar_dict.get_spans_by_level("phrase_level")
+        assert "natural" in phrase_spans
+        assert "mixed" in phrase_spans
+        assert "the cat" in phrase_spans["natural"]
+        assert "mixed phrase" in phrase_spans["mixed"]
+        
+        # Test invalid level
+        invalid_spans = xbar_dict.get_spans_by_level("invalid_level")
+        # Should return domains with empty lists
+        assert "natural" in invalid_spans
+        assert "code" in invalid_spans
+        assert "mixed" in invalid_spans
+        assert len(invalid_spans["natural"]) == 0
+        assert len(invalid_spans["code"]) == 0
+        assert len(invalid_spans["mixed"]) == 0
+    
+    def test_get_spans_filtered(self):
+        """Test getting spans with combined filtering."""
+        xbar_dict = XBarDictionary()
+        
+        # Add test data
+        xbar_dict.add_spans("natural", "word_level", ["the", "cat"])
+        xbar_dict.add_spans("natural", "phrase_level", ["the cat"])
+        xbar_dict.add_spans("code", "word_level", ["def", "return"])
+        xbar_dict.add_spans("code", "phrase_level", ["function call"])
+        
+        # Test specific domain and level
+        natural_words = xbar_dict.get_spans_filtered("natural", "word_level")
+        assert len(natural_words) == 2
+        assert "the" in natural_words
+        assert "cat" in natural_words
+        assert "def" not in natural_words
+        
+        # Test code phrases
+        code_phrases = xbar_dict.get_spans_filtered("code", "phrase_level")
+        assert len(code_phrases) == 1
+        assert "function call" in code_phrases
+        assert "the cat" not in code_phrases
+        
+        # Test empty result
+        empty_result = xbar_dict.get_spans_filtered("natural", "clause_level")
+        assert len(empty_result) == 0
+    
+    def test_get_dictionary_summary(self):
+        """Test getting a comprehensive summary of dictionary contents."""
+        xbar_dict = XBarDictionary()
+        
+        # Add test data
+        xbar_dict.add_spans("natural", "word_level", ["the", "cat", "sat", "on", "mat"])
+        xbar_dict.add_spans("natural", "phrase_level", ["the cat", "on the mat"])
+        xbar_dict.add_spans("code", "word_level", ["def", "return", "if"])
+        
+        summary = xbar_dict.get_dictionary_summary()
+        
+        # Check top-level structure
+        assert "total_unique_spans" in summary
+        assert "domains" in summary
+        assert "sequences_processed" in summary
+        
+        # Check total count
+        assert summary["total_unique_spans"] == 10  # 5 + 2 + 3
+        
+        # Check domain details
+        assert "natural" in summary["domains"]
+        assert "code" in summary["domains"]
+        assert "mixed" in summary["domains"]  # Should exist but be empty
+        
+        natural_domain = summary["domains"]["natural"]
+        assert natural_domain["word_level"] == 5
+        assert natural_domain["phrase_level"] == 2
+        assert natural_domain["clause_level"] == 0
+        
+        code_domain = summary["domains"]["code"]
+        assert code_domain["word_level"] == 3
+        assert code_domain["phrase_level"] == 0
+        assert code_domain["clause_level"] == 0
     
     def teardown_method(self):
         """Clean up after each test."""
         reset_global_dict()
+

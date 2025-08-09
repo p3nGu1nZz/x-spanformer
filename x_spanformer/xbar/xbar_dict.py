@@ -1,201 +1,239 @@
 #!/usr/bin/env python3
 """
-X-bar Dictionary Manager
+X-Bar Dictionary Management System
 
-Maintains domain-specific dictionaries for word-level, phrase-level, and clause-level spans.
-Supports multiple domain types with extensible design for future domains like audio or vision.
-
-The dictionary structure is:
-{
-    domain_type: {
-        "word_level": set(),
-        "phrase_level": set(), 
-        "clause_level": set()
-    }
-}
-
-This allows us to track unique spans across all sequences for each domain and hierarchical level,
-enabling vocabulary building and span normalization across the entire corpus.
+Provides unified dictionary management for domain-specific vocabularies
+without position information, focusing on unique spans by hierarchical level.
 """
 
-import logging
 import json
+import logging
 from pathlib import Path
-from typing import Dict, Set, List, Any, Optional
+from typing import Dict, List, Set, Optional, Any
+from datetime import datetime
 from collections import defaultdict
 
-from .xbar_map import DomainType
-
-# Configure logger
 logger = logging.getLogger(__name__)
 
 
 class XBarDictionary:
     """
-    Manages domain-specific dictionaries for hierarchical X-bar spans.
+    Manages domain-specific dictionaries for unique spans.
     
-    Maintains separate vocabularies for each domain type and hierarchical level,
-    supporting extensible domain types for future multimodal expansion.
+    Organizes spans by domain (natural, code, mixed) and hierarchical level
+    (word_level, phrase_level, clause_level) without position information.
     """
     
     def __init__(self):
-        """Initialize empty dictionaries for all domain types and levels."""
-        # Structure: domain_type -> level -> set of unique spans
-        self.dictionaries: Dict[str, Dict[str, Set[str]]] = defaultdict(
-            lambda: {
+        """Initialize empty dictionaries."""
+        self._reset_dictionaries()
+        
+    def _reset_dictionaries(self):
+        """Reset all dictionaries to empty state."""
+        self.dictionaries = {
+            "natural": {
+                "word_level": set(),
+                "phrase_level": set(),
+                "clause_level": set()
+            },
+            "code": {
+                "word_level": set(),
+                "phrase_level": set(),
+                "clause_level": set()
+            },
+            "mixed": {
                 "word_level": set(),
                 "phrase_level": set(),
                 "clause_level": set()
             }
-        )
+        }
         
-        # Track statistics
         self.stats = {
+            "sequences_processed": 0,
             "total_unique_spans": 0,
-            "spans_by_domain": defaultdict(int),
-            "spans_by_level": defaultdict(int),
-            "sequences_processed": 0
+            "last_updated": datetime.now().isoformat()
         }
     
-    def add_spans(self, domain_type: str, level: str, spans: List[str]) -> int:
+    def add_spans(self, domain_type: str, hierarchical_level: str, spans: List[str]) -> int:
         """
-        Add spans to the appropriate domain and level dictionary.
+        Add spans to the specified domain and level.
         
         Args:
-            domain_type: Domain type (e.g., 'natural', 'code', 'mixed')
-            level: Hierarchical level ('word_level', 'phrase_level', 'clause_level')
-            spans: List of span text to add
+            domain_type: Domain type ('natural', 'code', 'mixed')
+            hierarchical_level: Hierarchical level ('word_level', 'phrase_level', 'clause_level')
+            spans: List of span texts to add
             
         Returns:
             Number of new unique spans added
         """
-        if level not in ["word_level", "phrase_level", "clause_level"]:
-            logger.warning(f"Unknown level '{level}', skipping spans")
+        if domain_type not in self.dictionaries:
+            logger.warning(f"Unknown domain type: {domain_type}")
+            return 0
+            
+        if hierarchical_level not in self.dictionaries[domain_type]:
+            logger.warning(f"Unknown hierarchical level: {hierarchical_level}")
             return 0
         
-        # Ensure domain exists
-        if domain_type not in self.dictionaries:
-            self.dictionaries[domain_type] = {
-                "word_level": set(),
-                "phrase_level": set(),
-                "clause_level": set()
-            }
+        level_dict = self.dictionaries[domain_type][hierarchical_level]
+        initial_count = len(level_dict)
         
-        # Get current size before adding
-        before_size = len(self.dictionaries[domain_type][level])
-        
-        # Add spans (set automatically handles uniqueness)
+        # Add spans (set automatically handles duplicates)
         for span in spans:
             if span and span.strip():  # Only add non-empty spans
-                self.dictionaries[domain_type][level].add(span.strip())
+                level_dict.add(span.strip())
         
-        # Calculate new spans added
-        after_size = len(self.dictionaries[domain_type][level])
-        new_spans = after_size - before_size
-        
-        # Update statistics
-        self.stats["spans_by_domain"][domain_type] += new_spans
-        self.stats["spans_by_level"][level] += new_spans
-        self.stats["total_unique_spans"] += new_spans
-        
-        if new_spans > 0:
-            logger.debug(f"Added {new_spans} new spans to {domain_type}.{level} "
-                        f"(total: {after_size})")
-        
-        return new_spans
+        new_count = len(level_dict) - initial_count
+        if new_count > 0:
+            logger.debug(f"Added {new_count} new spans to {domain_type}.{hierarchical_level} (total: {len(level_dict)})")
+            
+        return new_count
     
     def add_sequence_spans(self, domain_type: str, word_spans: List[str], 
                           phrase_spans: List[str], clause_spans: List[str]) -> Dict[str, int]:
         """
-        Add all spans from a sequence to the appropriate dictionaries.
+        Add spans from a complete sequence across all hierarchical levels.
         
         Args:
-            domain_type: Domain type for the sequence
-            word_spans: List of word-level spans
-            phrase_spans: List of phrase-level spans  
-            clause_spans: List of clause-level spans
+            domain_type: Domain type ('natural', 'code', 'mixed')
+            word_spans: Word-level spans
+            phrase_spans: Phrase-level spans  
+            clause_spans: Clause-level spans
             
         Returns:
             Dictionary with counts of new spans added per level
         """
-        results = {}
-        
-        results["word_level"] = self.add_spans(domain_type, "word_level", word_spans)
-        results["phrase_level"] = self.add_spans(domain_type, "phrase_level", phrase_spans)
-        results["clause_level"] = self.add_spans(domain_type, "clause_level", clause_spans)
-        
-        self.stats["sequences_processed"] += 1
-        
-        total_new = sum(results.values())
-        if total_new > 0:
-            logger.debug(f"Sequence added {total_new} new spans across all levels "
-                        f"for domain {domain_type}")
-        
-        return results
-    
-    def get_domain_stats(self, domain_type: str) -> Dict[str, Any]:
-        """
-        Get statistics for a specific domain.
-        
-        Args:
-            domain_type: Domain to get stats for
-            
-        Returns:
-            Dictionary with domain statistics
-        """
-        if domain_type not in self.dictionaries:
-            return {
-                "domain": domain_type,
-                "word_level": 0,
-                "phrase_level": 0,
-                "clause_level": 0,
-                "total": 0
-            }
-        
-        domain_dict = self.dictionaries[domain_type]
-        word_count = len(domain_dict["word_level"])
-        phrase_count = len(domain_dict["phrase_level"])
-        clause_count = len(domain_dict["clause_level"])
-        
-        return {
-            "domain": domain_type,
-            "word_level": word_count,
-            "phrase_level": phrase_count,
-            "clause_level": clause_count,
-            "total": word_count + phrase_count + clause_count
+        counts = {
+            "word_level": self.add_spans(domain_type, "word_level", word_spans),
+            "phrase_level": self.add_spans(domain_type, "phrase_level", phrase_spans),
+            "clause_level": self.add_spans(domain_type, "clause_level", clause_spans)
         }
+        
+        total_new = sum(counts.values())
+        if total_new > 0:
+            self.stats["sequences_processed"] += 1
+            logger.debug(f"Sequence added {total_new} new spans across all levels for domain {domain_type}")
+            
+        return counts
+    
+    def get_domain_stats(self, domain_type: str) -> Dict[str, int]:
+        """Get statistics for a specific domain."""
+        if domain_type not in self.dictionaries:
+            return {}
+            
+        domain_dict = self.dictionaries[domain_type]
+        stats = {}
+        total = 0
+        
+        for level, spans in domain_dict.items():
+            count = len(spans)
+            stats[level] = count
+            total += count
+            
+        stats["total"] = total
+        return stats
     
     def get_all_stats(self) -> Dict[str, Any]:
-        """
-        Get comprehensive statistics for all domains.
+        """Get comprehensive statistics for all dictionaries."""
+        domain_totals = {}
+        level_totals = defaultdict(int)
+        total_unique_spans = 0
+        domains = {}
         
-        Returns:
-            Dictionary with complete statistics
-        """
-        all_stats = {
+        for domain, levels in self.dictionaries.items():
+            domain_stats = self.get_domain_stats(domain)
+            domains[domain] = domain_stats
+            domain_totals[domain] = domain_stats["total"]
+            total_unique_spans += domain_stats["total"]
+            
+            # Aggregate by level across domains
+            for level, count in domain_stats.items():
+                if level != "total":
+                    level_totals[level] += count
+        
+        # Update stats
+        self.stats["total_unique_spans"] = total_unique_spans
+        self.stats["last_updated"] = datetime.now().isoformat()
+        
+        return {
             "sequences_processed": self.stats["sequences_processed"],
-            "total_unique_spans": self.stats["total_unique_spans"],
-            "domains": {},
-            "level_totals": {
-                "word_level": 0,
-                "phrase_level": 0,
-                "clause_level": 0
-            },
-            "domain_totals": {}
+            "total_unique_spans": total_unique_spans,
+            "last_updated": self.stats["last_updated"],
+            "domain_totals": domain_totals,
+            "level_totals": dict(level_totals),
+            "domains": domains
+        }
+    
+    def get_spans_by_domain(self, domain_type: str) -> Dict[str, List[str]]:
+        """
+        Get all spans for a specific domain organized by hierarchical level.
+        
+        Args:
+            domain_type: Domain type ('natural', 'code', 'mixed')
+            
+        Returns:
+            Dictionary with hierarchical levels as keys and sorted span lists as values
+        """
+        if domain_type not in self.dictionaries:
+            return {}
+        
+        result = {}
+        for level, spans in self.dictionaries[domain_type].items():
+            result[level] = sorted(list(spans))
+        
+        return result
+    
+    def get_spans_by_level(self, hierarchical_level: str) -> Dict[str, List[str]]:
+        """
+        Get all spans for a specific hierarchical level across all domains.
+        
+        Args:
+            hierarchical_level: Level ('word_level', 'phrase_level', 'clause_level')
+            
+        Returns:
+            Dictionary with domains as keys and sorted span lists as values
+        """
+        result = {}
+        for domain, levels in self.dictionaries.items():
+            if hierarchical_level in levels:
+                result[domain] = sorted(list(levels[hierarchical_level]))
+            else:
+                result[domain] = []
+        
+        return result
+    
+    def get_spans_filtered(self, domain_type: str, hierarchical_level: str) -> List[str]:
+        """
+        Get spans filtered by both domain and hierarchical level.
+        
+        Args:
+            domain_type: Domain type ('natural', 'code', 'mixed')
+            hierarchical_level: Level ('word_level', 'phrase_level', 'clause_level')
+            
+        Returns:
+            Sorted list of spans
+        """
+        if (domain_type not in self.dictionaries or 
+            hierarchical_level not in self.dictionaries[domain_type]):
+            return []
+        
+        return sorted(list(self.dictionaries[domain_type][hierarchical_level]))
+    
+    def get_dictionary_summary(self) -> Dict[str, Any]:
+        """Get a summary of all dictionary contents."""
+        stats = self.get_all_stats()
+        summary = {
+            "total_unique_spans": stats["total_unique_spans"],
+            "sequences_processed": stats["sequences_processed"],
+            "domains": {}
         }
         
-        # Get stats for each domain
-        for domain_type in self.dictionaries.keys():
-            domain_stats = self.get_domain_stats(domain_type)
-            all_stats["domains"][domain_type] = domain_stats
-            all_stats["domain_totals"][domain_type] = domain_stats["total"]
-            
-            # Add to level totals
-            all_stats["level_totals"]["word_level"] += domain_stats["word_level"]
-            all_stats["level_totals"]["phrase_level"] += domain_stats["phrase_level"]
-            all_stats["level_totals"]["clause_level"] += domain_stats["clause_level"]
+        for domain in ["natural", "code", "mixed"]:
+            domain_spans = self.get_spans_by_domain(domain)
+            summary["domains"][domain] = {
+                level: len(spans) for level, spans in domain_spans.items()
+            }
         
-        return all_stats
+        return summary
     
     def log_statistics(self):
         """Log comprehensive statistics about the dictionaries."""
@@ -218,161 +256,103 @@ class XBarDictionary:
         logger.info("Detailed breakdown:")
         for domain, domain_stats in stats["domains"].items():
             logger.info(f"  {domain}:")
-            logger.info(f"    word_level: {domain_stats['word_level']}")
-            logger.info(f"    phrase_level: {domain_stats['phrase_level']}")
-            logger.info(f"    clause_level: {domain_stats['clause_level']}")
+            for level, count in domain_stats.items():
+                if level != "total":
+                    logger.info(f"    {level}: {count}")
             logger.info(f"    total: {domain_stats['total']}")
-        
         logger.info("=" * 40)
     
-    def save_dictionaries(self, output_dir: Path):
+    def save_dictionaries(self, output_dir: Path) -> int:
         """
-        Save dictionaries to JSON files for persistence and analysis.
+        Save dictionaries to a single dictionary.jsonl file.
         
         Args:
-            output_dir: Directory to save dictionary files
+            output_dir: Directory to save the dictionary file
+            
+        Returns:
+            Total number of spans saved
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Save each domain dictionary separately
-        for domain_type, domain_dict in self.dictionaries.items():
-            domain_file = output_dir / f"xbar_dict_{domain_type}.json"
-            
-            # Convert sets to sorted lists for JSON serialization
-            serializable_dict = {
-                level: sorted(list(spans)) 
-                for level, spans in domain_dict.items()
-            }
-            
-            with open(domain_file, 'w', encoding='utf-8') as f:
-                json.dump(serializable_dict, f, indent=2, ensure_ascii=False)
-            
-            logger.info(f"Saved {domain_type} dictionary: {domain_file}")
+        dictionary_file = output_dir / "dictionary.jsonl"
+        total_spans = 0
         
-        # Save comprehensive statistics
-        stats_file = output_dir / "xbar_dict_stats.json"
-        with open(stats_file, 'w', encoding='utf-8') as f:
-            json.dump(self.get_all_stats(), f, indent=2, ensure_ascii=False)
+        with open(dictionary_file, 'w', encoding='utf-8') as f:
+            span_id = 0
+            for domain_type, levels in self.dictionaries.items():
+                for hierarchical_level, spans in levels.items():
+                    for span_text in sorted(spans):
+                        record = {
+                            "id": span_id,
+                            "text": span_text,
+                            "domain_type": domain_type,
+                            "hierarchical_level": hierarchical_level,
+                            "source": "dictionary",
+                            "created_at": datetime.now().isoformat()
+                        }
+                        f.write(json.dumps(record, ensure_ascii=False) + '\n')
+                        span_id += 1
+                        total_spans += 1
         
-        logger.info(f"Saved dictionary statistics: {stats_file}")
+        logger.info(f"Saved {total_spans} unique spans to dictionary.jsonl")
+        return total_spans
     
     def load_dictionaries(self, output_dir: Path):
         """
-        Load dictionaries from JSON files.
+        Load dictionaries from dictionary.jsonl file.
         
         Args:
-            output_dir: Directory containing dictionary files
+            output_dir: Directory containing dictionary.jsonl file
         """
         output_dir = Path(output_dir)
+        dictionary_file = output_dir / "dictionary.jsonl"
         
-        if not output_dir.exists():
-            logger.warning(f"Dictionary directory does not exist: {output_dir}")
+        if not dictionary_file.exists():
+            logger.debug(f"No existing dictionary file found at {dictionary_file}")
             return
         
-        # Load domain dictionaries
-        dict_files = list(output_dir.glob("xbar_dict_*.json"))
-        loaded_domains = 0
+        # Reset dictionaries
+        self._reset_dictionaries()
+        loaded_spans = 0
         
-        for dict_file in dict_files:
-            # Extract domain name from filename
-            domain_name = dict_file.stem.replace("xbar_dict_", "")
-            
-            try:
-                with open(dict_file, 'r', encoding='utf-8') as f:
-                    domain_data = json.load(f)
-                
-                # Convert lists back to sets
-                self.dictionaries[domain_name] = {
-                    level: set(spans) 
-                    for level, spans in domain_data.items()
-                }
-                
-                loaded_domains += 1
-                logger.debug(f"Loaded {domain_name} dictionary from {dict_file}")
-                
-            except Exception as e:
-                logger.error(f"Failed to load dictionary {dict_file}: {e}")
-        
-        if loaded_domains > 0:
-            logger.info(f"Loaded {loaded_domains} domain dictionaries")
-            # Recalculate statistics
-            self._recalculate_stats()
-        else:
-            logger.warning("No dictionary files found to load")
-    
-    def _recalculate_stats(self):
-        """Recalculate statistics after loading dictionaries."""
-        self.stats = {
-            "total_unique_spans": 0,
-            "spans_by_domain": defaultdict(int),
-            "spans_by_level": defaultdict(int),
-            "sequences_processed": 0  # This will need to be set externally
-        }
-        
-        for domain_type, domain_dict in self.dictionaries.items():
-            domain_total = 0
-            for level, spans in domain_dict.items():
-                span_count = len(spans)
-                domain_total += span_count
-                self.stats["spans_by_level"][level] += span_count
-            
-            self.stats["spans_by_domain"][domain_type] = domain_total
-            self.stats["total_unique_spans"] += domain_total
-    
-    def generate_annotations_jsonl(self, output_dir: Path, sequence_metadata: Optional[Dict] = None):
-        """
-        Generate annotations.jsonl file from dictionaries with unique IDs.
-        
-        Args:
-            output_dir: Output directory for annotations file
-            sequence_metadata: Optional metadata about sequences processed
-        """
-        output_dir = Path(output_dir)
-        annotations_file = output_dir / "annotations.jsonl"
-        
-        annotation_id = 1
-        total_annotations = 0
-        
-        with open(annotations_file, 'w', encoding='utf-8') as f:
-            for domain_type, domain_dict in self.dictionaries.items():
-                for level, spans in domain_dict.items():
-                    for span_text in sorted(spans):  # Sort for consistent output
-                        annotation = {
-                            "id": annotation_id,
-                            "text": span_text,
-                            "xbar_label": self._get_default_label_for_level(level),
-                            "domain_type": domain_type,
-                            "hierarchical_level": level,
-                            "source": "dictionary"
-                        }
+        try:
+            with open(dictionary_file, 'r', encoding='utf-8') as f:
+                for line_num, line in enumerate(f, 1):
+                    try:
+                        record = json.loads(line.strip())
                         
-                        f.write(json.dumps(annotation, ensure_ascii=False) + '\n')
-                        annotation_id += 1
-                        total_annotations += 1
-        
-        logger.info(f"Generated {total_annotations} dictionary-based annotations: {annotations_file}")
-    
-    def _get_default_label_for_level(self, level: str) -> str:
-        """Get a default label for dictionary entries based on hierarchical level."""
-        level_defaults = {
-            "word_level": "word",
-            "phrase_level": "phrase", 
-            "clause_level": "clause"
-        }
-        return level_defaults.get(level, "unknown")
+                        domain_type = record.get("domain_type")
+                        hierarchical_level = record.get("hierarchical_level") 
+                        text = record.get("text")
+                        
+                        if domain_type and hierarchical_level and text:
+                            self.add_spans(domain_type, hierarchical_level, [text])
+                            loaded_spans += 1
+                        
+                    except (json.JSONDecodeError, KeyError) as e:
+                        logger.warning(f"Skipping invalid line {line_num} in dictionary file: {e}")
+                        continue
+            
+            logger.info(f"Loaded {loaded_spans} spans from dictionary.jsonl")
+            
+        except Exception as e:
+            logger.error(f"Error loading dictionary file: {e}")
 
 
-# Global instance for use across the pipeline
-global_xbar_dict = XBarDictionary()
+# Global dictionary instance
+_global_dict: Optional[XBarDictionary] = None
 
 
 def get_global_dict() -> XBarDictionary:
-    """Get the global X-bar dictionary instance."""
-    return global_xbar_dict
+    """Get the global dictionary instance (singleton pattern)."""
+    global _global_dict
+    if _global_dict is None:
+        _global_dict = XBarDictionary()
+    return _global_dict
 
 
 def reset_global_dict():
-    """Reset the global dictionary (useful for testing)."""
-    global global_xbar_dict
-    global_xbar_dict = XBarDictionary()
+    """Reset the global dictionary instance."""
+    global _global_dict
+    _global_dict = None
