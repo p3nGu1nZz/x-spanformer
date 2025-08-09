@@ -325,7 +325,7 @@ class SpanAnnotatorPipeline:
         
         logger.debug(f"Saved working file: sequence {sequence_number}")
     
-    def consolidate_results(self, output_dir: Path, corpus_file: Path):
+    def consolidate_results(self, output_dir: Path):
         """Build X-bar dictionaries from working files (dictionary-only approach)."""
         working_dir = output_dir / "working"
         
@@ -408,14 +408,6 @@ class SpanAnnotatorPipeline:
         
         # Log dictionary statistics
         xbar_dict.log_statistics()
-        
-        # Generate annotations.jsonl from dictionary spans
-        logger.info("Generating systematic annotations from dictionary...")
-        annotations_count = xbar_dict.generate_annotations_from_dictionary(
-            corpus_file=corpus_file, 
-            output_dir=output_dir
-        )
-        logger.info(f"Generated {annotations_count} systematic annotations")
     
     def _determine_hierarchical_level(self, xbar_label: str) -> Optional[str]:
         """
@@ -755,7 +747,7 @@ class SpanAnnotatorPipeline:
             self.pipeline_stats["early_exit"] = False
         
         # Consolidate and save metadata
-        self.consolidate_results(output_dir, corpus_file)
+        self.consolidate_results(output_dir)
         self.update_metadata(output_dir)
         
         # Run annotation analysis if spans were created
