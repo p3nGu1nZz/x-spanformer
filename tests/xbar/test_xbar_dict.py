@@ -138,11 +138,11 @@ class TestXBarDictionary:
             xbar_dict.save_dictionaries(temp_path)
             
             # Check files were created
-            assert (temp_path / "dictionary.jsonl").exists()
+            assert (temp_path / "spans.jsonl").exists()
             
-            # Verify dictionary.jsonl content
-            dictionary_file = temp_path / "dictionary.jsonl"
-            with open(dictionary_file, 'r', encoding='utf-8') as f:
+            # Verify spans.jsonl content
+            spans_file = temp_path / "spans.jsonl"
+            with open(spans_file, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             
             # Should have 6 spans total (3 + 1 + 2)

@@ -776,12 +776,12 @@ class SpanAnnotatorPipeline:
         self.consolidate_results(output_dir)
         self.update_metadata(output_dir)
         
-        # Run annotation analysis if spans were created
-        spans_file = output_dir / "spans.jsonl"
-        if spans_file.exists():
+        # Run annotation analysis if annotations were created
+        annotations_file = output_dir / "annotations.jsonl"
+        if annotations_file.exists():
             try:
                 logger.info("Running annotation analysis...")
-                analyzer = AnnotationAnalyzer(str(spans_file))
+                analyzer = AnnotationAnalyzer(str(annotations_file))
                 analyzer.analyze_and_report(str(output_dir))
             except Exception as e:
                 logger.warning(f"Annotation analysis failed: {e}")
