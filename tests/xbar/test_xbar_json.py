@@ -55,19 +55,20 @@ class TestXBarJsonParser(unittest.TestCase):
         self.assertEqual(result[0]['text'], 'variable')
     
     def test_malformed_json_skipped(self):
-        """Test that malformed JSON is skipped."""
+        """Test that malformed JSON is handled appropriately - some can be auto-fixed."""
         malformed_cases = [
-            '[{"text","value","xbar_label":"noun"}]',  # Missing colon
-            '[{"text":"value",,"xbar_label":"noun"}]',  # Double comma
-            '[{"text":"value",xbar_label:"noun"}]',     # Unquoted property
-            '[{"text":"value","xbar_label":"noun"]',    # Missing closing brace
-            '{"text":"incomplete"',                      # Truly truncated JSON
+            ('[{"text","value","xbar_label":"noun"}]', 0),     # Missing colon - too malformed
+            ('[{"text":"value",,"xbar_label":"noun"}]', 0),    # Double comma - too malformed
+            ('[{text:"value",xbar_label:"noun"}]', 1),         # Unquoted property - can be fixed
+            ('[{"text":"value","xbar_label":"noun"]', 0),      # Missing closing brace - too malformed
+            ('{"text":"incomplete"', 0),                       # Truly truncated JSON - too malformed
         ]
         
-        for malformed in malformed_cases:
+        for malformed, expected_count in malformed_cases:
             with self.subTest(malformed=malformed):
                 result = self.parser.parse_json_response(malformed)
-                self.assertEqual(len(result), 0, f"Should skip malformed JSON: {malformed}")
+                self.assertEqual(len(result), expected_count, 
+                               f"Expected {expected_count} results for: {malformed}")
                 
         # Test partially valid case - should extract valid parts
         partially_valid = '[{"text":"hello","xbar_label":"noun"},{"text":"wo'
@@ -177,18 +178,18 @@ class TestXBarJsonParser(unittest.TestCase):
         self.assertEqual(len(filtered), 3)
     
     def test_exact_duplicate_removal(self):
-        """Test removal of exact duplicates."""
+        """Test that parser preserves duplicates - deduplication happens at sequence level."""
         annotations = [
             {'text': 'hello', 'xbar_label': 'noun'},
-            {'text': 'hello', 'xbar_label': 'noun'},  # Exact duplicate - removed
-            {'text': 'Hello', 'xbar_label': 'noun'},  # Case difference - treated as duplicate
+            {'text': 'hello', 'xbar_label': 'noun'},  # Exact duplicate - preserved at parse level
+            {'text': 'Hello', 'xbar_label': 'noun'},  # Case difference - preserved
             {'text': 'hello', 'xbar_label': 'verb'},  # Different label - kept
         ]
         
         filtered = self.parser.filter_valid_annotations(annotations)
         
-        # Should keep original + different label version, remove exact duplicate
-        self.assertEqual(len(filtered), 2)
+        # Parser doesn't deduplicate - all valid annotations preserved
+        self.assertEqual(len(filtered), 4)
     
     def test_single_object_json(self):
         """Test parsing single object JSON (not array)."""

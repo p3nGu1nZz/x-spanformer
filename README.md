@@ -172,7 +172,7 @@ This enables X-Spanformer to bootstrap span boundaries from real-world documents
 Generate X-bar span annotations for supervised training of the factorized pointer network boundary predictor (Section 3.3):
 
 ```bash
-# Annotate sequences for span boundary training
+# Annotate sequences for span boundary training with improved logging
 uv run -m x_spanformer.pipelines.span_annotator \
   --corpus data/vocab/corpus.jsonl \
   --output data/annotations \
@@ -226,6 +226,13 @@ data/annotations/
 - **Boundary Detection Training**: Generates binary targets for start/end position prediction (not span-level embeddings)
 - **Multi-label Support**: BCE loss handles overlapping spans at different hierarchical levels
 - **Production Validation**: Zero position or text extraction errors across all generated spans
+- **Improved Logging**: Concise sequence selection summaries replace verbose lists for better performance and readability
+
+**Recent Enhancements (August 2025):**
+- **Logging Optimization**: `Selected 1000 sequences (1 to 1000) out of 1000 requested` instead of massive sequence lists
+- **Performance**: Reduced I/O overhead and log file size while maintaining essential debugging information
+- **Scalability**: Handles large sequence ranges without log bloat or memory issues
+- **Error Recovery**: Enhanced JSON parsing robustness with automatic truncation detection and malformed JSON recovery
 
 ---
 
@@ -294,19 +301,76 @@ python -m pytest tests/pipelines/test_pipelines_vocab2embedding.py -v
 
 ---
 
+## 🔌 API and Integration
+
+### Ollama Client API
+
+X-Spanformer integrates with large language models through a robust async client interface:
+
+```python
+from x_spanformer.agents.ollama_client import chat
+
+# Core chat function for LLM communication
+response = await chat(
+    model="llama3.2:3b",
+    conversation=[
+        {"role": "user", "content": "Analyze this text for spans..."}
+    ],
+    system="You are an expert linguistic annotator.",
+    temperature=0.2,
+    timeout=180.0
+)
+```
+
+**Features:**
+- **Async Communication**: Non-blocking LLM interactions for high throughput
+- **Conversation History**: Multi-turn context preservation for complex annotation tasks
+- **Temperature Control**: Creativity vs consistency tuning for different annotation strategies
+- **Timeout Management**: Prevents hanging on slow responses with configurable limits
+- **Error Handling**: Comprehensive connection and response error recovery mechanisms
+
+### Paper Implementation Alignment
+
+X-Spanformer implements the complete architecture described in **"X-Spanformer: A Tokenizer-Free, Span-Aware Encoder Inspired by X-Bar Theory"** (Rawson & Chrzanowski, 2025):
+
+#### Section 3.1: Vocabulary Induction
+- **Hybrid Unigram-LM**: EM with Viterbi approximation for optimal segmentation
+- **Entropy-based pruning**: Adaptive vocabulary size control with perplexity thresholds
+- **Whitespace-aware tokenization**: Strict separation between content and whitespace tokens
+
+#### Section 3.2: Seed Embeddings & Span Generation  
+- **Forward-backward probability computation**: P[t,i] = (α_t × p(u_i) × β_{t+|u_i|}) / α_{T+1}
+- **Vocabulary-aware Xavier initialization**: Probability-adjusted embedding variance
+- **Multi-scale dilated convolutions**: Contextual encoding with kernels [3,5,7], dilations [1,2,4]
+
+#### Section 3.3: Factorized Pointer Networks
+- **Independent boundary prediction**: Separate linear heads for start/end positions
+- **Multi-label span support**: BCE loss for overlapping hierarchical spans
+- **X-bar hierarchical structure**: Word → phrase → clause level annotations
+
+---
+
 ## �🧰 Repository Structure
 
 ```
 x-spanformer/
 ├── x_spanformer/
-│   ├── pipelines/        # Data processing pipelines
+│   ├── pipelines/        # Data processing pipelines (CLI interfaces)
 │   │   ├── shared/       # Shared utilities for consistent processing
 │   │   │   ├── text_processor.py  # Text splitting and processing utilities
 │   │   │   └── jsonl_processor.py # JSONL file handling and corpus management
 │   │   ├── pdf2jsonl.py  # PDF → JSONL conversion with AI judging
-│   │   ├── jsonl2vocab.py # Hybrid Unigram-LM vocabulary induction
+│   │   ├── jsonl2vocab.py # Hybrid Unigram-LM vocabulary induction (Section 3.1)
 │   │   ├── vocab2embedding.py # Section 3.2: Seed embeddings & span generation
+│   │   ├── span_annotator.py # Section 3.3: X-bar span annotation (PRODUCTION READY)
 │   │   └── repo2jsonl.py # GitHub repository → JSONL conversion
+│   ├── agents/           # AI agents and LLM integration
+│   │   ├── ollama_client.py # Async LLM client with error handling
+│   │   └── session/      # Session management for multi-turn conversations
+│   ├── xbar/             # X-bar theory implementation
+│   │   ├── xbar_annotator.py # Core X-bar annotation logic
+│   │   ├── xbar_json.py  # Enhanced JSON parsing with robustness
+│   │   └── analyze_annotations.py # Annotation analysis tools
 │   ├── benchmarks/       # Performance benchmarking tools
 │   │   ├── benchmark_vocab2embedding.py # Vocab2embedding pipeline benchmark
 │   │   ├── benchmark_vocab2embedding.md # Comprehensive usage documentation
@@ -323,15 +387,16 @@ x-spanformer/
 │   │   ├── pretrain_record.py # Training data schema
 │   │   ├── vocab.py      # Vocabulary piece and statistics schemas
 │   │   └── ...           # Other schema definitions
-│   ├── agents/           # AI agents for content judging and processing
 │   ├── controllers/      # Span controller logic
 │   └── views/            # Data visualization and inspection
 ├── config/               # Pipeline configurations
+│   ├── agents/           # Agent configurations (judge_agent.yaml)
 │   └── pipelines/        # YAML configs for data processing
 ├── data/                 # Training and vocabulary data
 │   ├── pretraining/      # Raw segments from PDF processing
 │   ├── vocab/            # Vocabulary induction outputs
 │   ├── embedding/        # Chunk-based embedding storage
+│   ├── annotations/      # X-bar span annotations (Section 3.3)
 │   └── benchmarks/       # Performance benchmark results (timestamped)
 ├── docs/                 # Documentation and paper materials
 │   ├── vocab_induction.md    # Section 3.1 documentation
@@ -340,6 +405,10 @@ x-spanformer/
 │   └── paper/            # LaTeX source and compiled paper
 ├── tests/                # Unit tests and integration tests
 │   ├── pipelines/        # Pipeline-specific tests (PDF→JSONL, vocab induction, embeddings)
+│   ├── embedding/        # Embedding module tests (Section 3.2 validation)
+│   ├── agents/           # AI agent tests (Ollama client, session management)
+│   ├── xbar/             # X-bar theory tests (annotation, JSON parsing)
+```
 │   ├── embedding/        # Embedding module tests (Section 3.2 validation)
 │   ├── schema/           # Pydantic schema validation tests
 │   ├── agents/           # AI agent and content judging tests

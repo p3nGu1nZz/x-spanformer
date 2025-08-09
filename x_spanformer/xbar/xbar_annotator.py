@@ -13,6 +13,7 @@ import re
 from typing import Optional, List, Dict, Any, Tuple, Union
 from enum import Enum
 from dataclasses import dataclass
+from collections import defaultdict
 
 from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.annotation_record import AnnotationRecord, SpanAnnotation
@@ -80,51 +81,51 @@ Extract spans and classify them using only the labels above. Focus on accuracy a
                 DomainType.NATURAL: {
                     "labels": ["noun", "verb", "adjective", "adverb", "preposition", "determiner", "pronoun", "conjunction", "punctuation"],
                     "description": "individual WORDS and their grammatical classes",
-                    "examples": '"word" -> noun, "runs" -> verb, "quickly" -> adverb'
+                    "examples": '"transformer" -> noun, "encodes" -> verb, "neural" -> adjective, "efficiently" -> adverb, "(" -> punctuation, "the" -> determiner'
                 },
                 DomainType.CODE: {
                     "labels": ["keyword", "identifier", "operator", "literal", "delimiter", "type_name", "comment"],
                     "description": "individual CODE TOKENS and their syntactic types",
-                    "examples": '"if" -> keyword, "variable" -> identifier, "+" -> operator'
+                    "examples": '"def" -> keyword, "attention_weights" -> identifier, "==" -> operator, "0.1" -> literal, ";" -> delimiter, "List" -> type_name'
                 },
                 DomainType.MIXED: {
                     "labels": ["noun", "verb", "adjective", "adverb", "preposition", "determiner", "pronoun", "conjunction", "keyword", "identifier", "operator", "literal", "inline_code"],
                     "description": "individual WORDS/TOKENS from both natural language and code",
-                    "examples": '"function" -> noun (or keyword in code context), "variable" -> identifier'
+                    "examples": '"model" -> noun, "returns" -> verb, "def" -> keyword, "loss_fn" -> identifier, "`torch.nn.Module`" -> inline_code'
                 }
             },
             "phrase_level": {
                 DomainType.NATURAL: {
                     "labels": ["noun_phrase", "verb_phrase", "adjective_phrase", "adverb_phrase", "prepositional_phrase"],
                     "description": "PHRASES (groups of related words)",
-                    "examples": '"the red car" -> noun_phrase, "is running quickly" -> verb_phrase'
+                    "examples": '"the attention mechanism" -> noun_phrase, "computes hidden states" -> verb_phrase, "very efficiently" -> adverb_phrase, "in the transformer" -> prepositional_phrase'
                 },
                 DomainType.CODE: {
                     "labels": ["expression", "function_call", "assignment", "parameter_list", "argument_list"],
                     "description": "CODE EXPRESSIONS and structured constructs",
-                    "examples": '"x + y" -> expression, "func(a, b)" -> function_call'
+                    "examples": '"x + y * 2" -> expression, "torch.matmul(q, k)" -> function_call, "hidden_size=512" -> assignment, "(x, y, z)" -> parameter_list'
                 },
                 DomainType.MIXED: {
                     "labels": ["noun_phrase", "verb_phrase", "expression", "function_call", "code_block", "documentation_comment"],
                     "description": "PHRASES and CODE EXPRESSIONS from mixed content",
-                    "examples": '"the function call" -> noun_phrase, "func(x)" -> function_call'
+                    "examples": '"the model architecture" -> noun_phrase, "self.forward(x)" -> function_call, "```python\\nreturn output\\n```" -> code_block'
                 }
             },
             "clause_level": {
                 DomainType.NATURAL: {
                     "labels": ["main_clause", "subordinate_clause", "relative_clause"],
                     "description": "CLAUSES and major syntactic structures",
-                    "examples": '"She runs fast" -> main_clause, "because it was late" -> subordinate_clause'
+                    "examples": '"The transformer processes input sequences" -> main_clause, "which are then passed to the decoder" -> relative_clause, "because attention allows parallel computation" -> subordinate_clause'
                 },
                 DomainType.CODE: {
                     "labels": ["if_statement", "loop_statement", "function_definition", "class_definition", "import_statement", "return_statement"],
                     "description": "CODE STATEMENTS and control structures",
-                    "examples": '"if x > 0:" -> if_statement, "def func():" -> function_definition'
+                    "examples": '"if hidden_dim > 0:" -> if_statement, "for layer in self.layers:" -> loop_statement, "def forward(self, x):" -> function_definition, "import torch.nn as nn" -> import_statement'
                 },
                 DomainType.MIXED: {
                     "labels": ["main_clause", "subordinate_clause", "if_statement", "loop_statement", "function_definition"],
                     "description": "CLAUSES and CODE STATEMENTS from mixed content",
-                    "examples": '"The function returns" -> main_clause, "if condition:" -> if_statement'
+                    "examples": '"The model implements attention mechanisms" -> main_clause, "if config.use_attention:" -> if_statement, "while training the neural network" -> subordinate_clause'
                 }
             }
         }
@@ -139,8 +140,17 @@ Extract spans and classify them using only the labels above. Focus on accuracy a
 Domain: {domain.value.upper()}
 Focus: {config["description"]}
 
+Context: You are analyzing text that contains {domain.value} content. Your task is to identify and classify spans according to the hierarchical level specified ({turn_focus.replace('_', ' ')}).
+
 Available labels:
 {chr(10).join(f"- {desc}" for desc in label_descriptions)}
+
+Guidelines:
+- Extract ONLY spans that clearly match the specified labels
+- Be precise with boundary detection - include complete linguistic units
+- For {domain.value} domain: Focus on {config["description"]} that are linguistically meaningful
+- Avoid over-segmentation - prefer complete meaningful units over fragments
+- When uncertain, prefer more general labels over highly specific ones
 
 Extract accurate spans using ONLY these labels. Be precise and consistent."""
 
@@ -150,32 +160,37 @@ Extract accurate spans using ONLY these labels. Be precise and consistent."""
         user_prompt = f"""Analyze this {domain.value} text and identify {config["description"]}:
 "{escaped_text}"
 
-Return ONLY a JSON array with this exact format. Do not include any explanations, notes, or additional text:
+Task: Extract spans that represent {config["description"]} from the text above.
+
+Expected Output Format:
 [{{"text":"extracted_text","xbar_label":"label_name"}}]
 
-Examples: {config["examples"]}
+Example Annotations:
+{config["examples"]}
 
-Use these labels: {", ".join(label_names)}"""
+Important Instructions:
+- Return ONLY a valid JSON array - no explanations, notes, or additional text
+- Each span should be a complete, meaningful linguistic unit at the {turn_focus.replace('_', ' ')} level
+- Use EXACTLY these labels: {", ".join(label_names)}
+- Extract spans in the order they appear in the text
+- Ensure "text" field contains the exact text from the input
+- Ensure "xbar_label" field uses one of the specified labels
+
+Begin annotation:"""
 
         return system_prompt, user_prompt
     
     def _escape_text_for_prompt(self, text: str) -> str:
         """Escape text for safe inclusion in JSON-generating prompts."""
-        # Escape characters that can confuse JSON generation
+        # Only escape characters that will break JSON parsing - preserve original text content
         escaped = text.replace('\\', '\\\\')  # Escape backslashes first
-        escaped = escaped.replace('"', '\\"')  # Escape quotes
-        escaped = escaped.replace('\n', '\\n')  # Escape newlines
-        escaped = escaped.replace('\t', '\\t')  # Escape tabs
-        escaped = escaped.replace('\r', '\\r')  # Escape carriage returns
+        escaped = escaped.replace('"', '\\"')  # Escape quotes that would break JSON strings
         return escaped
     
     def _unescape_text_for_matching(self, text: str) -> str:
         """Unescape text to match against original raw text."""
-        # Reverse the escaping process
-        unescaped = text.replace('\\r', '\r')
-        unescaped = unescaped.replace('\\t', '\t')  
-        unescaped = unescaped.replace('\\n', '\n')
-        unescaped = unescaped.replace('\\"', '"')
+        # Reverse the minimal escaping - only what we actually escaped
+        unescaped = text.replace('\\"', '"')    # Unescape quotes
         unescaped = unescaped.replace('\\\\', '\\')  # Unescape backslashes last
         return unescaped
     
@@ -248,15 +263,17 @@ Use these labels: {", ".join(label_names)}"""
                 matches = list(re.finditer(escaped_text, text, re.IGNORECASE))
                 
                 if matches:
-                    best_match = self._select_best_match(matches, unescaped_span_text, text)
-                    start_pos, end_pos = best_match.start(), best_match.end() - 1
-                    actual_text = text[start_pos:end_pos + 1]
-                    
-                    if actual_text.lower() == unescaped_span_text.lower():
-                        span_label = SpanLabel(span=(start_pos, end_pos), xbar_label=xbar_label, text=actual_text)
-                        spans.append(span_label)
-                    else:
-                        logger.debug(f"Text mismatch: expected '{unescaped_span_text}', got '{actual_text}' at {start_pos}-{end_pos}")
+                    # Create spans for ALL matches, not just the "best" one
+                    # This ensures we capture all legitimate occurrences of the same text
+                    for match in matches:
+                        start_pos, end_pos = match.start(), match.end() - 1
+                        actual_text = text[start_pos:end_pos + 1]
+                        
+                        if actual_text.lower() == unescaped_span_text.lower():
+                            span_label = SpanLabel(span=(start_pos, end_pos), xbar_label=xbar_label, text=actual_text)
+                            spans.append(span_label)
+                        else:
+                            logger.debug(f"Text mismatch: expected '{unescaped_span_text}', got '{actual_text}' at {start_pos}-{end_pos}")
                 elif len(unescaped_span_text) > 10:  # Try fuzzy matching for longer phrases
                     fuzzy_span = self._try_fuzzy_match(unescaped_span_text, text, xbar_label)
                     if fuzzy_span:
@@ -317,19 +334,122 @@ Use these labels: {", ".join(label_names)}"""
         return spans
     
     def _deduplicate_spans(self, spans: List[SpanLabel]) -> List[SpanLabel]:
-        """Remove duplicate spans based on position and label."""
-        unique_spans = []
-        seen_spans = set()
+        """
+        Remove duplicate spans with enhanced logic that preserves legitimate multiple occurrences.
         
-        for span in spans:
+        KEEP Strategy (legitimate multiple occurrences):
+        1. Same text at different positions (e.g., "," at pos 10, "," at pos 25) -> KEEP ALL
+        2. Same start position but different end positions -> KEEP ALL (different span lengths)
+        3. Separated occurrences with sufficient gaps -> KEEP ALL
+        
+        REMOVE Strategy (problematic duplicates):
+        1. Exact duplicates: Same text, same start, same end, same label -> Remove extras
+        2. Consecutive/overlapping duplicates: Same text+label in adjacent/overlapping positions -> Remove extras
+        3. Boundary conflicts: Same text+positions, different labels -> Pick most frequent label (greedy)
+        """
+        if not spans:
+            return spans
+        
+        # Count label frequency within this span set for greedy selection
+        from collections import Counter
+        label_counts = Counter(span.xbar_label for span in spans)
+        
+        # Sort spans by position for consecutive detection
+        sorted_spans = sorted(spans, key=lambda x: (x.span[0], x.span[1]))
+        
+        # Step 1: Group by exact match (text + start + end) to find true duplicates
+        exact_match_groups = defaultdict(list)
+        for span in sorted_spans:
             start_pos, end_pos = span.span
-            span_key = (start_pos, end_pos, span.xbar_label)
-            if span_key not in seen_spans:
-                seen_spans.add(span_key)
-                unique_spans.append(span)
+            exact_key = (span.text, start_pos, end_pos)
+            exact_match_groups[exact_key].append(span)
         
-        logger.info(f"Parsed {len(unique_spans)} unique spans from {len(spans)} total found")
-        return unique_spans
+        # Step 2: Process each exact match group
+        kept_spans = []
+        
+        for exact_key, duplicate_spans in exact_match_groups.items():
+            text, start_pos, end_pos = exact_key
+            
+            if len(duplicate_spans) == 1:
+                # No exact duplicates, keep as is
+                kept_spans.extend(duplicate_spans)
+            else:
+                # Handle exact duplicates (same text, same positions)
+                labels_in_group = [span.xbar_label for span in duplicate_spans]
+                unique_labels = set(labels_in_group)
+                
+                if len(unique_labels) == 1:
+                    # All have same label - true duplicates, keep only one
+                    kept_spans.append(duplicate_spans[0])
+                    logger.debug(f"Removed {len(duplicate_spans) - 1} exact duplicates of '{text}' at ({start_pos}, {end_pos})")
+                else:
+                    # Multiple labels for same position - boundary conflict, use greedy selection
+                    # Sort by: 1) label frequency (descending), 2) original order (ascending)
+                    def greedy_sort_key(span):
+                        label_freq = label_counts[span.xbar_label]
+                        original_index = duplicate_spans.index(span)  # Preserve original order for ties
+                        return (-label_freq, original_index)  # Negative for descending frequency
+                    
+                    sorted_spans_greedy = sorted(duplicate_spans, key=greedy_sort_key)
+                    winner = sorted_spans_greedy[0]
+                    kept_spans.append(winner)
+                    
+                    logger.debug(f"Boundary conflict for '{text}' at ({start_pos}, {end_pos}): kept '{winner.xbar_label}' (freq: {label_counts[winner.xbar_label]}), removed {len(duplicate_spans) - 1} others")
+        
+        # Step 3: Remove consecutive duplicates
+        # Sort kept spans and remove consecutive duplicates
+        kept_spans_sorted = sorted(kept_spans, key=lambda x: (x.span[0], x.span[1]))
+        final_spans = []
+        
+        i = 0
+        while i < len(kept_spans_sorted):
+            curr = kept_spans_sorted[i]
+            
+            # Check if this is part of a consecutive duplicate sequence
+            consecutive_group = [curr]
+            j = i + 1
+            
+            while j < len(kept_spans_sorted):
+                next_span = kept_spans_sorted[j]
+                
+                if (curr.text == next_span.text and 
+                    curr.xbar_label == next_span.xbar_label):
+                    
+                    curr_start, curr_end = curr.span
+                    next_start, next_end = next_span.span
+                    gap = next_start - curr_end
+                    
+                    # Flag as consecutive duplicate if:
+                    # - Overlapping (gap < 0) or immediately adjacent (gap <= 1)
+                    # - For single characters, more strict: gap <= 0
+                    is_single_char = len(curr.text) == 1
+                    max_allowed_gap = 0 if is_single_char else 1
+                    
+                    if gap <= max_allowed_gap:
+                        consecutive_group.append(next_span)
+                        curr = next_span  # Update for next iteration
+                        j += 1
+                    else:
+                        break
+                else:
+                    break
+            
+            # If we found consecutive duplicates, keep only the first one
+            if len(consecutive_group) > 1:
+                final_spans.append(consecutive_group[0])
+                logger.debug(f"Removed {len(consecutive_group) - 1} consecutive duplicates of '{curr.text}' ({curr.xbar_label})")
+            else:
+                final_spans.append(curr)
+            
+            i = j if j > i + 1 else i + 1
+        
+        removed_count = len(spans) - len(final_spans)
+        if removed_count > 0:
+            logger.info(f"Deduplication: kept {len(final_spans)} spans, removed {removed_count} duplicates from {len(spans)} total")
+        else:
+            logger.info(f"Parsed {len(final_spans)} unique spans from {len(spans)} total found")
+        
+        return final_spans
     
     
     # JSON parsing and repair methods have been moved to xbar_json.py
@@ -527,8 +647,11 @@ Use these labels: {", ".join(label_names)}"""
             logger.info(f"Validating {len(all_spans)} total spans")
             valid_spans = self._validate_and_filter_span_labels(all_spans, text)
             
+            # Apply final deduplication across all turns (boundary conflict resolution)
+            deduplicated_spans = self._deduplicate_spans(valid_spans)
+            
             # Convert to SpanAnnotation objects
-            span_annotations = self._convert_span_labels_to_annotations(valid_spans, text)
+            span_annotations = self._convert_span_labels_to_annotations(deduplicated_spans, text)
             
             # Create annotation record
             annotation_record = AnnotationRecord(
@@ -544,7 +667,8 @@ Use these labels: {", ".join(label_names)}"""
                     "word_spans": len(word_spans),
                     "phrase_spans": len(phrase_spans),
                     "clause_spans": len(clause_spans),
-                    "total_valid_spans": len(valid_spans)
+                    "total_valid_spans": len(valid_spans),
+                    "total_deduplicated_spans": len(deduplicated_spans)
                 }
             )
             
@@ -590,8 +714,8 @@ Use these labels: {", ".join(label_names)}"""
                 if len(span_text) == 1 and span_text.isspace():
                     continue
                 
-                # Check for duplicates - allow multiple labels on same position, but not identical spans
-                span_key = (start_pos, end_pos, xbar_label)
+                # Check for exact duplicates only - boundary duplicates handled by _deduplicate_spans
+                span_key = (start_pos, end_pos, span_text, xbar_label)
                 if span_key not in seen_spans:
                     seen_spans.add(span_key)
                     valid_spans.append(span)

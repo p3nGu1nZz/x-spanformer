@@ -1,464 +1,513 @@
-#!/usr/bin/env python3
 """
-Span Annotation Analysis Tool
-Analyzes span annotations against the theoretical framework from Section 3.3 of the paper.
+Clean version of annotation analyzer with logging integration.
 """
 
 import json
-import sys
-from collections import defaultdict, Counter
+import logging
 from pathlib import Path
+from collections import defaultdict, Counter
+from typing import Dict, Any, List, Optional
 
-def load_annotations(file_path):
-    """Load annotations from JSONL file."""
-    annotations = []
-    with open(file_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            if line.strip():
-                annotations.append(json.loads(line))
-    return annotations
+from .xbar_map import XBarLabelMap
 
-def analyze_overlapping_spans(annotations):
-    """Analyze overlapping spans - should allow multiple labels per position."""
-    overlaps = defaultdict(list)
-    position_coverage = defaultdict(set)
-    
-    for ann in annotations:
-        seq_num = ann['sequence_number']
-        start, end = ann['start_pos'], ann['end_pos']
-        label = ann['xbar_label']
-        text = ann['text']
-        
-        # Track position coverage
-        for pos in range(start, end):
-            position_coverage[seq_num].add(pos)
-        
-        # Check for overlaps with other spans
-        for other in annotations:
-            if (other['sequence_number'] == seq_num and 
-                other != ann and
-                not (other['end_pos'] <= start or other['start_pos'] >= end)):
-                overlaps[seq_num].append((ann, other))
-    
-    return overlaps, position_coverage
+# Configure logger
+logger = logging.getLogger(__name__)
 
-def analyze_hierarchical_structure(annotations):
-    """Analyze if annotations follow hierarchical X-bar structure."""
-    by_sequence = defaultdict(list)
-    for ann in annotations:
-        by_sequence[ann['sequence_number']].append(ann)
+
+class AnnotationAnalyzer:
+    """Clean annotation analyzer with logging integration."""
     
-    hierarchy_analysis = {}
-    for seq_num, seq_anns in by_sequence.items():
-        word_level = [a for a in seq_anns if a['xbar_label'] in 
-                     ['noun', 'verb', 'adjective', 'adverb', 'determiner', 
-                      'preposition', 'pronoun', 'conjunction', 'keyword', 
-                      'identifier', 'operator', 'literal', 'inline_code']]
+    def __init__(self, annotations_file: str):
+        self.annotations_file = annotations_file
+        self.annotations = []
+    
+    @staticmethod
+    def _get_hierarchical_categories() -> Dict[str, List[str]]:
+        """Get hierarchical categorization of X-bar labels based on linguistic theory."""
+        # Word-level spans (X-bar terminals): Individual lexical items
+        word_level = []
         
-        phrase_level = [a for a in seq_anns if a['xbar_label'] in 
-                       ['noun_phrase', 'verb_phrase', 'expression', 
-                        'function_call', 'code_block', 'documentation_comment']]
+        # Natural language terminals
+        word_level.extend(['noun', 'verb', 'adjective', 'adverb', 'determiner', 
+                          'preposition', 'pronoun', 'conjunction', 'punctuation'])
         
-        clause_level = [a for a in seq_anns if a['xbar_label'] in 
-                       ['main_clause', 'subordinate_clause', 'if_statement', 
-                        'loop_statement', 'function_definition']]
+        # Code terminals  
+        word_level.extend(['keyword', 'identifier', 'operator', 'literal', 
+                          'delimiter', 'type_name', 'comment'])
         
-        hierarchy_analysis[seq_num] = {
-            'word_level': len(word_level),
-            'phrase_level': len(phrase_level),
-            'clause_level': len(clause_level),
-            'total': len(seq_anns)
+        # Mixed domain terminals
+        word_level.append('inline_code')
+        
+        # Phrase-level spans (X-bar intermediate projections): Multi-word constituents
+        phrase_level = []
+        
+        # Natural language phrases
+        phrase_level.extend(['noun_phrase', 'verb_phrase', 'adjective_phrase', 
+                            'adverb_phrase', 'prepositional_phrase'])
+        
+        # Code phrases
+        phrase_level.extend(['expression', 'function_call', 'assignment', 
+                            'parameter_list', 'argument_list'])
+        
+        # Mixed domain phrases
+        phrase_level.extend(['code_block', 'documentation_comment', 'api_reference'])
+        
+        # Clause-level spans (X-bar maximal projections): Complete constructions
+        clause_level = []
+        
+        # Natural language clauses
+        clause_level.extend(['main_clause', 'subordinate_clause', 'relative_clause'])
+        
+        # Code clauses
+        clause_level.extend(['if_statement', 'loop_statement', 'function_definition',
+                            'class_definition', 'import_statement', 'return_statement'])
+        
+        return {
+            'word_level': word_level,
+            'phrase_level': phrase_level,
+            'clause_level': clause_level
         }
     
-    return hierarchy_analysis
-
-def deduplicate_spans(annotations):
-    """
-    Deduplicate spans with identical boundaries but different X-bar labels.
-    Strategy: Pick the label with the most occurrences globally. If tied, pick the first one.
-    """
-    # Count label frequency globally
-    label_counts = Counter(ann['xbar_label'] for ann in annotations)
-    
-    # Group by sequence
-    by_sequence = defaultdict(list)
-    for ann in annotations:
-        by_sequence[ann['sequence_number']].append(ann)
-    
-    deduplicated = []
-    dedup_stats = {'removed': 0, 'kept': 0, 'decisions': []}
-    
-    for seq_num, seq_anns in by_sequence.items():
-        # Group by boundary + text
-        boundary_groups = defaultdict(list)
-        for ann in seq_anns:
-            boundary_key = (ann['start_pos'], ann['end_pos'], ann['text'])
-            boundary_groups[boundary_key].append(ann)
+    def load_annotations(self) -> List[Dict[str, Any]]:
+        """Load annotations from JSONL file."""
+        annotations_path = Path(self.annotations_file)
+        if not annotations_path.exists():
+            logger.error(f"Annotations file not found: {annotations_path}")
+            return []
         
-        # Process each boundary group
-        for boundary_key, duplicate_anns in boundary_groups.items():
-            if len(duplicate_anns) == 1:
-                # No duplicates, keep as is
-                deduplicated.extend(duplicate_anns)
-                dedup_stats['kept'] += 1
-            else:
-                # Multiple labels for same boundary - resolve conflict
-                start_pos, end_pos, text = boundary_key
-                
-                # Sort by: 1) global label frequency (desc), 2) original order (asc)
-                def sort_key(ann):
-                    return (-label_counts[ann['xbar_label']], ann['id'])
-                
-                sorted_anns = sorted(duplicate_anns, key=sort_key)
-                winner = sorted_anns[0]
-                losers = sorted_anns[1:]
-                
-                deduplicated.append(winner)
-                dedup_stats['kept'] += 1
-                dedup_stats['removed'] += len(losers)
-                
-                # Log the decision
-                decision = {
-                    'sequence': seq_num,
-                    'text': text,
-                    'positions': (start_pos, end_pos),
-                    'winner': winner['xbar_label'],
-                    'winner_count': label_counts[winner['xbar_label']],
-                    'losers': [{'label': ann['xbar_label'], 'count': label_counts[ann['xbar_label']]} 
-                              for ann in losers]
-                }
-                dedup_stats['decisions'].append(decision)
-    
-    return deduplicated, dedup_stats
-
-def find_anomalies(annotations):
-    """Find potential anomalies in span annotations."""
-    anomalies = []
-    
-    # Group by sequence
-    by_sequence = defaultdict(list)
-    for ann in annotations:
-        by_sequence[ann['sequence_number']].append(ann)
-    
-    for seq_num, seq_anns in by_sequence.items():
-        # Check for exact duplicates (boundary + text + label)
-        seen_exact = set()
-        for ann in seq_anns:
-            exact_key = (ann['start_pos'], ann['end_pos'], ann['text'], ann['xbar_label'])
-            if exact_key in seen_exact:
-                anomalies.append({
-                    'type': 'exact_duplicate',
-                    'sequence': seq_num,
-                    'span': ann
-                })
-            seen_exact.add(exact_key)
+        annotations = []
+        with open(annotations_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        annotations.append(json.loads(line))
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse annotation line: {e}")
         
-        # Check for boundary duplicates (boundary + text, different labels)
-        boundary_groups = defaultdict(list)
-        for ann in seq_anns:
-            boundary_key = (ann['start_pos'], ann['end_pos'], ann['text'])
-            boundary_groups[boundary_key].append(ann)
+        self.annotations = annotations
+        logger.info(f"Loaded {len(annotations)} annotations from {annotations_path}")
+        return annotations
+    
+    def analyze_hierarchical_structure(self) -> Dict[str, Any]:
+        """Analyze hierarchical X-bar structure and return summary statistics."""
+        by_sequence = defaultdict(list)
+        for ann in self.annotations:
+            by_sequence[ann['sequence_number']].append(ann)
         
-        for boundary_key, duplicate_anns in boundary_groups.items():
-            if len(duplicate_anns) > 1:
-                # Get unique labels
-                labels = set(ann['xbar_label'] for ann in duplicate_anns)
-                if len(labels) > 1:
-                    anomalies.append({
-                        'type': 'boundary_duplicate',
-                        'sequence': seq_num,
-                        'text': boundary_key[2],
-                        'positions': (boundary_key[0], boundary_key[1]),
-                        'labels': list(labels),
-                        'count': len(duplicate_anns)
-                    })
+        # Get hierarchical categories from centralized mapping
+        categories = self._get_hierarchical_categories()
         
-        # Check for suspiciously short spans
-        for ann in seq_anns:
-            # Single-character spans are valid for:
-            # - Code/mixed domains: identifiers, variables, operators, literals, punctuation
-            # - Natural language: punctuation, articles, prepositions
-            valid_short_labels = [
-                'operator', 'literal', 'identifier', 'punctuation', 
-                'conjunction', 'preposition', 'determiner', 'pronoun'
-            ]
+        hierarchy_analysis = {}
+        for seq_num, seq_anns in by_sequence.items():
+            # Normalize labels and categorize spans
+            word_level = [a for a in seq_anns 
+                         if XBarLabelMap.normalize_label(a['xbar_label']) in categories['word_level']]
             
-            # For code/mixed domains, single char spans are generally acceptable
-            domain_type = ann.get('domain_type', 'mixed')
+            phrase_level = [a for a in seq_anns 
+                           if XBarLabelMap.normalize_label(a['xbar_label']) in categories['phrase_level']]
             
-            if (len(ann['text']) <= 1 and 
-                ann['xbar_label'] not in valid_short_labels and
-                domain_type == 'natural'):  # Only flag in pure natural language
-                
-                # Additional check: skip common single letters that are valid
-                if ann['text'].lower() not in ['a', 'i', 's', 'j', 'c', 'x', 'y', 'z', 'n', 'm', 'k']:
+            clause_level = [a for a in seq_anns 
+                           if XBarLabelMap.normalize_label(a['xbar_label']) in categories['clause_level']]
+            
+            hierarchy_analysis[seq_num] = {
+                'word_level': len(word_level),
+                'phrase_level': len(phrase_level),
+                'clause_level': len(clause_level),
+                'total': len(seq_anns)
+            }
+        
+        return hierarchy_analysis
+
+    def find_anomalies(self) -> list:
+        """Find potential anomalies in span annotations."""
+        anomalies = []
+        
+        # Get all valid labels from XBarLabelMap
+        all_valid_labels = set()
+        all_valid_labels.update(XBarLabelMap.NATURAL_LABELS.keys())
+        all_valid_labels.update(XBarLabelMap.CODE_LABELS.keys())
+        all_valid_labels.update(XBarLabelMap.MIXED_LABELS.keys())
+        
+        # Group by sequence
+        by_sequence = defaultdict(list)
+        for ann in self.annotations:
+            by_sequence[ann['sequence_number']].append(ann)
+        
+        for seq_num, seq_anns in by_sequence.items():
+            # Check for invalid labels
+            for ann in seq_anns:
+                normalized_label = XBarLabelMap.normalize_label(ann['xbar_label'])
+                if normalized_label not in all_valid_labels and normalized_label != 'unknown':
                     anomalies.append({
-                        'type': 'suspicious_short_span',
+                        'type': 'invalid_label',
                         'sequence': seq_num,
-                        'span': ann
+                        'span': ann,
+                        'normalized_label': normalized_label,
+                        'severity': 'medium'
                     })
+            
+            # Check for exact duplicates
+            seen_exact = set()
+            for ann in seq_anns:
+                exact_key = (ann['start_pos'], ann['end_pos'], ann['text'], ann['xbar_label'])
+                if exact_key in seen_exact:
+                    anomalies.append({
+                        'type': 'exact_duplicate',
+                        'sequence': seq_num,
+                        'span': ann,
+                        'severity': 'high'
+                    })
+                seen_exact.add(exact_key)
+            
+            # Check for boundary duplicates (same position + text, different labels)
+            boundary_groups = defaultdict(list)
+            for ann in seq_anns:
+                boundary_key = (ann['start_pos'], ann['end_pos'], ann['text'])
+                boundary_groups[boundary_key].append(ann)
+            
+            for boundary_key, duplicate_anns in boundary_groups.items():
+                if len(duplicate_anns) > 1:
+                    labels = set(ann['xbar_label'] for ann in duplicate_anns)
+                    if len(labels) > 1:
+                        anomalies.append({
+                            'type': 'boundary_duplicate',
+                            'sequence': seq_num,
+                            'text': boundary_key[2],
+                            'positions': (boundary_key[0], boundary_key[1]),
+                            'labels': list(labels),
+                            'count': len(duplicate_anns),
+                            'severity': 'medium'
+                        })
         
-        # Check for repetitive patterns
-        text_counts = Counter(ann['text'] for ann in seq_anns)
-        for text, count in text_counts.items():
-            if count > 3:  # More than 3 occurrences might be suspicious
-                anomalies.append({
-                    'type': 'repetitive_text',
-                    'sequence': seq_num,
-                    'text': text,
-                    'count': count
-                })
+        return anomalies
+
+    def analyze_overlap_patterns(self) -> Dict[str, Any]:
+        """Analyze span overlap patterns and coverage."""
+        by_sequence = defaultdict(list)
+        for ann in self.annotations:
+            by_sequence[ann['sequence_number']].append(ann)
         
-        # Check for inconsistent labeling of same text
+        total_overlaps = 0
+        total_coverage_chars = 0
+        total_text_chars = 0
+        overlap_details = []
+        
+        for seq_num, seq_anns in by_sequence.items():
+            # Sort spans by start position
+            sorted_spans = sorted(seq_anns, key=lambda x: x['start_pos'])
+            
+            # Find overlaps within sequence
+            seq_overlaps = 0
+            for i, span1 in enumerate(sorted_spans):
+                for span2 in sorted_spans[i+1:]:
+                    # Check if spans overlap
+                    if (span1['start_pos'] < span2['end_pos'] and 
+                        span2['start_pos'] < span1['end_pos']):
+                        seq_overlaps += 1
+                        overlap_details.append({
+                            'sequence': seq_num,
+                            'span1': span1,
+                            'span2': span2,
+                            'overlap_chars': min(span1['end_pos'], span2['end_pos']) - 
+                                           max(span1['start_pos'], span2['start_pos'])
+                        })
+            
+            total_overlaps += seq_overlaps
+            
+            # Calculate coverage for this sequence
+            if seq_anns:
+                raw_text = seq_anns[0]['raw']
+                total_text_chars += len(raw_text)
+                
+                # Calculate unique covered characters
+                covered_positions = set()
+                for span in seq_anns:
+                    covered_positions.update(range(span['start_pos'], span['end_pos']))
+                total_coverage_chars += len(covered_positions)
+        
+        coverage_rate = total_coverage_chars / total_text_chars if total_text_chars > 0 else 0
+        
+        return {
+            'total_overlaps': total_overlaps,
+            'overlap_rate': total_overlaps / len(self.annotations) if self.annotations else 0,
+            'coverage_rate': coverage_rate,
+            'overlap_details': overlap_details[:10]  # Sample of overlaps
+        }
+    
+    def analyze_domain_distribution(self) -> Dict[str, Any]:
+        """Analyze distribution by domain type."""
+        by_sequence = defaultdict(list)
+        for ann in self.annotations:
+            by_sequence[ann['sequence_number']].append(ann)
+        
+        domain_stats = defaultdict(lambda: {'sequences': 0, 'spans': 0, 'avg_spans': 0.0})
+        
+        for seq_num, seq_anns in by_sequence.items():
+            if seq_anns:
+                # Get domain from first annotation in sequence
+                domain = seq_anns[0].get('domain_type', 'unknown')
+                domain_stats[domain]['sequences'] += 1
+                domain_stats[domain]['spans'] += len(seq_anns)
+        
+        # Calculate averages
+        for domain, stats in domain_stats.items():
+            if stats['sequences'] > 0:
+                stats['avg_spans'] = stats['spans'] / stats['sequences']
+        
+        return dict(domain_stats)
+    
+    def analyze_consistency_patterns(self) -> Dict[str, Any]:
+        """Analyze label consistency for identical text spans."""
         text_to_labels = defaultdict(set)
-        for ann in seq_anns:
-            text_to_labels[ann['text']].add(ann['xbar_label'])
+        text_counts = defaultdict(int)
+        
+        for ann in self.annotations:
+            text = ann['text'].strip().lower()
+            if len(text) > 1:  # Skip single characters
+                text_to_labels[text].add(XBarLabelMap.normalize_label(ann['xbar_label']))
+                text_counts[text] += 1
+        
+        # Find inconsistent labeling
+        inconsistent_texts = []
+        consistent_texts = 0
         
         for text, labels in text_to_labels.items():
-            # Allow reasonable variations (e.g., noun + noun_phrase is fine)
-            if len(labels) > 2:
-                anomalies.append({
-                    'type': 'inconsistent_labeling',
-                    'sequence': seq_num,
+            if len(labels) > 1 and text_counts[text] > 1:
+                inconsistent_texts.append({
                     'text': text,
-                    'labels': list(labels)
+                    'labels': list(labels),
+                    'count': text_counts[text]
                 })
+            elif text_counts[text] > 1:
+                consistent_texts += 1
+        
+        # Sort by frequency
+        inconsistent_texts.sort(key=lambda x: x['count'], reverse=True)
+        
+        return {
+            'consistent_texts': consistent_texts,
+            'inconsistent_texts': len(inconsistent_texts),
+            'consistency_rate': consistent_texts / (consistent_texts + len(inconsistent_texts)) if (consistent_texts + len(inconsistent_texts)) > 0 else 1.0,
+            'top_inconsistencies': inconsistent_texts[:10]
+        }
     
-    return anomalies
+    def analyze_working_files(self, output_dir: str) -> Dict[str, Any]:
+        """Analyze working files for processing patterns and performance."""
+        working_dir = Path(output_dir) / "working"
+        if not working_dir.exists():
+            return {'error': 'Working directory not found'}
+        
+        working_files = list(working_dir.glob("*.json"))
+        processing_times = []
+        error_patterns = defaultdict(int)
+        domain_performance = defaultdict(lambda: {'total': 0, 'successful': 0, 'success_rate': 0.0})
+        
+        for working_file in working_files:
+            try:
+                with open(working_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                domain = data.get('domain_type', 'unknown')
+                domain_performance[domain]['total'] += 1
+                
+                if data.get('status') == 'completed':
+                    domain_performance[domain]['successful'] += 1
+                    # Could extract processing time if available in agent_metadata
+                elif data.get('error_message'):
+                    error_msg = data['error_message']
+                    # Categorize error types
+                    if 'timeout' in error_msg.lower():
+                        error_patterns['timeout'] += 1
+                    elif 'json' in error_msg.lower():
+                        error_patterns['json_parse'] += 1
+                    elif 'connection' in error_msg.lower():
+                        error_patterns['connection'] += 1
+                    else:
+                        error_patterns['other'] += 1
+                        
+            except Exception as e:
+                error_patterns['file_read_error'] += 1
+        
+        # Calculate success rates by domain
+        for domain, stats in domain_performance.items():
+            if stats['total'] > 0:
+                stats['success_rate'] = stats['successful'] / stats['total']
+        
+        return {
+            'total_working_files': len(working_files),
+            'error_patterns': dict(error_patterns),
+            'domain_performance': dict(domain_performance)
+        }
 
-def analyze_boundary_alignment(annotations):
-    """Analyze if boundary predictions align with word boundaries."""
-    boundary_issues = []
-    
-    for ann in annotations:
-        text = ann['text']
-        raw_text = ann['raw']
-        start, end = ann['start_pos'], ann['end_pos']
+    def analyze_and_report(self, output_dir: Optional[str] = None) -> Dict[str, Any]:
+        """Perform comprehensive analysis and return summary statistics."""
+        if not self.annotations:
+            self.load_annotations()
         
-        # Extract the actual text from raw
-        if start < len(raw_text) and end <= len(raw_text):
-            actual_text = raw_text[start:end]
-            if actual_text != text:
-                boundary_issues.append({
-                    'sequence': ann['sequence_number'],
-                    'expected': text,
-                    'actual': actual_text,
-                    'positions': (start, end)
-                })
-    
-    return boundary_issues
-
-def main():
-    annotations_file = Path("data/annotations/annotations.jsonl")
-    
-    if not annotations_file.exists():
-        print(f"Error: {annotations_file} not found")
-        sys.exit(1)
-    
-    print("🔍 SPAN ANNOTATION ANALYSIS")
-    print("=" * 50)
-    
-    # Load annotations
-    original_annotations = load_annotations(annotations_file)
-    print(f"📊 Loaded {len(original_annotations)} original annotations")
-    
-    # Deduplicate spans
-    print("\n🚿 DEDUPLICATING SPANS")
-    print("-" * 40)
-    annotations, dedup_stats = deduplicate_spans(original_annotations)
-    
-    if dedup_stats['removed'] > 0:
-        print(f"✨ Deduplication completed:")
-        print(f"  - Original annotations: {len(original_annotations)}")
-        print(f"  - After deduplication: {len(annotations)}")
-        print(f"  - Removed duplicates: {dedup_stats['removed']}")
-        print(f"  - Deduplication decisions: {len(dedup_stats['decisions'])}")
+        # Basic statistics
+        sequences = set(ann['sequence_number'] for ann in self.annotations)
+        min_seq = min(sequences) if sequences else 0
+        max_seq = max(sequences) if sequences else 0
         
-        print(f"\n📋 Deduplication decisions:")
-        for decision in dedup_stats['decisions']:
-            winner_info = f"{decision['winner']} (appears {decision['winner_count']} times)"
-            loser_info = ", ".join([f"{l['label']} ({l['count']})" for l in decision['losers']])
-            print(f"  '{decision['text']}' @ {decision['positions']}: kept {winner_info}, removed {loser_info}")
+        # Hierarchical analysis
+        hierarchy = self.analyze_hierarchical_structure()
+        total_word_spans = sum(h['word_level'] for h in hierarchy.values())
+        total_phrase_spans = sum(h['phrase_level'] for h in hierarchy.values())
+        total_clause_spans = sum(h['clause_level'] for h in hierarchy.values())
+        total_sequences = len(hierarchy)
         
-        # Save deduplicated annotations
-        dedup_file = annotations_file.parent / "annotations_deduplicated.jsonl"
-        with open(dedup_file, 'w', encoding='utf-8') as f:
-            for ann in annotations:
-                f.write(json.dumps(ann, ensure_ascii=False) + '\n')
-        print(f"\n💾 Saved deduplicated annotations to: {dedup_file}")
-    else:
-        print("✅ No duplicates found - all annotations are unique!")
-    
-    # Sequence summary
-    sequences = set(ann['sequence_number'] for ann in annotations)
-    print(f"\n📝 Sequences analyzed: {sorted(sequences)}")
-    print()
-    
-    # Hierarchical structure analysis
-    print("🏗️  HIERARCHICAL STRUCTURE ANALYSIS")
-    print("-" * 40)
-    hierarchy = analyze_hierarchical_structure(annotations)
-    
-    # Calculate global statistics
-    total_word_spans = sum(h['word_level'] for h in hierarchy.values())
-    total_phrase_spans = sum(h['phrase_level'] for h in hierarchy.values())
-    total_clause_spans = sum(h['clause_level'] for h in hierarchy.values())
-    total_sequences = len(hierarchy)
-    
-    print(f"📊 GLOBAL SPAN STATISTICS:")
-    print(f"  Total Word-level spans: {total_word_spans}")
-    print(f"  Total Phrase-level spans: {total_phrase_spans}")
-    print(f"  Total Clause-level spans: {total_clause_spans}")
-    print(f"  Total spans across all levels: {total_word_spans + total_phrase_spans + total_clause_spans}")
-    print()
-    
-    print(f"📈 AVERAGES PER SEQUENCE:")
-    print(f"  Avg word spans/sequence: {total_word_spans / total_sequences:.1f}")
-    print(f"  Avg phrase spans/sequence: {total_phrase_spans / total_sequences:.1f}")
-    print(f"  Avg clause spans/sequence: {total_clause_spans / total_sequences:.1f}")
-    print(f"  Avg total spans/sequence: {(total_word_spans + total_phrase_spans + total_clause_spans) / total_sequences:.1f}")
-    print()
-    
-    print(f"📋 SPAN DISTRIBUTION:")
-    total_spans = total_word_spans + total_phrase_spans + total_clause_spans
-    print(f"  Word-level: {total_word_spans / total_spans * 100:.1f}% of all spans")
-    print(f"  Phrase-level: {total_phrase_spans / total_spans * 100:.1f}% of all spans")
-    print(f"  Clause-level: {total_clause_spans / total_spans * 100:.1f}% of all spans")
-    print()
-    
-    print(f"📏 SEQUENCE-BY-SEQUENCE BREAKDOWN:")
-    for seq_num in sorted(hierarchy.keys()):
-        h = hierarchy[seq_num]
-        print(f"Sequence {seq_num}: {h['total']} total spans")
-        print(f"  - Word level: {h['word_level']} ({h['word_level']/h['total']*100:.1f}%)")
-        print(f"  - Phrase level: {h['phrase_level']} ({h['phrase_level']/h['total']*100:.1f}%)")
-        print(f"  - Clause level: {h['clause_level']} ({h['clause_level']/h['total']*100:.1f}%)")
+        # Label distribution (with normalization)
+        raw_label_counts = Counter(ann['xbar_label'] for ann in self.annotations)
+        normalized_label_counts = Counter(XBarLabelMap.normalize_label(ann['xbar_label']) 
+                                        for ann in self.annotations)
         
-        # Check balance
-        ratio = h['word_level'] / max(h['phrase_level'], 1)
-        if ratio > 10:
-            print(f"  ⚠️  High word-to-phrase ratio: {ratio:.1f}")
-        elif ratio < 2:
-            print(f"  ⚠️  Low word-to-phrase ratio: {ratio:.1f}")
-    print()
-    
-    # Overlapping spans analysis
-    print("🔄 OVERLAPPING SPANS ANALYSIS")
-    print("-" * 40)
-    overlaps, coverage = analyze_overlapping_spans(annotations)
-    for seq_num in sorted(overlaps.keys()):
-        print(f"Sequence {seq_num}: {len(overlaps[seq_num])} overlapping pairs")
-        for ann1, ann2 in overlaps[seq_num][:3]:  # Show first 3
-            print(f"  - '{ann1['text']}' ({ann1['xbar_label']}) overlaps '{ann2['text']}' ({ann2['xbar_label']})")
-        if len(overlaps[seq_num]) > 3:
-            print(f"  ... and {len(overlaps[seq_num]) - 3} more")
-    print()
-    
-    # Anomaly detection
-    print("🚨 ANOMALY DETECTION")
-    print("-" * 40)
-    anomalies = find_anomalies(annotations)
-    
-    if not anomalies:
-        print("✅ No anomalies detected!")
-    else:
-        anomaly_types = Counter(a['type'] for a in anomalies)
-        for anomaly_type, count in anomaly_types.items():
-            print(f"{anomaly_type}: {count} instances")
+        # Label validation statistics
+        all_valid_labels = set()
+        all_valid_labels.update(XBarLabelMap.NATURAL_LABELS.keys())
+        all_valid_labels.update(XBarLabelMap.CODE_LABELS.keys())
+        all_valid_labels.update(XBarLabelMap.MIXED_LABELS.keys())
         
-        print("\nDetailed anomalies:")
-        for anomaly in anomalies[:10]:  # Show first 10
-            if anomaly['type'] == 'exact_duplicate':
-                print(f"  🔄 Exact duplicate in seq {anomaly['sequence']}: '{anomaly['span']['text']}' ({anomaly['span']['xbar_label']})")
-            elif anomaly['type'] == 'boundary_duplicate':
-                print(f"  🏷️  Boundary duplicate in seq {anomaly['sequence']}: '{anomaly['text']}' @ {anomaly['positions']} has labels {anomaly['labels']}")
-            elif anomaly['type'] == 'suspicious_short_span':
-                print(f"  ⚠️  Short span in seq {anomaly['sequence']}: '{anomaly['span']['text']}' ({anomaly['span']['xbar_label']})")
-            elif anomaly['type'] == 'repetitive_text':
-                print(f"  🔁 Repetitive in seq {anomaly['sequence']}: '{anomaly['text']}' appears {anomaly['count']} times")
-            elif anomaly['type'] == 'inconsistent_labeling':
-                print(f"  🏷️  Inconsistent labels in seq {anomaly['sequence']}: '{anomaly['text']}' -> {anomaly['labels']}")
+        valid_labels = sum(1 for ann in self.annotations 
+                          if XBarLabelMap.normalize_label(ann['xbar_label']) in all_valid_labels)
+        invalid_labels = len(self.annotations) - valid_labels
         
-        if len(anomalies) > 10:
-            print(f"  ... and {len(anomalies) - 10} more anomalies")
-    print()
-    
-    # Boundary alignment check
-    print("🎯 BOUNDARY ALIGNMENT CHECK")
-    print("-" * 40)
-    boundary_issues = analyze_boundary_alignment(annotations)
-    if not boundary_issues:
-        print("✅ All boundaries align correctly!")
-    else:
-        print(f"⚠️  Found {len(boundary_issues)} boundary misalignments:")
-        for issue in boundary_issues[:5]:
-            print(f"  Seq {issue['sequence']}: expected '{issue['expected']}' but got '{issue['actual']}'")
-    print()
-    
-    # Label distribution
-    print("📈 LABEL DISTRIBUTION")
-    print("-" * 40)
-    label_counts = Counter(ann['xbar_label'] for ann in annotations)
-    
-    # Categorize labels by hierarchical level
-    word_labels = ['noun', 'verb', 'adjective', 'adverb', 'determiner', 
-                   'preposition', 'pronoun', 'conjunction', 'keyword', 
-                   'identifier', 'operator', 'literal', 'inline_code', 'punctuation']
-    phrase_labels = ['noun_phrase', 'verb_phrase', 'expression', 
-                     'function_call', 'code_block', 'documentation_comment', 'adverb_phrase']
-    clause_labels = ['main_clause', 'subordinate_clause', 'if_statement', 
-                     'loop_statement', 'function_definition', 'relative_clause']
-    
-    word_count = sum(label_counts[label] for label in word_labels if label in label_counts)
-    phrase_count = sum(label_counts[label] for label in phrase_labels if label in label_counts)
-    clause_count = sum(label_counts[label] for label in clause_labels if label in label_counts)
-    other_count = sum(count for label, count in label_counts.items() 
-                     if label not in word_labels + phrase_labels + clause_labels)
-    
-    print(f"📊 BY HIERARCHICAL LEVEL:")
-    print(f"  Word-level labels: {word_count} spans")
-    print(f"  Phrase-level labels: {phrase_count} spans")  
-    print(f"  Clause-level labels: {clause_count} spans")
-    if other_count > 0:
-        print(f"  Other/Unclassified: {other_count} spans")
-    print()
-    
-    print(f"📋 ALL LABELS (sorted by frequency):")
-    for label, count in label_counts.most_common():
-        percentage = count / len(annotations) * 100
-        print(f"  {label}: {count} ({percentage:.1f}%)")
-    print()
-    
-    # Additional span statistics
-    print("📐 SPAN LENGTH STATISTICS")
-    print("-" * 40)
-    span_lengths = [len(ann['text']) for ann in annotations]
-    avg_length = sum(span_lengths) / len(span_lengths)
-    min_length = min(span_lengths)
-    max_length = max(span_lengths)
-    median_length = sorted(span_lengths)[len(span_lengths) // 2]
-    
-    print(f"  Average span length: {avg_length:.1f} characters")
-    print(f"  Minimum span length: {min_length} characters")
-    print(f"  Maximum span length: {max_length} characters")
-    print(f"  Median span length: {median_length} characters")
-    
-    # Length distribution
-    length_ranges = [(1, 5), (6, 15), (16, 30), (31, 50), (51, float('inf'))]
-    print(f"\n  Length distribution:")
-    for min_len, max_len in length_ranges:
-        if max_len == float('inf'):
-            count = sum(1 for length in span_lengths if length >= min_len)
-            range_str = f"{min_len}+ chars"
+        # Span length statistics
+        span_lengths = [len(ann['text']) for ann in self.annotations]
+        avg_length = sum(span_lengths) / len(span_lengths) if span_lengths else 0
+        min_length = min(span_lengths) if span_lengths else 0
+        max_length = max(span_lengths) if span_lengths else 0
+        
+        # Enhanced analysis
+        overlap_analysis = self.analyze_overlap_patterns()
+        domain_analysis = self.analyze_domain_distribution()
+        consistency_analysis = self.analyze_consistency_patterns()
+        
+        # Working files analysis (if output_dir provided)
+        working_analysis = None
+        if output_dir:
+            working_analysis = self.analyze_working_files(output_dir)
+        
+        # Anomaly detection
+        anomalies = self.find_anomalies()
+        anomaly_counts = Counter(a.get('severity', 'unknown') for a in anomalies)
+        
+        # Boundary alignment check
+        boundary_issues = 0
+        for ann in self.annotations:
+            raw_text = ann['raw']
+            start, end = ann['start_pos'], ann['end_pos']
+            if start < len(raw_text) and end <= len(raw_text):
+                actual_text = raw_text[start:end]
+                if actual_text != ann['text']:
+                    boundary_issues += 1
+        
+        # Log clean summary
+        logger.info("=" * 40)
+        logger.info("ANNOTATION ANALYSIS SUMMARY")
+        logger.info("=" * 40)
+        logger.info(f"Total annotations: {len(self.annotations)}")
+        logger.info(f"Sequences analyzed: {total_sequences} (seq {min_seq} to {max_seq})")
+        
+        logger.info("Hierarchical distribution:")
+        logger.info(f"  Word-level spans: {total_word_spans} ({total_word_spans/len(self.annotations)*100:.1f}%)")
+        logger.info(f"  Phrase-level spans: {total_phrase_spans} ({total_phrase_spans/len(self.annotations)*100:.1f}%)")
+        logger.info(f"  Clause-level spans: {total_clause_spans} ({total_clause_spans/len(self.annotations)*100:.1f}%)")
+        
+        logger.info("Span statistics:")
+        logger.info(f"  Average spans per sequence: {len(self.annotations)/total_sequences:.1f}")
+        logger.info(f"  Average span length: {avg_length:.1f} characters")
+        logger.info(f"  Span length range: {min_length}-{max_length} characters")
+        
+        # Enhanced metrics logging
+        logger.info("Coverage and overlap analysis:")
+        logger.info(f"  Text coverage rate: {overlap_analysis['coverage_rate']*100:.1f}%")
+        logger.info(f"  Span overlaps: {overlap_analysis['total_overlaps']} ({overlap_analysis['overlap_rate']*100:.1f}% of spans)")
+        
+        logger.info("Domain distribution:")
+        for domain, stats in domain_analysis.items():
+            logger.info(f"  {domain}: {stats['sequences']} sequences, {stats['spans']} spans, {stats['avg_spans']:.1f} avg/seq")
+        
+        logger.info("Label consistency:")
+        logger.info(f"  Consistent texts: {consistency_analysis['consistent_texts']}")
+        logger.info(f"  Inconsistent texts: {consistency_analysis['inconsistent_texts']}")
+        logger.info(f"  Consistency rate: {consistency_analysis['consistency_rate']*100:.1f}%")
+        if consistency_analysis['top_inconsistencies']:
+            logger.info("  Top inconsistencies:")
+            for item in consistency_analysis['top_inconsistencies'][:3]:
+                logger.info(f"    '{item['text']}': {item['labels']} ({item['count']} occurrences)")
+        
+        logger.info("Label validation:")
+        logger.info(f"  Valid labels: {valid_labels} ({valid_labels/len(self.annotations)*100:.1f}%)")
+        if invalid_labels > 0:
+            logger.info(f"  Invalid labels: {invalid_labels} ({invalid_labels/len(self.annotations)*100:.1f}%)")
+        
+        logger.info("Top labels (normalized):")
+        for label, count in normalized_label_counts.most_common(5):
+            percentage = count / len(self.annotations) * 100
+            logger.info(f"  {label}: {count} ({percentage:.1f}%)")
+        
+        # Working files analysis (if available)
+        if working_analysis and 'error' not in working_analysis:
+            logger.info("Working files analysis:")
+            logger.info(f"  Total working files: {working_analysis['total_working_files']}")
+            if working_analysis['error_patterns']:
+                logger.info("  Error patterns:")
+                for error_type, count in working_analysis['error_patterns'].items():
+                    logger.info(f"    {error_type}: {count}")
+            if working_analysis['domain_performance']:
+                logger.info("  Domain performance:")
+                for domain, stats in working_analysis['domain_performance'].items():
+                    logger.info(f"    {domain}: {stats['successful']}/{stats['total']} ({stats['success_rate']*100:.1f}%)")
+        
+        if anomalies:
+            logger.info(f"Anomalies detected: {len(anomalies)} total")
+            for severity, count in anomaly_counts.items():
+                logger.info(f"  {severity}: {count}")
         else:
-            count = sum(1 for length in span_lengths if min_len <= length <= max_len)
-            range_str = f"{min_len}-{max_len} chars"
+            logger.info("No anomalies detected")
+            
+        if boundary_issues == 0:
+            logger.info("Boundary alignment: Perfect (100% accurate)")
+        else:
+            logger.info(f"Boundary alignment: {boundary_issues} misalignments found")
         
-        percentage = count / len(span_lengths) * 100
-        print(f"    {range_str}: {count} spans ({percentage:.1f}%)")
-    print()
-    
-    print("✨ Analysis complete!")
+        # Return summary data
+        return {
+            'total_annotations': len(self.annotations),
+            'total_sequences': total_sequences,
+            'sequence_range': (min_seq, max_seq),
+            'hierarchical_stats': {
+                'word_level': total_word_spans,
+                'phrase_level': total_phrase_spans, 
+                'clause_level': total_clause_spans
+            },
+            'span_stats': {
+                'avg_per_sequence': len(self.annotations) / total_sequences if total_sequences > 0 else 0,
+                'avg_length': avg_length,
+                'length_range': (min_length, max_length)
+            },
+            'overlap_analysis': overlap_analysis,
+            'domain_analysis': domain_analysis,
+            'consistency_analysis': consistency_analysis,
+            'working_analysis': working_analysis,
+            'label_validation': {
+                'valid_labels': valid_labels,
+                'invalid_labels': invalid_labels,
+                'validation_rate': valid_labels / len(self.annotations) if self.annotations else 0
+            },
+            'top_labels_raw': dict(raw_label_counts.most_common(5)),
+            'top_labels_normalized': dict(normalized_label_counts.most_common(5)),
+            'anomalies': {
+                'total': len(anomalies),
+                'by_severity': dict(anomaly_counts)
+            },
+            'boundary_issues': boundary_issues
+        }
 
-if __name__ == "__main__":
-    main()
+
+def analyze_annotations(annotations_file: str = "data/annotations/annotations.jsonl") -> Dict[str, Any]:
+    """Run annotation analysis and return summary."""
+    analyzer = AnnotationAnalyzer(annotations_file)
+    return analyzer.analyze_and_report()
+
