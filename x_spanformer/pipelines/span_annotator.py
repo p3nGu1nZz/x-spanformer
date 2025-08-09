@@ -228,18 +228,22 @@ class SpanAnnotatorPipeline:
                 
                 sequence_number = data.get("sequence_number", 0)
                 span_annotations = data.get("span_annotations", [])
+                status = data.get("status", "unknown")
                 
-                if span_annotations:
-                    status = "completed"
+                # Only consider it completed if it has spans AND status is completed
+                if span_annotations and len(span_annotations) > 0 and status == "completed":
                     span_count = len(span_annotations)
                     total_existing_spans += span_count
                     completed_sequences += 1
-                    existing_results[sequence_number] = status
+                    existing_results[sequence_number] = "completed"
                 else:
-                    # Track failed sequence for priority retry
+                    # Track for retry: either failed, no spans, or empty status
                     self.failed_sequence_ids.add(sequence_number)
-                    # Remove working file if no spans - force retry
-                    logger.info(f"Removing empty working file for sequence {sequence_number}: {working_file.name}")
+                    # Remove working file to force retry
+                    if not span_annotations or len(span_annotations) == 0:
+                        logger.info(f"Removing empty working file for sequence {sequence_number}: {working_file.name}")
+                    else:
+                        logger.info(f"Removing failed working file for sequence {sequence_number}: {working_file.name}")
                     working_file.unlink()
                     failed_sequences += 1
                 
@@ -526,13 +530,22 @@ class SpanAnnotatorPipeline:
                 
                 if result.success and result.annotation_record:
                     annotation_record = result.annotation_record
-                    self.save_working_file(output_dir, sequence, annotation_record)
-                    successful_count += 1
-                    
                     span_count = len(annotation_record.span_annotations)
-                    # Update total span count in pipeline stats
-                    self.pipeline_stats["total_spans"] += span_count
-                    logger.info(f"SUCCESS: Sequence {seq_id}: {span_count} spans annotated")
+                    
+                    # Check if any spans were actually extracted
+                    if span_count > 0:
+                        self.save_working_file(output_dir, sequence, annotation_record)
+                        successful_count += 1
+                        
+                        # Update total span count in pipeline stats
+                        self.pipeline_stats["total_spans"] += span_count
+                        logger.info(f"SUCCESS: Sequence {seq_id}: {span_count} spans annotated")
+                    else:
+                        # No spans extracted - treat as skipped for retry
+                        skipped_count += 1
+                        logger.warning(f"SKIPPED: Sequence {seq_id}: No spans extracted - will retry on next run")
+                        # Don't save working file so sequence will be retried
+                        continue
                     
                     # Calculate and log progress summary
                     current_time = datetime.now()
