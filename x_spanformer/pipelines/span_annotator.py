@@ -655,7 +655,7 @@ class SpanAnnotatorPipeline:
             try:
                 logger.info("Running annotation analysis...")
                 analyzer = AnnotationAnalyzer(str(annotations_file))
-                analyzer.analyze_and_report()
+                analyzer.analyze_and_report(str(output_dir))
             except Exception as e:
                 logger.warning(f"Annotation analysis failed: {e}")
         

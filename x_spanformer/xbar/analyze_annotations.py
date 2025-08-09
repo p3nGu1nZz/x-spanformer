@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 from collections import defaultdict, Counter
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from .xbar_map import XBarLabelMap
 
@@ -182,7 +182,165 @@ class AnnotationAnalyzer:
         
         return anomalies
 
-    def analyze_and_report(self) -> Dict[str, Any]:
+    def analyze_overlap_patterns(self) -> Dict[str, Any]:
+        """Analyze span overlap patterns and coverage."""
+        by_sequence = defaultdict(list)
+        for ann in self.annotations:
+            by_sequence[ann['sequence_number']].append(ann)
+        
+        total_overlaps = 0
+        total_coverage_chars = 0
+        total_text_chars = 0
+        overlap_details = []
+        
+        for seq_num, seq_anns in by_sequence.items():
+            # Sort spans by start position
+            sorted_spans = sorted(seq_anns, key=lambda x: x['start_pos'])
+            
+            # Find overlaps within sequence
+            seq_overlaps = 0
+            for i, span1 in enumerate(sorted_spans):
+                for span2 in sorted_spans[i+1:]:
+                    # Check if spans overlap
+                    if (span1['start_pos'] < span2['end_pos'] and 
+                        span2['start_pos'] < span1['end_pos']):
+                        seq_overlaps += 1
+                        overlap_details.append({
+                            'sequence': seq_num,
+                            'span1': span1,
+                            'span2': span2,
+                            'overlap_chars': min(span1['end_pos'], span2['end_pos']) - 
+                                           max(span1['start_pos'], span2['start_pos'])
+                        })
+            
+            total_overlaps += seq_overlaps
+            
+            # Calculate coverage for this sequence
+            if seq_anns:
+                raw_text = seq_anns[0]['raw']
+                total_text_chars += len(raw_text)
+                
+                # Calculate unique covered characters
+                covered_positions = set()
+                for span in seq_anns:
+                    covered_positions.update(range(span['start_pos'], span['end_pos']))
+                total_coverage_chars += len(covered_positions)
+        
+        coverage_rate = total_coverage_chars / total_text_chars if total_text_chars > 0 else 0
+        
+        return {
+            'total_overlaps': total_overlaps,
+            'overlap_rate': total_overlaps / len(self.annotations) if self.annotations else 0,
+            'coverage_rate': coverage_rate,
+            'overlap_details': overlap_details[:10]  # Sample of overlaps
+        }
+    
+    def analyze_domain_distribution(self) -> Dict[str, Any]:
+        """Analyze distribution by domain type."""
+        by_sequence = defaultdict(list)
+        for ann in self.annotations:
+            by_sequence[ann['sequence_number']].append(ann)
+        
+        domain_stats = defaultdict(lambda: {'sequences': 0, 'spans': 0, 'avg_spans': 0.0})
+        
+        for seq_num, seq_anns in by_sequence.items():
+            if seq_anns:
+                # Get domain from first annotation in sequence
+                domain = seq_anns[0].get('domain_type', 'unknown')
+                domain_stats[domain]['sequences'] += 1
+                domain_stats[domain]['spans'] += len(seq_anns)
+        
+        # Calculate averages
+        for domain, stats in domain_stats.items():
+            if stats['sequences'] > 0:
+                stats['avg_spans'] = stats['spans'] / stats['sequences']
+        
+        return dict(domain_stats)
+    
+    def analyze_consistency_patterns(self) -> Dict[str, Any]:
+        """Analyze label consistency for identical text spans."""
+        text_to_labels = defaultdict(set)
+        text_counts = defaultdict(int)
+        
+        for ann in self.annotations:
+            text = ann['text'].strip().lower()
+            if len(text) > 1:  # Skip single characters
+                text_to_labels[text].add(XBarLabelMap.normalize_label(ann['xbar_label']))
+                text_counts[text] += 1
+        
+        # Find inconsistent labeling
+        inconsistent_texts = []
+        consistent_texts = 0
+        
+        for text, labels in text_to_labels.items():
+            if len(labels) > 1 and text_counts[text] > 1:
+                inconsistent_texts.append({
+                    'text': text,
+                    'labels': list(labels),
+                    'count': text_counts[text]
+                })
+            elif text_counts[text] > 1:
+                consistent_texts += 1
+        
+        # Sort by frequency
+        inconsistent_texts.sort(key=lambda x: x['count'], reverse=True)
+        
+        return {
+            'consistent_texts': consistent_texts,
+            'inconsistent_texts': len(inconsistent_texts),
+            'consistency_rate': consistent_texts / (consistent_texts + len(inconsistent_texts)) if (consistent_texts + len(inconsistent_texts)) > 0 else 1.0,
+            'top_inconsistencies': inconsistent_texts[:10]
+        }
+    
+    def analyze_working_files(self, output_dir: str) -> Dict[str, Any]:
+        """Analyze working files for processing patterns and performance."""
+        working_dir = Path(output_dir) / "working"
+        if not working_dir.exists():
+            return {'error': 'Working directory not found'}
+        
+        working_files = list(working_dir.glob("*.json"))
+        processing_times = []
+        error_patterns = defaultdict(int)
+        domain_performance = defaultdict(lambda: {'total': 0, 'successful': 0, 'success_rate': 0.0})
+        
+        for working_file in working_files:
+            try:
+                with open(working_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                domain = data.get('domain_type', 'unknown')
+                domain_performance[domain]['total'] += 1
+                
+                if data.get('status') == 'completed':
+                    domain_performance[domain]['successful'] += 1
+                    # Could extract processing time if available in agent_metadata
+                elif data.get('error_message'):
+                    error_msg = data['error_message']
+                    # Categorize error types
+                    if 'timeout' in error_msg.lower():
+                        error_patterns['timeout'] += 1
+                    elif 'json' in error_msg.lower():
+                        error_patterns['json_parse'] += 1
+                    elif 'connection' in error_msg.lower():
+                        error_patterns['connection'] += 1
+                    else:
+                        error_patterns['other'] += 1
+                        
+            except Exception as e:
+                error_patterns['file_read_error'] += 1
+        
+        # Calculate success rates by domain
+        for domain, stats in domain_performance.items():
+            if stats['total'] > 0:
+                stats['success_rate'] = stats['successful'] / stats['total']
+        
+        return {
+            'total_working_files': len(working_files),
+            'error_patterns': dict(error_patterns),
+            'domain_performance': dict(domain_performance)
+        }
+
+    def analyze_and_report(self, output_dir: Optional[str] = None) -> Dict[str, Any]:
         """Perform comprehensive analysis and return summary statistics."""
         if not self.annotations:
             self.load_annotations()
@@ -220,6 +378,16 @@ class AnnotationAnalyzer:
         min_length = min(span_lengths) if span_lengths else 0
         max_length = max(span_lengths) if span_lengths else 0
         
+        # Enhanced analysis
+        overlap_analysis = self.analyze_overlap_patterns()
+        domain_analysis = self.analyze_domain_distribution()
+        consistency_analysis = self.analyze_consistency_patterns()
+        
+        # Working files analysis (if output_dir provided)
+        working_analysis = None
+        if output_dir:
+            working_analysis = self.analyze_working_files(output_dir)
+        
         # Anomaly detection
         anomalies = self.find_anomalies()
         anomaly_counts = Counter(a.get('severity', 'unknown') for a in anomalies)
@@ -251,6 +419,24 @@ class AnnotationAnalyzer:
         logger.info(f"  Average span length: {avg_length:.1f} characters")
         logger.info(f"  Span length range: {min_length}-{max_length} characters")
         
+        # Enhanced metrics logging
+        logger.info("Coverage and overlap analysis:")
+        logger.info(f"  Text coverage rate: {overlap_analysis['coverage_rate']*100:.1f}%")
+        logger.info(f"  Span overlaps: {overlap_analysis['total_overlaps']} ({overlap_analysis['overlap_rate']*100:.1f}% of spans)")
+        
+        logger.info("Domain distribution:")
+        for domain, stats in domain_analysis.items():
+            logger.info(f"  {domain}: {stats['sequences']} sequences, {stats['spans']} spans, {stats['avg_spans']:.1f} avg/seq")
+        
+        logger.info("Label consistency:")
+        logger.info(f"  Consistent texts: {consistency_analysis['consistent_texts']}")
+        logger.info(f"  Inconsistent texts: {consistency_analysis['inconsistent_texts']}")
+        logger.info(f"  Consistency rate: {consistency_analysis['consistency_rate']*100:.1f}%")
+        if consistency_analysis['top_inconsistencies']:
+            logger.info("  Top inconsistencies:")
+            for item in consistency_analysis['top_inconsistencies'][:3]:
+                logger.info(f"    '{item['text']}': {item['labels']} ({item['count']} occurrences)")
+        
         logger.info("Label validation:")
         logger.info(f"  Valid labels: {valid_labels} ({valid_labels/len(self.annotations)*100:.1f}%)")
         if invalid_labels > 0:
@@ -260,6 +446,19 @@ class AnnotationAnalyzer:
         for label, count in normalized_label_counts.most_common(5):
             percentage = count / len(self.annotations) * 100
             logger.info(f"  {label}: {count} ({percentage:.1f}%)")
+        
+        # Working files analysis (if available)
+        if working_analysis and 'error' not in working_analysis:
+            logger.info("Working files analysis:")
+            logger.info(f"  Total working files: {working_analysis['total_working_files']}")
+            if working_analysis['error_patterns']:
+                logger.info("  Error patterns:")
+                for error_type, count in working_analysis['error_patterns'].items():
+                    logger.info(f"    {error_type}: {count}")
+            if working_analysis['domain_performance']:
+                logger.info("  Domain performance:")
+                for domain, stats in working_analysis['domain_performance'].items():
+                    logger.info(f"    {domain}: {stats['successful']}/{stats['total']} ({stats['success_rate']*100:.1f}%)")
         
         if anomalies:
             logger.info(f"Anomalies detected: {len(anomalies)} total")
@@ -288,6 +487,10 @@ class AnnotationAnalyzer:
                 'avg_length': avg_length,
                 'length_range': (min_length, max_length)
             },
+            'overlap_analysis': overlap_analysis,
+            'domain_analysis': domain_analysis,
+            'consistency_analysis': consistency_analysis,
+            'working_analysis': working_analysis,
             'label_validation': {
                 'valid_labels': valid_labels,
                 'invalid_labels': invalid_labels,
