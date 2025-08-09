@@ -63,10 +63,8 @@ class XBarJsonParser:
                         continue
                 
                 if annotations:
-                    logger.debug(f"Successfully parsed {len(annotations)} individual object annotations")
                     filtered_annotations = self.filter_valid_annotations(annotations)
                     deduplicated_annotations = self._remove_duplicates(filtered_annotations)
-                    logger.debug(f"Removed {len(filtered_annotations) - len(deduplicated_annotations)} duplicates at JSON parse level")
                     return deduplicated_annotations
             else:
                 # Normal handling for array patterns - take first successful match
@@ -81,11 +79,9 @@ class XBarJsonParser:
                         else:
                             continue
                             
-                        logger.debug(f"Successfully parsed {len(annotations)} annotations")
                         filtered_annotations = self.filter_valid_annotations(annotations)
                         # Remove duplicates at JSON parse level before passing to annotator
                         deduplicated_annotations = self._remove_duplicates(filtered_annotations)
-                        logger.debug(f"Removed {len(filtered_annotations) - len(deduplicated_annotations)} duplicates at JSON parse level")
                         return deduplicated_annotations
                         
                     except json.JSONDecodeError as e:
@@ -94,13 +90,10 @@ class XBarJsonParser:
         
         # If standard JSON parsing fails, try regex-based extraction
         # This handles cases where quotes inside text break JSON structure
-        logger.debug("Standard JSON parsing failed, trying regex extraction")
         annotations = self._extract_annotations_with_regex(response_stripped)
         if annotations:
-            logger.debug(f"Regex extraction found {len(annotations)} annotations")
             filtered_annotations = self.filter_valid_annotations(annotations)
             deduplicated_annotations = self._remove_duplicates(filtered_annotations)
-            logger.debug(f"Removed {len(filtered_annotations) - len(deduplicated_annotations)} duplicates at JSON parse level")
             return deduplicated_annotations
         
         logger.warning("No valid JSON found in response, skipping sequence")
@@ -247,7 +240,6 @@ class XBarJsonParser:
             
             valid_annotations.append({'text': text, 'xbar_label': xbar_label})
         
-        logger.debug(f"Filtered to {len(valid_annotations)} valid annotations (no deduplication at turn level)")
         return valid_annotations
 # Create a global instance for convenience
 default_parser = XBarJsonParser()

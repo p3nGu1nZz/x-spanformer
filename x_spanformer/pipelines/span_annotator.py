@@ -32,6 +32,7 @@ from x_spanformer.schema.pretrain_record import PretrainRecord
 from x_spanformer.schema.annotation_record import AnnotationRecord, SpanAnnotation
 from x_spanformer.agents.session.span_annotator_session import SpanAnnotatorSession
 from x_spanformer.agents.ollama_client import check_ollama_connection
+from x_spanformer.xbar.analyze_annotations import AnnotationAnalyzer
 
 # Constants
 DEFAULT_MODEL = "llama3.2:3b"
@@ -363,7 +364,6 @@ class SpanAnnotatorPipeline:
                                 
                                 # Add all valid spans - no deduplication to preserve overlapping annotations
                                 all_annotations.append(flattened_record)
-                                logger.debug(f"Added {span_annotation['xbar_label']}: '{expected_text[:20]}...' at {start_pos}-{end_pos}")
                             else:
                                 logger.warning(f"Text mismatch seq {data['sequence_number']}: expected '{expected_text}' at {start_pos}-{end_pos}")
                         else:
@@ -649,6 +649,16 @@ class SpanAnnotatorPipeline:
         self.consolidate_results(output_dir)
         self.update_metadata(output_dir)
         
+        # Run annotation analysis if annotations were created
+        annotations_file = output_dir / "annotations.jsonl"
+        if annotations_file.exists():
+            try:
+                logger.info("Running annotation analysis...")
+                analyzer = AnnotationAnalyzer(str(annotations_file))
+                analyzer.analyze_and_report()
+            except Exception as e:
+                logger.warning(f"Annotation analysis failed: {e}")
+        
         # Final status summary
         if failed_count >= MAX_TOTAL_FAILURES:
             logger.critical(f"Pipeline terminated due to {failed_count} failures. Failed sequences will be retried on next run.")
@@ -724,27 +734,64 @@ async def main():
             range_spec=args.range
         )
         
-        # Display final results
+        # Display final results with clearer distinction between total and session counts
         logger.info("="*60)
         logger.info("PIPELINE COMPLETION SUMMARY")
         logger.info("="*60)
-        logger.info(f"Total sequences: {stats['total_sequences']}")
-        logger.info(f"Processed: {stats['processed_sequences']}")
-        logger.info(f"Successful: {stats['successful_annotations']}")
-        logger.info(f"Failed: {stats['failed_annotations']}")
-        logger.info(f"Skipped: {stats.get('skipped_annotations', 0)}")
         
-        # Calculate success rate and other metrics from pipeline stats
-        total_spans = stats.get('total_spans', 0)
-        successful_sequences = stats['successful_annotations']
-        total_processed = stats['processed_sequences']
+        # Get total stats for clarity
+        total_in_range = stats['total_sequences']
+        processed_this_session = stats['processed_sequences'] 
+        already_completed = total_in_range - processed_this_session
+        successful_this_session = stats['successful_annotations']
+        failed_this_session = stats['failed_annotations']
+        skipped_this_session = stats.get('skipped_annotations', 0)
         
-        success_rate = (successful_sequences / total_processed) if total_processed > 0 else 0
-        avg_spans = (total_spans / successful_sequences) if successful_sequences > 0 else 0
+        # Show range statistics
+        logger.info(f"Sequences in range: {total_in_range}")
+        logger.info(f"Already completed: {already_completed}")
+        logger.info(f"Processed this session: {processed_this_session}")
+        logger.info(f"  - Successful: {successful_this_session}")
+        logger.info(f"  - Failed: {failed_this_session}")
+        logger.info(f"  - Skipped: {skipped_this_session}")
         
-        logger.info(f"Total spans: {total_spans}")
-        logger.info(f"Success rate: {success_rate:.2%}")
-        logger.info(f"Avg spans/sequence: {avg_spans:.1f}")
+        # Calculate span count for sequences in the requested range
+        total_spans_in_range = 0
+        working_dir = args.output / "working"
+        
+        if working_dir.exists():
+            # Load sequences to get the actual sequence numbers in range
+            sequences = pipeline.load_sequences(args.corpus, args.range)
+            requested_seq_ids = {pipeline.get_sequence_number(seq) for seq in sequences}
+            
+            # Count spans only from sequences in the requested range
+            for working_file in working_dir.glob("*.json"):
+                try:
+                    with open(working_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    seq_id = data.get("sequence_number")
+                    if seq_id in requested_seq_ids and data.get("status") == "completed":
+                        span_count = len(data.get("span_annotations", []))
+                        total_spans_in_range += span_count
+                except Exception:
+                    continue  # Skip invalid files
+        
+        # Session success rate (for sequences processed this session)
+        session_success_rate = (successful_this_session / processed_this_session) if processed_this_session > 0 else 0
+        
+        # Average spans per sequence (for successfully processed sequences this session)
+        session_total_spans = stats.get('total_spans', 0)  # Spans from this session only
+        avg_spans_this_session = (session_total_spans / successful_this_session) if successful_this_session > 0 else 0
+        
+        # Average spans across all completed sequences in range
+        completed_sequences_in_range = already_completed + successful_this_session
+        avg_spans_overall = (total_spans_in_range / completed_sequences_in_range) if completed_sequences_in_range > 0 else 0
+        
+        logger.info(f"Total spans in requested range: {total_spans_in_range}")
+        logger.info(f"Session success rate: {session_success_rate:.2%}")
+        logger.info(f"Avg spans/sequence (this session): {avg_spans_this_session:.1f}")
+        logger.info(f"Avg spans/sequence (overall range): {avg_spans_overall:.1f}")
         
         logger.info(f"Results: {args.output}")
         logger.info(f"Working files: {args.output / 'working'}")
@@ -756,7 +803,8 @@ async def main():
             sys.exit(1)
         
         logger.info("Pipeline completed successfully!")
-        logger.info(f"Stats: {stats['successful_annotations']}/{stats['total_sequences']} sequences annotated")
+        logger.info(f"Session stats: {successful_this_session}/{processed_this_session} sequences processed successfully")
+        logger.info(f"Overall progress: {completed_sequences_in_range}/{total_in_range} sequences complete")
         logger.info(f"Output: {args.output}")
         
     except KeyboardInterrupt:
