@@ -264,10 +264,10 @@ class XBarDictionary:
     
     def save_dictionaries(self, output_dir: Path) -> int:
         """
-        Save dictionaries to a single dictionary.jsonl file.
+        Save dictionaries to a single spans.jsonl file.
         
         Args:
-            output_dir: Directory to save the dictionary file
+            output_dir: Directory to save the spans file
             
         Returns:
             Total number of spans saved
@@ -275,10 +275,10 @@ class XBarDictionary:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        dictionary_file = output_dir / "dictionary.jsonl"
+        spans_file = output_dir / "spans.jsonl"
         total_spans = 0
         
-        with open(dictionary_file, 'w', encoding='utf-8') as f:
+        with open(spans_file, 'w', encoding='utf-8') as f:
             span_id = 0
             for domain_type, levels in self.dictionaries.items():
                 for hierarchical_level, spans in levels.items():
@@ -295,21 +295,21 @@ class XBarDictionary:
                         span_id += 1
                         total_spans += 1
         
-        logger.info(f"Saved {total_spans} unique spans to dictionary.jsonl")
+        logger.info(f"Saved {total_spans} unique spans to spans.jsonl")
         return total_spans
     
     def load_dictionaries(self, output_dir: Path):
         """
-        Load dictionaries from dictionary.jsonl file.
+        Load dictionaries from spans.jsonl file.
         
         Args:
-            output_dir: Directory containing dictionary.jsonl file
+            output_dir: Directory containing spans.jsonl file
         """
         output_dir = Path(output_dir)
-        dictionary_file = output_dir / "dictionary.jsonl"
+        spans_file = output_dir / "spans.jsonl"
         
-        if not dictionary_file.exists():
-            logger.debug(f"No existing dictionary file found at {dictionary_file}")
+        if not spans_file.exists():
+            logger.debug(f"No existing spans file found at {spans_file}")
             return
         
         # Reset dictionaries
@@ -317,7 +317,7 @@ class XBarDictionary:
         loaded_spans = 0
         
         try:
-            with open(dictionary_file, 'r', encoding='utf-8') as f:
+            with open(spans_file, 'r', encoding='utf-8') as f:
                 for line_num, line in enumerate(f, 1):
                     try:
                         record = json.loads(line.strip())
@@ -331,13 +331,13 @@ class XBarDictionary:
                             loaded_spans += 1
                         
                     except (json.JSONDecodeError, KeyError) as e:
-                        logger.warning(f"Skipping invalid line {line_num} in dictionary file: {e}")
+                        logger.warning(f"Skipping invalid line {line_num} in spans file: {e}")
                         continue
             
-            logger.info(f"Loaded {loaded_spans} spans from dictionary.jsonl")
+            logger.info(f"Loaded {loaded_spans} spans from spans.jsonl")
             
         except Exception as e:
-            logger.error(f"Error loading dictionary file: {e}")
+            logger.error(f"Error loading spans file: {e}")
 
 
 # Global dictionary instance
