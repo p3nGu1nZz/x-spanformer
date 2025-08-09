@@ -34,6 +34,7 @@ from x_spanformer.agents.session.span_annotator_session import SpanAnnotatorSess
 from x_spanformer.agents.ollama_client import check_ollama_connection
 from x_spanformer.xbar.analyze_annotations import AnnotationAnalyzer
 from x_spanformer.xbar.xbar_dict import get_global_dict
+from x_spanformer.xbar.xbar_map import XBarLabelMap
 
 # Constants
 DEFAULT_MODEL = "llama3.2:3b"
@@ -487,8 +488,14 @@ class SpanAnnotatorPipeline:
         elif normalized_label in clause_labels:
             return "clause_level"
         else:
-            logger.debug(f"Unknown hierarchical level for label: {xbar_label}")
-            return None
+            # Use the helper function from xbar_map for unknown labels
+            mapped_level = XBarLabelMap.get_hierarchical_level(xbar_label)
+            if mapped_level:
+                logger.debug(f"Mapped unknown label '{xbar_label}' to '{mapped_level}'")
+                return mapped_level
+            else:
+                logger.warning(f"Unknown hierarchical level for label: {xbar_label}")
+                return None
     
     def update_metadata(self, output_dir: Path):
         """Update global metadata file."""

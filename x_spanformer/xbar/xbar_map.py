@@ -240,4 +240,96 @@ class XBarLabelMap:
         # Return original if no mapping found
         return normalized
     
+    @classmethod
+    def get_hierarchical_level(cls, label: str) -> Optional[str]:
+        """
+        Determine hierarchical level (word_level, phrase_level, clause_level) for a label.
+        
+        Args:
+            label: X-bar label to classify
+            
+        Returns:
+            Hierarchical level string or None if unknown
+        """
+        if not label or not label.strip():
+            return None
+        
+        # Normalize the label first
+        normalized_label = label.lower().strip()
+        
+        # Word-level labels (terminals)
+        word_level_patterns = {
+            # Natural language word-level
+            'noun', 'verb', 'adjective', 'adverb', 'determiner', 'preposition', 
+            'pronoun', 'conjunction', 'punctuation',
+            # Code word-level
+            'keyword', 'identifier', 'operator', 'literal', 'delimiter', 'type_name', 'comment',
+            # Additional patterns from pipeline output
+            'proper_noun', 'proper noun', 'parenthesis', 'colon', 'prefix', 'numeral'
+        }
+        
+        # Phrase-level labels (intermediate projections)
+        phrase_level_patterns = {
+            # Natural language phrase-level
+            'noun_phrase', 'verb_phrase', 'adjective_phrase', 'adverb_phrase', 'prepositional_phrase',
+            # Code phrase-level
+            'expression', 'function_call', 'assignment', 'parameter_list', 'argument_list',
+            # Mixed domain phrase-level
+            'inline_code', 'code_block',
+            # Additional patterns from pipeline output
+            'code_expression'
+        }
+        
+        # Clause-level labels (maximal projections)
+        clause_level_patterns = {
+            # Natural language clause-level
+            'main_clause', 'subordinate_clause', 'relative_clause',
+            # Code clause-level
+            'if_statement', 'loop_statement', 'function_definition', 'class_definition', 
+            'import_statement', 'return_statement',
+            # Mixed domain clause-level
+            'documentation_comment',
+            # Additional patterns from pipeline output
+            'code_statement', 'code statement'
+        }
+        
+        # Handle multi-label cases (e.g., "noun, punctuation")
+        if ',' in normalized_label:
+            # For multi-label, take the first valid label
+            parts = [part.strip() for part in normalized_label.split(',')]
+            for part in parts:
+                level = cls.get_hierarchical_level(part)
+                if level:
+                    return level
+            # If no valid parts found, default to word level for multi-labels
+            return "word_level"
+        
+        # Check exact matches
+        if normalized_label in word_level_patterns:
+            return "word_level"
+        elif normalized_label in phrase_level_patterns:
+            return "phrase_level"
+        elif normalized_label in clause_level_patterns:
+            return "clause_level"
+        
+        # Check for pattern matches (substring matching for flexible labeling)
+        # Word-level patterns
+        if any(pattern in normalized_label for pattern in ['noun', 'verb', 'adj', 'adv', 'punct', 'paren', 'colon']):
+            return "word_level"
+        
+        # Phrase-level patterns  
+        if any(pattern in normalized_label for pattern in ['phrase', 'expression', 'call', 'assign', 'list']):
+            return "phrase_level"
+            
+        # Clause-level patterns
+        if any(pattern in normalized_label for pattern in ['clause', 'statement', 'definition', 'import', 'return']):
+            return "clause_level"
+        
+        # Default fallback - if it contains "code" and no other indicators, assume phrase level
+        if 'code' in normalized_label:
+            return "phrase_level"
+        
+        # Unknown label
+        return None
+    
 

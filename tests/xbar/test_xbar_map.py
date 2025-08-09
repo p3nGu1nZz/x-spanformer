@@ -131,4 +131,92 @@ class TestXBarLabelMap:
                 assert isinstance(description, str)
                 assert len(label_name) > 0
                 assert len(description) > 10  # Descriptions should be meaningful
-                assert description != label_name  # Description should be different from name
+                assert description != label_name  # Description should be different from name    
+    def test_get_hierarchical_level_word_level(self):
+        """Test hierarchical level classification for word-level labels."""
+        word_level_labels = [
+            "noun", "verb", "adjective", "adverb", "determiner", "preposition",
+            "pronoun", "conjunction", "punctuation", "keyword", "identifier", 
+            "operator", "literal", "delimiter", "type_name", "comment",
+            "proper_noun", "proper noun", "parenthesis", "colon", "prefix", "numeral"
+        ]
+        
+        for label in word_level_labels:
+            level = XBarLabelMap.get_hierarchical_level(label)
+            assert level == "word_level", f"Expected 'word_level' for '{label}', got '{level}'"
+    
+    def test_get_hierarchical_level_phrase_level(self):
+        """Test hierarchical level classification for phrase-level labels."""
+        phrase_level_labels = [
+            "noun_phrase", "verb_phrase", "adjective_phrase", "adverb_phrase", 
+            "prepositional_phrase", "expression", "function_call", "assignment",
+            "parameter_list", "argument_list", "inline_code", "code_block", "code_expression"
+        ]
+        
+        for label in phrase_level_labels:
+            level = XBarLabelMap.get_hierarchical_level(label)
+            assert level == "phrase_level", f"Expected 'phrase_level' for '{label}', got '{level}'"
+    
+    def test_get_hierarchical_level_clause_level(self):
+        """Test hierarchical level classification for clause-level labels."""
+        clause_level_labels = [
+            "main_clause", "subordinate_clause", "relative_clause", "if_statement",
+            "loop_statement", "function_definition", "class_definition", 
+            "import_statement", "return_statement", "documentation_comment",
+            "code_statement", "code statement"
+        ]
+        
+        for label in clause_level_labels:
+            level = XBarLabelMap.get_hierarchical_level(label)
+            assert level == "clause_level", f"Expected 'clause_level' for '{label}', got '{level}'"
+    
+    def test_get_hierarchical_level_multi_label(self):
+        """Test hierarchical level classification for multi-label cases."""
+        multi_label_cases = [
+            ("noun, punctuation", "word_level"),  # Should take first valid label
+            ("verb, identifier", "word_level"),
+            ("expression, keyword", "phrase_level"),  # Expression wins over keyword
+        ]
+        
+        for label, expected_level in multi_label_cases:
+            level = XBarLabelMap.get_hierarchical_level(label)
+            assert level == expected_level, f"Expected '{expected_level}' for '{label}', got '{level}'"
+    
+    def test_get_hierarchical_level_pattern_matching(self):
+        """Test hierarchical level classification using pattern matching."""
+        pattern_cases = [
+            ("some_noun_variant", "word_level"),  # Contains 'noun'
+            ("complex_expression", "phrase_level"),  # Contains 'expression'
+            ("custom_statement", "clause_level"),  # Contains 'statement'
+            ("code_something", "phrase_level"),  # Contains 'code' (default to phrase)
+        ]
+        
+        for label, expected_level in pattern_cases:
+            level = XBarLabelMap.get_hierarchical_level(label)
+            assert level == expected_level, f"Expected '{expected_level}' for '{label}', got '{level}'"
+    
+    def test_get_hierarchical_level_edge_cases(self):
+        """Test hierarchical level classification for edge cases."""
+        edge_cases = [
+            ("", None),  # Empty string
+            ("   ", None),  # Whitespace only
+            (None, None),  # None input
+            ("unknown_label_type", None),  # Completely unknown
+        ]
+        
+        for label, expected_level in edge_cases:
+            level = XBarLabelMap.get_hierarchical_level(label)
+            assert level == expected_level, f"Expected '{expected_level}' for '{label}', got '{level}'"
+    
+    def test_get_hierarchical_level_case_insensitive(self):
+        """Test that hierarchical level classification is case insensitive."""
+        test_cases = [
+            ("NOUN", "word_level"),
+            ("Verb_Phrase", "phrase_level"),
+            ("CODE_STATEMENT", "clause_level"),
+            ("Proper Noun", "word_level"),
+        ]
+        
+        for label, expected_level in test_cases:
+            level = XBarLabelMap.get_hierarchical_level(label)
+            assert level == expected_level, f"Expected '{expected_level}' for '{label}', got '{level}'"
