@@ -402,12 +402,21 @@ class SpanAnnotatorPipeline:
             except Exception as e:
                 logger.warning(f"Consolidation error {working_file.name}: {e}")
         
+        # Clean and validate labels before saving
+        from x_spanformer.xbar.xbar_map import XBarLabelMap
+        cleaned_annotations, mapping_stats = XBarLabelMap.clean_and_validate_labels(all_annotations)
+        
+        logger.info(f"Label cleaning results:")
+        logger.info(f"  Valid labels (unchanged): {mapping_stats['valid']}")
+        logger.info(f"  Invalid labels mapped: {mapping_stats['mapped']}")
+        logger.info(f"  Invalid labels removed: {mapping_stats['removed']}")
+        
         # Write annotations.jsonl file
         with open(annotations_file, 'w', encoding='utf-8') as f:
-            for annotation in all_annotations:
+            for annotation in cleaned_annotations:
                 f.write(json.dumps(annotation, ensure_ascii=False) + '\n')
         
-        logger.info(f"Generated {len(all_annotations)} annotation records in annotations.jsonl")
+        logger.info(f"Generated {len(cleaned_annotations)} annotation records in annotations.jsonl")
         
         # Build dictionaries from collected spans
         logger.info("Building X-bar dictionaries from processed spans...")
