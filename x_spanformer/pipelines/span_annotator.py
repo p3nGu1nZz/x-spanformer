@@ -326,8 +326,9 @@ class SpanAnnotatorPipeline:
         logger.debug(f"Saved working file: sequence {sequence_number}")
     
     def consolidate_results(self, output_dir: Path):
-        """Build X-bar dictionaries from working files (dictionary-only approach)."""
+        """Build X-bar dictionaries and generate annotations.jsonl from working files."""
         working_dir = output_dir / "working"
+        annotations_file = output_dir / "annotations.jsonl"
         
         working_files = list(working_dir.glob("*.json"))
         logger.info(f"Building X-bar dictionaries from {len(working_files)} working files")
@@ -338,6 +339,9 @@ class SpanAnnotatorPipeline:
         # Dictionary building structures
         domain_spans = {}  # domain -> level -> list of spans
         total_spans_processed = 0
+        
+        # Collect all annotations for annotations.jsonl
+        all_annotations = []
         
         for working_file in sorted(working_files):
             try:
@@ -370,6 +374,21 @@ class SpanAnnotatorPipeline:
                             if actual_text == expected_text:
                                 total_spans_processed += 1
                                 
+                                # Create annotation record for annotations.jsonl
+                                annotation_record = {
+                                    "id": len(all_annotations),
+                                    "sequence_number": data["sequence_number"],
+                                    "raw": data["raw_text"],
+                                    "domain_type": domain_type,
+                                    "start_pos": start_pos,
+                                    "end_pos": end_pos,
+                                    "xbar_label": xbar_label,
+                                    "text": expected_text,
+                                    "model": self.model_name,
+                                    "timestamp": data.get("timestamp", "")
+                                }
+                                all_annotations.append(annotation_record)
+                                
                                 # Add to dictionary building - determine hierarchical level
                                 hierarchical_level = self._determine_hierarchical_level(xbar_label)
                                 if hierarchical_level:
@@ -382,6 +401,13 @@ class SpanAnnotatorPipeline:
             
             except Exception as e:
                 logger.warning(f"Consolidation error {working_file.name}: {e}")
+        
+        # Write annotations.jsonl file
+        with open(annotations_file, 'w', encoding='utf-8') as f:
+            for annotation in all_annotations:
+                f.write(json.dumps(annotation, ensure_ascii=False) + '\n')
+        
+        logger.info(f"Generated {len(all_annotations)} annotation records in annotations.jsonl")
         
         # Build dictionaries from collected spans
         logger.info("Building X-bar dictionaries from processed spans...")
@@ -403,7 +429,7 @@ class SpanAnnotatorPipeline:
         logger.info(f"Processed {total_spans_processed} spans for dictionary building")
         logger.info(f"Dictionary building: {total_new_spans} new unique spans added across all domains")
         
-        # Save dictionaries
+        # Save dictionaries to spans.jsonl
         xbar_dict.save_dictionaries(output_dir)
         
         # Log dictionary statistics
