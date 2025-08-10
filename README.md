@@ -196,14 +196,19 @@ uv run -m x_spanformer.pipelines.span_annotator \
 This implements **production-grade agentic X-bar span annotation** with enhanced robustness, featuring:
 
 - **Enhanced JSON Parsing Robustness**: Handles truncated LLM responses, malformed JSON, and case-insensitive matching
+- **Advanced Label Cleaning System**: Comprehensive word span validation with pattern-based filtering
 - **Independent Boundary Prediction**: Generates training targets for start/end position classification using factorized linear heads
 - **X-bar Hierarchical Structure**: Domain-specific classifier extraction based on linguistic phrase structure theory
+- **Intelligent Logging**: Aggregated counts replace repetitive debug messages for cleaner output
+- **Word Span Validation**: Supports percentages, abbreviations, expressions, and complex patterns
 - **Position-wise Binary Classification**: Creates sigmoid-normalized boundary probabilities for BCE loss training
 - **Multi-label Span Support**: Handles overlapping spans at different hierarchical levels (word → phrase → clause)
 - **Production Validation**: Zero position errors across 1,703 spans in 56 sequences (August 2025)
 
 **Production Results (August 2025):**
-- **1,703 total spans** generated with 128.2% overlap ratio
+- **60,558 clean annotations** from 61,053 original spans (99.2% retention rate)
+- **495 invalid word spans** automatically filtered using pattern-based validation
+- **352 labels mapped** from invalid to valid categories with aggregated logging
 - **Zero validation errors** in position encoding and text extraction
 - **Perfect alignment** with factorized pointer network requirements
 - **Enhanced reliability** with automatic recovery from LLM response issues
@@ -222,13 +227,18 @@ data/annotations/
 
 **Key Features:**
 - **Enhanced JSON Parsing**: Robust handling of truncated LLM responses and malformed JSON
+- **Advanced Label Cleaning**: Comprehensive word span validation with pattern-based filtering
 - **Bidirectional Context**: Built on X-Spanformer's position-wise embedding architecture where each H[t] contains bidirectional contextual information
 - **Boundary Detection Training**: Generates binary targets for start/end position prediction (not span-level embeddings)
 - **Multi-label Support**: BCE loss handles overlapping spans at different hierarchical levels
 - **Production Validation**: Zero position or text extraction errors across all generated spans
-- **Improved Logging**: Concise sequence selection summaries replace verbose lists for better performance and readability
+- **Intelligent Logging**: Aggregated counts replace repetitive debug messages for cleaner output
 
 **Recent Enhancements (August 2025):**
+- **Advanced Label Cleaning**: Pattern-based word span validation supporting percentages, abbreviations, and expressions
+- **Intelligent Logging System**: Aggregated counts replace thousands of repetitive debug messages
+- **Enhanced Word Span Patterns**: Support for decimals ("3.14"), percentages ("2.7%"), abbreviations ("Dr."), expressions ("[83]", "(t)", "|s|")
+- **Production Cleaning Results**: 99.2% retention rate with 495 spans filtered and 352 labels mapped
 - **Logging Optimization**: `Selected 1000 sequences (1 to 1000) out of 1000 requested` instead of massive sequence lists
 - **Performance**: Reduced I/O overhead and log file size while maintaining essential debugging information
 - **Scalability**: Handles large sequence ranges without log bloat or memory issues
@@ -245,6 +255,7 @@ X-Spanformer includes comprehensive test coverage organized into focused categor
 - **`tests/pipelines/`** - Data processing pipeline tests
   - `test_pipelines_pdf2jsonl.py` - PDF→JSONL conversion with AI judging
   - `test_pipelines_jsonl2vocab.py` - Vocabulary induction (Section 3.1)
+  - `test_pipeline_span_annotator.py` - Span annotation pipeline tests with label cleaning validation
   - `test_pipelines_vocab2embedding.py` - Seed embeddings & span generation (Section 3.2)
   - `test_integration_vocab2embedding.py` - End-to-end integration validation
 
@@ -262,6 +273,10 @@ X-Spanformer includes comprehensive test coverage organized into focused categor
   - `test_agents.py` - Base agent functionality
   - `test_span_annotator.py` - Span annotation pipeline tests
   - `test_e2e_ollama_client.py` - Ollama client integration
+
+- **`tests/xbar/`** - X-bar theory and label cleaning tests
+  - `test_xbar_map.py` - Label cleaning and word span validation tests
+  - `test_xbar_annotator.py` - X-bar annotation logic tests
 
 - **`tests/config/`** - Configuration system tests
   - `test_span_annotator_config.py` - Configuration loading with logging support

@@ -8,8 +8,10 @@ The Unified Span Annotator Pipeline is a **production-ready, battle-tested** imp
 
 - **Three-turn conversation strategy**: Progressive analysis from word-level → phrase-level → clause-level
 - **Enhanced JSON parsing robustness**: Handles truncated LLM responses, malformed JSON, and case-insensitive text matching
+- **Advanced label cleaning system**: Comprehensive word span validation with pattern-based filtering
 - **Resume capability**: Automatically resumes from previous progress with gap detection
 - **Production-grade error handling**: Comprehensive span validation and position verification
+- **Intelligent logging system**: Aggregated counts instead of verbose repetitive messages
 - **Real-time telemetry**: Progress tracking with detailed span type statistics
 - **Multiple output formats**: Working files, consolidated results, and analysis reports
 - **Factorized pointer network ready**: Generates training data perfectly aligned with Section 3.3 architecture
@@ -21,25 +23,29 @@ The Unified Span Annotator Pipeline is a **production-ready, battle-tested** imp
 1. **SpanAnnotatorPipeline**: Main pipeline orchestrator with resume and gap detection
 2. **SpanAnnotatorSession**: Async session management with timeout controls
 3. **XBarAnnotator**: X-bar theory-based span extraction with enhanced JSON parsing
-4. **Output Management**: Working files, consolidation, metadata, and analysis reports
-5. **JSON Parsing Robustness**: Truncation detection, malformed JSON recovery, case-insensitive matching
+4. **XBarLabelMap**: Advanced label cleaning and word span validation system
+5. **Output Management**: Working files, consolidation, metadata, and analysis reports
+6. **JSON Parsing Robustness**: Truncation detection, malformed JSON recovery, case-insensitive matching
 
 ### Processing Flow
 
 ```
 Input (corpus.jsonl) → Load Sequences → Filter by Range → 
 Process in Batches → Annotate with XBar → Enhanced JSON Parsing → 
-Save Working Files → Position Validation → Consolidate Results → 
-Generate Metadata → Analysis Reports → Output
+Save Working Files → Position Validation → Label Cleaning & Word Span Validation → 
+Consolidate Results → Generate Metadata → Analysis Reports → Output
 ```
 
 ### Production Status (August 2025)
 
-**✅ PRODUCTION READY**: Successfully processing sequences with zero position errors
-- **1,703 total spans** generated across 56 sequences 
-- **128.2% overlap ratio** supporting multi-label boundary prediction
+**✅ PRODUCTION READY**: Successfully processing sequences with zero position errors and advanced label cleaning
+- **60,558 clean annotations** from 61,053 original spans (99.2% retention rate)
+- **495 invalid word spans** automatically filtered using pattern-based validation
+- **352 labels mapped** from invalid to valid categories with aggregated logging
 - **Zero validation errors** in position encoding and text extraction
 - **Enhanced JSON robustness** handling truncated LLM responses
+- **Intelligent logging system** with count aggregation instead of repetitive debug messages
+- **Comprehensive word span validation** supporting percentages, abbreviations, and expressions
 - **Perfect alignment** with factorized pointer network requirements (Section 3.3)
 
 ## Usage
@@ -398,6 +404,54 @@ def _extract_text_boundaries(self, text: str, target_text: str) -> Optional[Tupl
 - **100% position validation** success rate
 - **Automatic recovery** from truncated responses at sequence 40
 - **Enhanced reliability** for large-scale annotation tasks
+
+## Enhanced Label Cleaning System
+
+### Advanced Word Span Validation
+
+The pipeline includes a comprehensive label cleaning and word span validation system that ensures high-quality training data:
+
+#### Pattern-Based Word Span Filtering
+- **Spaces detection**: Automatically removes spans containing spaces (not word-level)
+- **Mixed character validation**: Filters invalid combinations of letters, numbers, and special characters
+- **Identifier patterns**: Allows valid programming identifiers (letters + underscores/hyphens)
+- **Number formats**: Supports integers, decimals, negative numbers, and percentages
+- **Abbreviations**: Allows words with periods (e.g., "Dr.", "U.S.", "etc.")
+- **Expressions**: Supports bracketed `[83]`, parenthetical `(t)`, and pipe `|s|` expressions
+- **Trailing punctuation**: Allows words ending with colons ("words:")
+
+#### Label Mapping System
+- **Intelligent mapping**: Converts invalid labels to valid X-bar categories
+- **Aggregated logging**: Shows mapping counts instead of repetitive debug messages
+- **Statistical reporting**: Provides comprehensive cleaning statistics
+- **Zero data loss**: Maps rather than removes when possible
+
+#### Production Cleaning Results (August 2025)
+```
+Label cleaning results:
+  Valid labels (unchanged): 60,206
+  Invalid labels mapped: 352
+  Invalid labels removed: 0
+  Invalid word spans removed: 495
+  Total annotations before cleaning: 61,053
+  Total annotations after cleaning: 60,558
+  Total spans filtered: 495
+```
+
+**Key Statistics:**
+- **99.2% retention rate** - Only 495 spans (0.8%) filtered for quality
+- **Zero label removal** - All invalid labels successfully mapped to valid categories
+- **352 labels mapped** from variations like "proper noun" → "noun", "auxiliary" → "verb"
+- **Clean logging output** - Aggregated counts replace thousands of repetitive debug messages
+
+#### Supported Word Span Patterns
+- **Pure text**: `"transformer"`, `"attention"`
+- **Numbers**: `"42"`, `"3.14"`, `"-5"`, `"2.7%"`
+- **Identifiers**: `"attention_weights"`, `"multi-head"`
+- **Abbreviations**: `"Dr."`, `"U.S."`, `"etc."`
+- **Expressions**: `"[83]"`, `"(t)"`, `"|s|"`
+- **Punctuated**: `"words:"`, `"Note:"`
+- **Version numbers**: `"1.2.3"`, `"v2.0"`
 
 ## X-bar Theory Integration
 
