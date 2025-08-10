@@ -240,4 +240,220 @@ class XBarLabelMap:
         # Return original if no mapping found
         return normalized
     
+    @classmethod
+    def get_hierarchical_level(cls, label: str) -> Optional[str]:
+        """
+        Determine hierarchical level (word_level, phrase_level, clause_level) for a label.
+        
+        Args:
+            label: X-bar label to classify
+            
+        Returns:
+            Hierarchical level string or None if unknown
+        """
+        if not label or not label.strip():
+            return None
+        
+        # Normalize the label first
+        normalized_label = label.lower().strip()
+        
+        # Word-level labels (terminals)
+        word_level_patterns = {
+            # Natural language word-level
+            'noun', 'verb', 'adjective', 'adverb', 'determiner', 'preposition', 
+            'pronoun', 'conjunction', 'punctuation',
+            # Code word-level
+            'keyword', 'identifier', 'operator', 'literal', 'delimiter', 'type_name', 'comment',
+            # Additional patterns from pipeline output
+            'proper_noun', 'proper noun', 'parenthesis', 'colon', 'prefix', 'numeral'
+        }
+        
+        # Phrase-level labels (intermediate projections)
+        phrase_level_patterns = {
+            # Natural language phrase-level
+            'noun_phrase', 'verb_phrase', 'adjective_phrase', 'adverb_phrase', 'prepositional_phrase',
+            # Code phrase-level
+            'expression', 'function_call', 'assignment', 'parameter_list', 'argument_list',
+            # Mixed domain phrase-level
+            'inline_code', 'code_block',
+            # Additional patterns from pipeline output
+            'code_expression'
+        }
+        
+        # Clause-level labels (maximal projections)
+        clause_level_patterns = {
+            # Natural language clause-level
+            'main_clause', 'subordinate_clause', 'relative_clause',
+            # Code clause-level
+            'if_statement', 'loop_statement', 'function_definition', 'class_definition', 
+            'import_statement', 'return_statement',
+            # Mixed domain clause-level
+            'documentation_comment',
+            # Additional patterns from pipeline output
+            'code_statement', 'code statement'
+        }
+        
+        # Handle multi-label cases (e.g., "noun, punctuation")
+        if ',' in normalized_label:
+            # For multi-label, take the first valid label
+            parts = [part.strip() for part in normalized_label.split(',')]
+            for part in parts:
+                level = cls.get_hierarchical_level(part)
+                if level:
+                    return level
+            # If no valid parts found, default to word level for multi-labels
+            return "word_level"
+        
+        # Check exact matches
+        if normalized_label in word_level_patterns:
+            return "word_level"
+        elif normalized_label in phrase_level_patterns:
+            return "phrase_level"
+        elif normalized_label in clause_level_patterns:
+            return "clause_level"
+        
+        # Check for pattern matches (substring matching for flexible labeling)
+        # Word-level patterns
+        if any(pattern in normalized_label for pattern in ['noun', 'verb', 'adj', 'adv', 'punct', 'paren', 'colon']):
+            return "word_level"
+        
+        # Phrase-level patterns  
+        if any(pattern in normalized_label for pattern in ['phrase', 'expression', 'call', 'assign', 'list']):
+            return "phrase_level"
+            
+        # Clause-level patterns
+        if any(pattern in normalized_label for pattern in ['clause', 'statement', 'definition', 'import', 'return']):
+            return "clause_level"
+        
+        # Default fallback - if it contains "code" and no other indicators, assume phrase level
+        if 'code' in normalized_label:
+            return "phrase_level"
+        
+        # Unknown label
+        return None
+    
+    @classmethod
+    def get_label_mapping_suggestions(cls, invalid_label: str) -> Optional[str]:
+        """
+        Get suggestions for mapping invalid labels to valid ones.
+        
+        Args:
+            invalid_label: Invalid label to map
+            
+        Returns:
+            Valid label suggestion or None if no mapping found
+        """
+        if not invalid_label or not invalid_label.strip():
+            return None
+        
+        normalized = invalid_label.strip().lower()
+        
+        # Direct mappings for common invalid labels
+        mapping_rules = {
+            # Proper nouns -> noun
+            "proper noun": "noun",
+            "proper_noun": "noun",
+            
+            # Code statement variants -> appropriate code labels
+            "code_statement": "expression",  # Most code statements are expressions
+            "code statement": "expression",
+            "code_expression": "expression",
+            
+            # Punctuation variants
+            "parenthesis": "punctuation",
+            "colon": "punctuation",
+            
+            # Numbers
+            "numeral": "literal",
+            
+            # Prefixes
+            "prefix": "identifier",
+            
+            # Multi-label cases - take the first valid component
+            "noun, punctuation": "noun",  # Prioritize content words over punctuation
+        }
+        
+        # Check direct mappings first
+        if normalized in mapping_rules:
+            return mapping_rules[normalized]
+        
+        # Handle comma-separated labels (take first valid one)
+        if ',' in normalized:
+            parts = [part.strip() for part in normalized.split(',')]
+            for part in parts:
+                # Check if this part is a valid label
+                all_labels = set()
+                all_labels.update(cls.NATURAL_LABELS.keys())
+                all_labels.update(cls.CODE_LABELS.keys())
+                all_labels.update(cls.MIXED_LABELS.keys())
+                
+                if part in all_labels:
+                    return part
+                    
+                # Try to map this part
+                mapped = cls.get_label_mapping_suggestions(part)
+                if mapped:
+                    return mapped
+        
+        # Pattern-based mappings
+        if 'noun' in normalized:
+            return "noun"
+        elif 'verb' in normalized:
+            return "verb"
+        elif 'code' in normalized and 'statement' in normalized:
+            return "expression"
+        elif 'code' in normalized and 'expression' in normalized:
+            return "expression"
+        elif any(punct in normalized for punct in ['punctuation', 'parenthesis', 'colon', 'bracket']):
+            return "punctuation"
+        elif any(id_pattern in normalized for id_pattern in ['identifier', 'name', 'prefix']):
+            return "identifier"
+        elif any(lit_pattern in normalized for lit_pattern in ['literal', 'number', 'numeral', 'string']):
+            return "literal"
+        
+        return None
+    
+    @classmethod
+    def clean_and_validate_labels(cls, annotations: List[Dict]) -> tuple[List[Dict], Dict[str, int]]:
+        """
+        Clean annotations by removing or mapping invalid labels.
+        
+        Args:
+            annotations: List of annotation dictionaries
+            
+        Returns:
+            Cleaned list of annotations with valid labels
+        """
+        # Get all valid labels
+        all_valid_labels = set()
+        all_valid_labels.update(cls.NATURAL_LABELS.keys())
+        all_valid_labels.update(cls.CODE_LABELS.keys())
+        all_valid_labels.update(cls.MIXED_LABELS.keys())
+        
+        cleaned_annotations = []
+        mapping_stats = {"mapped": 0, "removed": 0, "valid": 0}
+        
+        for ann in annotations:
+            label = ann.get('xbar_label', '').strip()
+            
+            if label in all_valid_labels:
+                # Label is valid, keep as-is
+                cleaned_annotations.append(ann)
+                mapping_stats["valid"] += 1
+            else:
+                # Try to map invalid label
+                mapped_label = cls.get_label_mapping_suggestions(label)
+                if mapped_label and mapped_label in all_valid_labels:
+                    # Update the annotation with mapped label
+                    ann_copy = ann.copy()
+                    ann_copy['xbar_label'] = mapped_label
+                    ann_copy['original_label'] = label  # Keep track of original
+                    cleaned_annotations.append(ann_copy)
+                    mapping_stats["mapped"] += 1
+                else:
+                    # Cannot map, remove the annotation
+                    mapping_stats["removed"] += 1
+        
+        return cleaned_annotations, mapping_stats
+    
 

@@ -258,11 +258,14 @@ class TestProcessingIntegration:
             with open(corpus_file, 'w') as f:
                 f.write(json.dumps(test_data) + '\n')
             
-            # Mock successful annotation result
+            # Mock successful annotation result with actual spans
             mock_result = Mock()
             mock_result.success = True
             mock_result.annotation_record = Mock()
-            mock_result.annotation_record.span_annotations = []
+            mock_result.annotation_record.span_annotations = [
+                Mock(start_pos=0, end_pos=4, xbar_label="determiner", linguistic_features={"extracted_text": "This"}),
+                Mock(start_pos=5, end_pos=7, xbar_label="verb", linguistic_features={"extracted_text": "is"})
+            ]
             mock_result.annotation_record.agent_metadata = {"test": "data"}
             mock_result.error_message = None
             
@@ -273,6 +276,53 @@ class TestProcessingIntegration:
                 assert stats["processed_sequences"] == 1
                 assert stats["successful_annotations"] == 1
                 assert stats["failed_annotations"] == 0
+                assert stats.get("skipped_annotations", 0) == 0
+
+    async def test_process_sequences_zero_spans_skipped(self):
+        """Test that sequences with zero spans are skipped for retry."""
+        pipeline = SpanAnnotatorPipeline()
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            corpus_file = Path(temp_dir) / "test.jsonl" 
+            output_dir = Path(temp_dir) / "output"
+            
+            # Create test corpus
+            test_data = {
+                "id": {"id": "seq1"},
+                "raw": "This is a test.",
+                "meta": {
+                    "sequence_number": 1,
+                    "timestamp": "2025-01-01T00:00:00",
+                    "source": "test"
+                }
+            }
+            
+            with open(corpus_file, 'w') as f:
+                f.write(json.dumps(test_data) + '\n')
+            
+            # Mock result with zero spans (should be skipped)
+            mock_result = Mock()
+            mock_result.success = True
+            mock_result.annotation_record = Mock()
+            mock_result.annotation_record.span_annotations = []  # Empty - no spans
+            mock_result.annotation_record.agent_metadata = {"test": "data"}
+            mock_result.error_message = None
+            
+            with patch.object(pipeline.session, 'annotate_single_sequence', return_value=mock_result):
+                stats = await pipeline.process_sequences(corpus_file, output_dir)
+                
+                # Zero-span sequences should be skipped, not successful
+                assert stats["total_sequences"] == 1
+                assert stats["processed_sequences"] == 1
+                assert stats["successful_annotations"] == 0
+                assert stats["failed_annotations"] == 0
+                assert stats.get("skipped_annotations", 0) == 1
+                
+                # No working file should be created for skipped sequences
+                working_dir = output_dir / "working"
+                if working_dir.exists():
+                    working_files = list(working_dir.glob("*.json"))
+                    assert len(working_files) == 0
 
 
 if __name__ == "__main__":

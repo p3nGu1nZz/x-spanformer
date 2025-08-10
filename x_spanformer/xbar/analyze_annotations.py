@@ -17,8 +17,14 @@ logger = logging.getLogger(__name__)
 class AnnotationAnalyzer:
     """Clean annotation analyzer with logging integration."""
     
-    def __init__(self, annotations_file: str):
-        self.annotations_file = annotations_file
+    def __init__(self, spans_file: str = "data/annotations/spans.jsonl"):
+        """
+        Initialize analyzer with spans file.
+        
+        Args:
+            spans_file: Path to spans.jsonl (position-based format)
+        """
+        self.annotations_file = spans_file
         self.annotations = []
     
     @staticmethod
@@ -302,6 +308,7 @@ class AnnotationAnalyzer:
         processing_times = []
         error_patterns = defaultdict(int)
         domain_performance = defaultdict(lambda: {'total': 0, 'successful': 0, 'success_rate': 0.0})
+        zero_span_sequences = 0
         
         for working_file in working_files:
             try:
@@ -312,7 +319,13 @@ class AnnotationAnalyzer:
                 domain_performance[domain]['total'] += 1
                 
                 if data.get('status') == 'completed':
-                    domain_performance[domain]['successful'] += 1
+                    span_count = len(data.get('span_annotations', []))
+                    if span_count == 0:
+                        zero_span_sequences += 1
+                        # These should be treated as needing retry
+                        error_patterns['zero_spans'] += 1
+                    else:
+                        domain_performance[domain]['successful'] += 1
                     # Could extract processing time if available in agent_metadata
                 elif data.get('error_message'):
                     error_msg = data['error_message']
@@ -336,6 +349,7 @@ class AnnotationAnalyzer:
         
         return {
             'total_working_files': len(working_files),
+            'zero_span_sequences': zero_span_sequences,
             'error_patterns': dict(error_patterns),
             'domain_performance': dict(domain_performance)
         }
@@ -451,6 +465,8 @@ class AnnotationAnalyzer:
         if working_analysis and 'error' not in working_analysis:
             logger.info("Working files analysis:")
             logger.info(f"  Total working files: {working_analysis['total_working_files']}")
+            if working_analysis.get('zero_span_sequences', 0) > 0:
+                logger.info(f"  Zero-span sequences: {working_analysis['zero_span_sequences']} (will be retried)")
             if working_analysis['error_patterns']:
                 logger.info("  Error patterns:")
                 for error_type, count in working_analysis['error_patterns'].items():
@@ -506,8 +522,8 @@ class AnnotationAnalyzer:
         }
 
 
-def analyze_annotations(annotations_file: str = "data/annotations/annotations.jsonl") -> Dict[str, Any]:
+def analyze_annotations(spans_file: str = "data/annotations/spans.jsonl") -> Dict[str, Any]:
     """Run annotation analysis and return summary."""
-    analyzer = AnnotationAnalyzer(annotations_file)
+    analyzer = AnnotationAnalyzer(spans_file)
     return analyzer.analyze_and_report()
 
