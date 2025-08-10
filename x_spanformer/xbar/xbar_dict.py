@@ -83,8 +83,7 @@ class XBarDictionary:
                 level_dict.add(span.strip())
         
         new_count = len(level_dict) - initial_count
-        if new_count > 0:
-            logger.debug(f"Added {new_count} new spans to {domain_type}.{hierarchical_level} (total: {len(level_dict)})")
+        # Removed individual level logging to reduce spam
             
         return new_count
     
@@ -246,20 +245,26 @@ class XBarDictionary:
         logger.info(f"Total unique spans: {stats['total_unique_spans']}")
         
         logger.info("Domain distribution:")
+        total_spans = stats['total_unique_spans']
         for domain, count in stats["domain_totals"].items():
-            logger.info(f"  {domain}: {count} unique spans")
+            percentage = (count / total_spans * 100) if total_spans > 0 else 0
+            logger.info(f"  {domain}: {count} unique spans ({percentage:.1f}%)")
         
         logger.info("Level distribution:")
         for level, count in stats["level_totals"].items():
-            logger.info(f"  {level}: {count} unique spans")
+            percentage = (count / total_spans * 100) if total_spans > 0 else 0
+            logger.info(f"  {level}: {count} unique spans ({percentage:.1f}%)")
         
         logger.info("Detailed breakdown:")
         for domain, domain_stats in stats["domains"].items():
+            domain_total = domain_stats['total']
             logger.info(f"  {domain}:")
             for level, count in domain_stats.items():
                 if level != "total":
-                    logger.info(f"    {level}: {count}")
-            logger.info(f"    total: {domain_stats['total']}")
+                    level_percentage = (count / domain_total * 100) if domain_total > 0 else 0
+                    logger.info(f"    {level}: {count} ({level_percentage:.1f}%)")
+            total_percentage = (domain_total / total_spans * 100) if total_spans > 0 else 0
+            logger.info(f"    total: {domain_total} ({total_percentage:.1f}%)")
         logger.info("=" * 40)
     
     def save_dictionaries(self, output_dir: Path) -> int:

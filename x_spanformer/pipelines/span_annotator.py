@@ -410,6 +410,10 @@ class SpanAnnotatorPipeline:
         logger.info(f"  Valid labels (unchanged): {mapping_stats['valid']}")
         logger.info(f"  Invalid labels mapped: {mapping_stats['mapped']}")
         logger.info(f"  Invalid labels removed: {mapping_stats['removed']}")
+        logger.info(f"  Invalid word spans removed: {mapping_stats['invalid_word_spans']}")
+        logger.info(f"  Total annotations before cleaning: {len(all_annotations)}")
+        logger.info(f"  Total annotations after cleaning: {len(cleaned_annotations)}")
+        logger.info(f"  Total spans filtered: {len(all_annotations) - len(cleaned_annotations)}")
         
         # Write annotations.jsonl file
         with open(annotations_file, 'w', encoding='utf-8') as f:
@@ -417,6 +421,16 @@ class SpanAnnotatorPipeline:
                 f.write(json.dumps(annotation, ensure_ascii=False) + '\n')
         
         logger.info(f"Generated {len(cleaned_annotations)} annotation records in annotations.jsonl")
+        
+        # Log label mapping summary if any mappings occurred
+        if hasattr(self, '_label_mappings') and self._label_mappings:
+            total_mappings = sum(self._label_mappings.values())
+            unique_labels = len(self._label_mappings)
+            logger.info(f"Label mapping summary: {total_mappings} total mappings for {unique_labels} unique labels")
+            # Show top 5 most common mappings for debugging
+            top_mappings = sorted(self._label_mappings.items(), key=lambda x: x[1], reverse=True)[:5]
+            for label, count in top_mappings:
+                logger.debug(f"  '{label}': {count} occurrences")
         
         # Build dictionaries from collected spans
         logger.info("Building X-bar dictionaries from processed spans...")
@@ -488,7 +502,10 @@ class SpanAnnotatorPipeline:
             # Use the helper function from xbar_map for unknown labels
             mapped_level = XBarLabelMap.get_hierarchical_level(xbar_label)
             if mapped_level:
-                logger.debug(f"Mapped unknown label '{xbar_label}' to '{mapped_level}'")
+                # Count mappings instead of logging each one
+                if not hasattr(self, '_label_mappings'):
+                    self._label_mappings = {}
+                self._label_mappings[xbar_label] = self._label_mappings.get(xbar_label, 0) + 1
                 return mapped_level
             else:
                 logger.warning(f"Unknown hierarchical level for label: {xbar_label}")

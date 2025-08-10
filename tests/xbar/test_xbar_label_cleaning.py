@@ -69,8 +69,8 @@ class TestXBarLabelCleaning:
     def test_clean_and_validate_labels_multi_label(self):
         """Test handling of multi-label cases."""
         annotations = [
-            {"xbar_label": "noun, punctuation", "text": "word,"},
-            {"xbar_label": "verb, adverb", "text": "run quickly"},
+            {"xbar_label": "noun, punctuation", "text": "word"},  # Just the word without punctuation
+            {"xbar_label": "adjective, noun", "text": "quick-brown"},  # Valid identifier-style word
         ]
         
         cleaned, stats = XBarLabelMap.clean_and_validate_labels(annotations)
@@ -83,8 +83,8 @@ class TestXBarLabelCleaning:
         
         # Check that they map to first valid component
         labels = [ann["xbar_label"] for ann in cleaned]
-        assert "noun" in labels  # From "noun, punctuation"
-        assert "verb" in labels  # From "verb, adverb"
+        assert "noun" in labels  # From "noun, punctuation" 
+        assert "adjective" in labels  # From "adjective, noun"
     
     def test_clean_and_validate_labels_preserves_structure(self):
         """Test that cleaning preserves annotation structure."""

@@ -7,6 +7,9 @@ Provides unified X-bar label definitions for all domains
 
 from typing import Dict, List, Optional
 from enum import Enum
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class DomainType(Enum):
@@ -265,7 +268,9 @@ class XBarLabelMap:
             # Code word-level
             'keyword', 'identifier', 'operator', 'literal', 'delimiter', 'type_name', 'comment',
             # Additional patterns from pipeline output
-            'proper_noun', 'proper noun', 'parenthesis', 'colon', 'prefix', 'numeral'
+            'proper_noun', 'proper noun', 'parenthesis', 'colon', 'prefix', 'numeral',
+            # New labels from warnings
+            'auxiliary', 'number', 'numerator', 'possessive pronoun', 'possessor', 'none'
         }
         
         # Phrase-level labels (intermediate projections)
@@ -371,6 +376,20 @@ class XBarLabelMap:
             
             # Multi-label cases - take the first valid component
             "noun, punctuation": "noun",  # Prioritize content words over punctuation
+            "noun,punctuation": "noun",  # Handle no-space variant
+            
+            # New labels from warnings
+            "auxiliary": "verb",  # Auxiliary verbs are still verbs
+            "auxiliary verb": "verb",
+            "number": "literal",  # Numbers are literals
+            "numeral": "literal",  # Already mapped but adding for clarity
+            "numerator": "literal",  # Mathematical terms
+            "possessive pronoun": "pronoun",
+            "possessor": "noun",  # Possessive relationships
+            "none": "literal",  # None/null values
+            
+            # Complex multi-label cases
+            "adjective, noun, conjunction, parenthesis": "adjective",  # Take first meaningful label
         }
         
         # Check direct mappings first
@@ -414,6 +433,105 @@ class XBarLabelMap:
         return None
     
     @classmethod
+    def is_valid_word_span(cls, text: str) -> bool:
+        """
+        Validate word-level spans based on content patterns.
+        
+        Args:
+            text: Text content of the span
+            
+        Returns:
+            True if the span is valid for word-level annotation
+        """
+        if not text or not text.strip():
+            return False
+            
+        text = text.strip()
+        
+        # Rule 1: No spaces in word-level spans
+        if ' ' in text:
+            return False
+        
+        # Rule 2: Check for mixed character types (but allow pure types)
+        has_letters = any(c.isalpha() for c in text)
+        has_digits = any(c.isdigit() for c in text)
+        has_special = any(not c.isalnum() for c in text)
+        
+        # Pure numbers are valid
+        if text.isdigit():
+            return True
+            
+        # Pure letters are valid (words)
+        if text.isalpha():
+            return True
+            
+        # Single character spans are valid (numbers, letters, punctuation)
+        if len(text) == 1:
+            return True
+            
+        # Variable names with underscores are valid (letters + underscores only)
+        if has_letters and not has_digits and '_' in text:
+            # Check if it's only letters and underscores
+            if all(c.isalpha() or c == '_' for c in text):
+                return True
+        
+        # Rule 3: Invalid mixed patterns
+        # Letters mixed with numbers (except valid identifiers)
+        if has_letters and has_digits:
+            # Allow valid programming identifiers (letters, digits, underscores)
+            # but they must start with letter or underscore
+            if text.replace('_', '').replace('-', '').isalnum():
+                # Valid identifier pattern
+                if text[0].isalpha() or text[0] == '_':
+                    return True
+            return False
+            
+        # Letters mixed with special characters (except underscores in identifiers)
+        if has_letters and has_special:
+            # Allow words ending with colon (like "words:")
+            if text.endswith(':') and text[:-1].isalpha():
+                return True
+            # Allow words with periods (abbreviations like "Dr.", "etc.", "U.S.")
+            if '.' in text:
+                # Check if it's a valid abbreviation or word with periods
+                parts = text.split('.')
+                if all(part.isalpha() or part == '' for part in parts):
+                    return True
+            # Only allow underscores, hyphens, and periods in identifiers/words
+            allowed_special = set(['_', '-', '.'])
+            special_chars = set(c for c in text if not c.isalnum())
+            if not special_chars.issubset(allowed_special):
+                return False
+                
+        # Numbers mixed with special characters (except decimal points, negatives, percentages)
+        if has_digits and has_special:
+            # Allow decimal numbers and negative numbers (including multiple decimal places)
+            if text.replace('.', '').replace('-', '').isdigit():
+                # Valid number format (can have multiple decimal points for things like version numbers)
+                return True
+            # Allow percentages (number followed by %)
+            if text.endswith('%') and text[:-1].replace('.', '').isdigit():
+                return True
+            # Allow single-character expressions like (t), |s|, [83]
+            if len(text) <= 4:
+                # Parenthetical expressions: (t), (83)
+                if text.startswith('(') and text.endswith(')') and len(text) >= 3:
+                    return True
+                # Bracketed expressions: [83], [t]
+                if text.startswith('[') and text.endswith(']') and len(text) >= 3:
+                    return True
+                # Pipe expressions: |s|, |83|
+                if text.startswith('|') and text.endswith('|') and len(text) >= 3:
+                    return True
+            return False
+        
+        # Pure special characters are valid (punctuation)
+        if has_special and not has_letters and not has_digits:
+            return True
+        
+        return True  # Default to valid for other cases
+    
+    @classmethod
     def clean_and_validate_labels(cls, annotations: List[Dict]) -> tuple[List[Dict], Dict[str, int]]:
         """
         Clean annotations by removing or mapping invalid labels.
@@ -431,10 +549,17 @@ class XBarLabelMap:
         all_valid_labels.update(cls.MIXED_LABELS.keys())
         
         cleaned_annotations = []
-        mapping_stats = {"mapped": 0, "removed": 0, "valid": 0}
+        mapping_stats = {"mapped": 0, "removed": 0, "valid": 0, "invalid_word_spans": 0}
         
         for ann in annotations:
             label = ann.get('xbar_label', '').strip()
+            text = ann.get('text', '').strip()
+            
+            # First check if this is a word-level span that should be filtered
+            hierarchical_level = cls.get_hierarchical_level(label)
+            if hierarchical_level == "word_level" and not cls.is_valid_word_span(text):
+                mapping_stats["invalid_word_spans"] += 1
+                continue  # Skip this annotation
             
             if label in all_valid_labels:
                 # Label is valid, keep as-is
@@ -444,6 +569,12 @@ class XBarLabelMap:
                 # Try to map invalid label
                 mapped_label = cls.get_label_mapping_suggestions(label)
                 if mapped_label and mapped_label in all_valid_labels:
+                    # Check word-level validation for mapped labels too
+                    mapped_level = cls.get_hierarchical_level(mapped_label)
+                    if mapped_level == "word_level" and not cls.is_valid_word_span(text):
+                        mapping_stats["invalid_word_spans"] += 1
+                        continue  # Skip this annotation
+                        
                     # Update the annotation with mapped label
                     ann_copy = ann.copy()
                     ann_copy['xbar_label'] = mapped_label
